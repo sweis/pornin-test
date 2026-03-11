@@ -24,7 +24,10 @@
 
 #include <stdio.h>
 #include <string.h>
+
+#ifndef tv_ecdsa_p256_verify
 #include "tv_ecdsa.h"
+#endif
 
 static int hexval(int c)
 {
