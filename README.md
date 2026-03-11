@@ -19,12 +19,45 @@ Run `make size` to reproduce.
 
 | Implementation | Target | Compiler | text+rodata | Notes |
 |---|---|---|---|---|
-| **C, 32-bit limbs** | **Cortex-M4 Thumb-2** | arm-none-eabi-gcc 13.2 `-Os` | **2082 B** | realistic boot-ROM target |
+| **x86-64 asm, bytecode-interpreted** | **x86-64** | **GAS** | **2018 B** | `tv_ecdsa_bc.S` |
+| C, 32-bit limbs | Cortex-M4 Thumb-2 | arm-none-eabi-gcc 13.2 `-Os` | 2082 B | realistic boot-ROM target |
 | Pure x86-64 asm, 64-bit limbs | x86-64 | GAS | 2875 B | `tv_ecdsa_amd64.S` |
 | C, 32-bit limbs | x86-64 | GCC 13.3 `-Os` | 3076 B | `tv_ecdsa.c` |
 | C, 32-bit limbs | x86-64 | clang 18 `-Os` | ~3856 B | different inliner |
 
 All object files have **zero undefined symbols** — no memcpy/memmove/memset/libc.
+
+### The 2018-byte bytecode-interpreted version (`tv_ecdsa_bc.S`)
+
+Replaces the ~60 field-operation call sites across pt_dbl, pt_add, and
+verify with **2-byte bytecode instructions** executed by a shared
+interpreter.  Each call site that would normally be ~15 bytes of
+`lea rdi,…; lea rsi,…; lea rdx,…; call Fop` becomes 2 bytes of bytecode.
+
+- **2-byte bytecode, 16 contiguous slots.** Instruction = `(op<<4)|dst` +
+  `(s1<<4)|s2`. 10 opcodes: MUL/SQR/ADD/SUB/CPY (mod p), NMUL (mod n),
+  TOMONT, and three validation checks (CGEQ/CZ/CNZ) that set a fail flag.
+  Slot address = base + slot×32; no pointer indirection.
+- **In-place pt_mul.** Accumulator lives at slots 0–2, base at 4–6.
+  pt_dbl is inlined as a bare `bc_run(bc_dbl)` — no separate function,
+  no copy-in/out per iteration. bc_dbl's locals at slots 8–11 so they
+  don't clobber the base.
+- **Validation in bytecode.** r/s/qx/qy range checks and the on-curve
+  check are CGEQ/CZ/CNZ ops in a single bytecode stream instead of
+  ~150 bytes of branches.
+- **x86 `loop` for carry-preserving big-int ops.** `loop` decrements
+  ecx and branches without touching *any* flag — CF survives across
+  iterations. With `lea` for pointer bump, this is the tightest looped
+  big-integer subtract/add possible.
+- **Contiguous-constant block copies.** N,P,BM adjacent in rodata →
+  one `rep movsq` loads all three. GXM,GYM adjacent → one `rep movsq`
+  loads G. `cN_M0I` placed immediately *before* cN so it's reachable
+  as `[ptr-8]` with disp8.
+- **Register recycling.** r12 cycles sig→pub→&cN as each dies.
+  rbx cycles hv→(r13+128 cache) after the hash decode.
+
+Bytecode totals 152 bytes (5 streams); interpreter + dispatch ~165 bytes.
+Net savings vs the non-bytecode hand-asm: **857 bytes**.
 
 ### ARM Cortex-M4 breakdown (the boot-ROM number)
 

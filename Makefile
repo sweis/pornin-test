@@ -64,6 +64,25 @@ size-asm: tv_ecdsa_amd64.o
 	@echo "=== undefined symbols ==="
 	@nm $< | grep ' U ' || echo "NONE — fully self-contained"
 
+# Bytecode-interpreted asm (the smallest x86-64 variant).
+tv_ecdsa_bc.o: tv_ecdsa_bc.S
+	$(CC) -c -o $@ $<
+
+test_ecdsa_bc: tv_ecdsa_bc.S test_ecdsa_asm.c test_ecdsa.c
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_bc.S test_ecdsa_asm.c
+
+test-bc: test_ecdsa_bc
+	./test_ecdsa_bc
+
+size-bc: tv_ecdsa_bc.o
+	@echo "=== size of tv_ecdsa_bc.S (bytecode-interpreted, 64-bit limbs) ==="
+	@size $<
+	@echo ""
+	@size -A $< | grep -E '^\.(text|rodata|data|bss)' || true
+	@echo ""
+	@echo "=== undefined symbols ==="
+	@nm $< | grep ' U ' || echo "NONE — fully self-contained"
+
 # Optional: Thumb-2 build for a realistic embedded target (requires
 # arm-none-eabi-gcc). Not built by default.
 tv_ecdsa_thumb.o: tv_ecdsa.c tv_ecdsa.h
@@ -74,4 +93,5 @@ size-thumb: tv_ecdsa_thumb.o
 	@arm-none-eabi-size $<
 
 clean:
-	rm -f test_ecdsa test_ecdsa_asm tv_ecdsa_size.o tv_ecdsa_thumb.o tv_ecdsa_amd64.o
+	rm -f test_ecdsa test_ecdsa_asm test_ecdsa_bc \
+	      tv_ecdsa_size.o tv_ecdsa_thumb.o tv_ecdsa_amd64.o tv_ecdsa_bc.o
