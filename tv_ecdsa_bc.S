@@ -148,12 +148,11 @@ muladd4:
 
 /* fe_mul_m(r,a,b,m,m0i): Montgomery mul, CIOS. */
 fe_mul_m:
-	push	rbp
 	push	r12
 	push	r13
 	push	r14
 	push	r15
-	sub	rsp, 64             /* 56 + 8 for alignment (5 pushes, not 6) */
+	sub	rsp, 56             /* 4 pushes + retaddr = 40; +56 = 96 aligned */
 
 	mov	r12, rdi
 	mov	[rsp+48], rdx       /* b */
@@ -196,65 +195,66 @@ fe_mul_m:
 	lea	rsi, [rsp]
 	call	fe_cpy
 2:
-	add	rsp, 64
-	/* 5-pop epilogue (rbx no longer saved). */
-.Lepi6:
+	add	rsp, 56
+	/* 4-pop epilogue (rbp and rbx no longer saved — neither used). */
+.Lepi4:
 	pop	r15
 	pop	r14
 	pop	r13
 	pop	r12
-	pop	rbp
 	ret
 
 /* fe_inv_m(r,a,m,m0i): Fermat inversion in Montgomery form.
  * Low limb of both P and N is >= 3, so m[0]-2 cannot underflow. */
+/* fe_inv_m(r, a, m, m0i): Fermat inversion.
+ *
+ * The accumulator t lives DIRECTLY IN the caller's output buffer r
+ * (fe_mul_m is safe for dst==src since it copies operands into an
+ * internal temp before overwriting dst).  This saves 32 bytes of
+ * local stack + the final copy-out (~14 bytes).
+ *
+ * r10 holds the loop counter — caller-saved but untouched by
+ * fe_mul_m's entire call tree (fe_mul_m uses r8,r9,r11; muladd4
+ * uses r8,r9; fe_sub_raw/fe_cpy use no high regs). */
 fe_inv_m:
-	push	rbp
 	push	r12
 	push	r13
 	push	r14
 	push	r15
-	sub	rsp, 64            /* was 72; 5 pushes now, keep 16-aligned */
+	sub	rsp, 40            /* e[4] only; 40+40=80 aligned */
 
-	mov	r12, rdi
-	mov	r13, rsi
-	mov	r14, rdx
-	mov	r15, rcx
+	mov	r12, rdi           /* r = t accumulator */
+	mov	r13, rsi           /* a */
+	mov	r14, rdx           /* m */
+	mov	r15, rcx           /* m0i */
 
 	lea	rdi, [rsp]
 	mov	rsi, r14
 	call	fe_cpy
 	sub	QWORD PTR [rsp], 2
 
-	/* Both P and N have bit 255 set, so m-2 does too.  This means
-	 * the MSB of the exponent is ALWAYS 1 — we can initialise t = a
-	 * and start the square-and-multiply loop at bit 254, skipping
-	 * the "started" flag entirely.  Saves ~20 bytes (whole .Lns
-	 * path + flag management). */
-	lea	rdi, [rsp+32]
+	/* t = a; top bit of exponent is always 1 → start at bit 254. */
+	mov	rdi, r12
 	mov	rsi, r13
-	call	fe_cpy             /* t = a */
+	call	fe_cpy
 
-	mov	ebp, 254
-.Le:	lea	rdi, [rsp+32]
+	mov	r10d, 254
+.Le:	mov	rdi, r12
 	mov	rsi, rdi
 	mov	rdx, rdi
-	call	.Lfm               /* t = t² */
-	bt	QWORD PTR [rsp], rbp
+	call	.Lfm               /* t = t² (in r) */
+	bt	QWORD PTR [rsp], r10
 	jnc	.Lnx
-	lea	rdi, [rsp+32]
+	mov	rdi, r12
 	mov	rsi, rdi
 	mov	rdx, r13
 	call	.Lfm               /* t *= a */
-.Lnx:	dec	ebp
+.Lnx:	dec	r10d
 	jns	.Le
+	/* t is already in r — no copy-out. */
 
-	mov	rdi, r12
-	lea	rsi, [rsp+32]
-	call	fe_cpy
-
-	add	rsp, 64
-	jmp	.Lepi6             /* shared 5-pop epilogue in fe_mul_m */
+	add	rsp, 40
+	jmp	.Lepi4
 
 /* Local helper: load (m, m0i) and tail-call fe_mul_m.  Placed
  * after fe_inv_m so rel8 jmp works if fe_mul_m were adjacent;
