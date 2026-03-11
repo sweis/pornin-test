@@ -1,0 +1,3 @@
+*.o
+test_ecdsa
+/tmp/
