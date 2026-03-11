@@ -124,37 +124,37 @@ fe_sub_m:
 	jmp	fe_add_raw
 1:	ret
 
-/* muladd4(t=rbp, x=rbx, y=rsi).  t[0..3] += x*y, carry into t[4],t[5]. */
+/* muladd4(t=r9, x=r8, y=rsi).  t[0..3] += x*y, carry into t[4],t[5].
+ * Using r9 instead of rbp avoids the forced disp8 byte on [rbp+rdi]
+ * (SIB with rbp base and mod=00 means disp32, so mod=01+disp8=0 is
+ * forced).  [r9+rdi] encodes with no displacement.  -2 bytes. */
 muladd4:
 	xor	ecx, ecx
 	xor	edi, edi
-1:	mov	rax, rbx
+1:	mov	rax, r8
 	mul	QWORD PTR [rsi+rdi]
-	add	rax, [rbp+rdi]
+	add	rax, [r9+rdi]
 	adc	rdx, 0
 	add	rax, rcx
 	adc	rdx, 0
-	mov	[rbp+rdi], rax
+	mov	[r9+rdi], rax
 	mov	rcx, rdx
 	add	rdi, 8
 	cmp	rdi, 32
 	jb	1b
-	add	[rbp+32], rcx
-	adc	QWORD PTR [rbp+40], 0
+	add	[r9+32], rcx
+	adc	QWORD PTR [r9+40], 0
 	ret
 
 /* fe_mul_m(r,a,b,m,m0i): Montgomery mul, CIOS. */
 fe_mul_m:
 	push	rbp
-	push	rbx
 	push	r12
 	push	r13
 	push	r14
 	push	r15
-	sub	rsp, 56
+	sub	rsp, 64             /* 56 + 8 for alignment (5 pushes, not 6) */
 
-	/* r12 = r (dst ptr) — survives everything; b (rdx) stashed on
-	 * stack and reloaded once per iteration. */
 	mov	r12, rdi
 	mov	[rsp+48], rdx       /* b */
 	mov	r13, rcx            /* m */
@@ -167,12 +167,12 @@ fe_mul_m:
 	rep	stosq
 
 	xor	r11d, r11d
-.Lm:	lea	rbp, [rsp]
-	mov	rbx, [r15+r11]
-	mov	rsi, [rsp+48]       /* b */
+.Lm:	lea	r9, [rsp]           /* t (was rbp — r9 avoids forced disp) */
+	mov	r8, [r15+r11]
+	mov	rsi, [rsp+48]
 	call	muladd4
-	mov	rbx, [rsp]
-	imul	rbx, r14
+	mov	r8, [rsp]
+	imul	r8, r14
 	mov	rsi, r13
 	call	muladd4
 	xor	ecx, ecx
@@ -181,7 +181,7 @@ fe_mul_m:
 	add	ecx, 8
 	cmp	ecx, 40
 	jb	1b
-	and	QWORD PTR [rsp+40], 0   /* imm8 sign-extended: 6 bytes vs 9 */
+	and	QWORD PTR [rsp+40], 0
 	add	r11, 8
 	cmp	r11, 32
 	jb	.Lm
@@ -190,27 +190,19 @@ fe_mul_m:
 	lea	rsi, [rsp]
 	mov	rdx, r13
 	call	fe_sub_raw
-	/* Undo iff (borrow==1 AND t[4]==0).  The four combinations:
-	 *   t4=0,b=0: t<2^256 and t>=m → keep (t-m correct)
-	 *   t4=0,b=1: t<m → UNDO
-	 *   t4=1,b=1: t>=2^256>m → keep (fe_sub_raw's wrap gives correct t-m)
-	 *   t4=1,b=0: impossible (t<2m<2^257, so t[4]=1 ⇒ t[0..3]<m ⇒ borrow)
-	 * borrow - t[4]: 0,1,0 respectively → UNDO iff nonzero.  One sub
-	 * replaces cmp+jnz+test (−5 bytes). */
 	sub	eax, [rsp+32]
 	jz	2f
 	mov	rdi, r12
 	lea	rsi, [rsp]
 	call	fe_cpy
 2:
-	add	rsp, 56
-	/* 6-pop epilogue shared with fe_inv_m (jumps here). */
+	add	rsp, 64
+	/* 5-pop epilogue (rbx no longer saved). */
 .Lepi6:
 	pop	r15
 	pop	r14
 	pop	r13
 	pop	r12
-	pop	rbx
 	pop	rbp
 	ret
 
@@ -218,12 +210,11 @@ fe_mul_m:
  * Low limb of both P and N is >= 3, so m[0]-2 cannot underflow. */
 fe_inv_m:
 	push	rbp
-	push	rbx
 	push	r12
 	push	r13
 	push	r14
 	push	r15
-	sub	rsp, 72
+	sub	rsp, 64            /* was 72; 5 pushes now, keep 16-aligned */
 
 	mov	r12, rdi
 	mov	r13, rsi
@@ -235,32 +226,26 @@ fe_inv_m:
 	call	fe_cpy
 	sub	QWORD PTR [rsp], 2
 
-	/* bl = started flag.  `bt [rsp], rbp` tests bit ebp of the
-	 * 256-bit exponent directly — no manual extract needed.  CF is
-	 * saved in bh (survives fe_mul_m since rbx is callee-saved). */
-	xor	ebx, ebx
-	mov	ebp, 255
-.Le:	bt	QWORD PTR [rsp], rbp
-	setc	bh
-	test	bl, bl
-	jz	.Lns
+	/* Both P and N have bit 255 set, so m-2 does too.  This means
+	 * the MSB of the exponent is ALWAYS 1 — we can initialise t = a
+	 * and start the square-and-multiply loop at bit 254, skipping
+	 * the "started" flag entirely.  Saves ~20 bytes (whole .Lns
+	 * path + flag management). */
 	lea	rdi, [rsp+32]
+	mov	rsi, r13
+	call	fe_cpy             /* t = a */
+
+	mov	ebp, 254
+.Le:	lea	rdi, [rsp+32]
 	mov	rsi, rdi
 	mov	rdx, rdi
-	call	.Lfm
-	test	bh, bh
-	jz	.Lnx
+	call	.Lfm               /* t = t² */
+	bt	QWORD PTR [rsp], rbp
+	jnc	.Lnx
 	lea	rdi, [rsp+32]
 	mov	rsi, rdi
 	mov	rdx, r13
-	call	.Lfm
-	jmp	.Lnx
-.Lns:	test	bh, bh
-	jz	.Lnx
-	lea	rdi, [rsp+32]
-	mov	rsi, r13
-	call	fe_cpy
-	mov	bl, 1
+	call	.Lfm               /* t *= a */
 .Lnx:	dec	ebp
 	jns	.Le
 
@@ -268,8 +253,8 @@ fe_inv_m:
 	lea	rsi, [rsp+32]
 	call	fe_cpy
 
-	add	rsp, 72
-	jmp	.Lepi6             /* shared 6-pop epilogue in fe_mul_m */
+	add	rsp, 64
+	jmp	.Lepi6             /* shared 5-pop epilogue in fe_mul_m */
 
 /* Local helper: load (m, m0i) and tail-call fe_mul_m.  Placed
  * after fe_inv_m so rel8 jmp works if fe_mul_m were adjacent;
