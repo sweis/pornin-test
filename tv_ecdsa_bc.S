@@ -190,9 +190,14 @@ fe_mul_m:
 	lea	rsi, [rsp]
 	mov	rdx, r13
 	call	fe_sub_raw
-	cmp	DWORD PTR [rsp+32], 0
-	jnz	2f
-	test	eax, eax
+	/* Undo iff (borrow==1 AND t[4]==0).  The four combinations:
+	 *   t4=0,b=0: t<2^256 and t>=m → keep (t-m correct)
+	 *   t4=0,b=1: t<m → UNDO
+	 *   t4=1,b=1: t>=2^256>m → keep (fe_sub_raw's wrap gives correct t-m)
+	 *   t4=1,b=0: impossible (t<2m<2^257, so t[4]=1 ⇒ t[0..3]<m ⇒ borrow)
+	 * borrow - t[4]: 0,1,0 respectively → UNDO iff nonzero.  One sub
+	 * replaces cmp+jnz+test (−5 bytes). */
+	sub	eax, [rsp+32]
 	jz	2f
 	mov	rdi, r12
 	lea	rsi, [rsp]
@@ -443,31 +448,29 @@ cond_sub_n:
  * -------------------------------------------------------------------- */
 /* (bcrun_r14 / bcrun_r15 moved above bc_run for fall-through) */
 
+/* With the dead base.z check gone, the r15 mid-pointer is used only
+ * twice (rare paths) — push/pop/lea overhead (9 bytes) exceeds the
+ * disp32 cost (2×3 = 6 bytes).  Dropped. */
 pt_add_acc:
 	push	r14
-	push	r15
 	mov	r14, rdi
-	lea	r15, [r14+128]
 
 	lea	rdi, [r14+64]
 	call	fe_iszero
 	test	al, al
 	jz	1f
 	mov	rdi, r14
-	lea	rsi, [r15+0]
+	lea	rsi, [r14+128]     /* base; disp32, rare path */
 	call	cpy3
 	jmp	.Laa
-1:	lea	rdi, [r15+64]
-	call	fe_iszero
-	test	al, al
-	jnz	.Laa
-	lea	rdi, [rip+bc_add1]
+	/* base.z check removed — see analysis above: base is never ∞. */
+1:	lea	rdi, [rip+bc_add1]
 	call	bcrun_r14
 	lea	rdi, [r14+96]
 	call	fe_iszero
 	test	al, al
 	jz	3f
-	lea	rdi, [r15+96]
+	lea	rdi, [r14+7*32]    /* Rr; disp32, very rare path (H=0) */
 	call	fe_iszero
 	test	al, al
 	jz	.Lai
@@ -482,7 +485,6 @@ pt_add_acc:
 3:	lea	rdi, [rip+bc_add2]
 	call	bcrun_r14
 .Laa:
-	pop	r15
 	pop	r14
 	ret
 
@@ -499,9 +501,10 @@ pt_mul:
 	push	rbp
 	push	rbx
 	push	r13
-	sub	rsp, 8             /* align */
-	mov	rbx, rdi           /* slot buffer */
-	mov	rbp, rsi           /* k */
+	/* No sub rsp needed: 3 pushes + retaddr = 32 bytes, already
+	 * aligned.  (The previous `sub rsp,8` actually MIS-aligned.) */
+	mov	rbx, rdi
+	mov	rbp, rsi
 
 	/* acc = infinity. */
 	mov	rdi, rbx
@@ -524,7 +527,6 @@ pt_mul:
 1:	dec	r13d
 	jns	.Lpm
 
-	add	rsp, 8
 	pop	r13
 	pop	rbx
 	pop	rbp
