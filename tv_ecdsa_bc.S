@@ -281,9 +281,7 @@ fe_from_be:
  * bc_run(bytecode=rdi, slot_buf=rsi) -> eax = fail flag
  * ====================================================================== */
 /* bcrun_r14 immediately before bc_run → falls through (no jmp). */
-bcrun_r15:
-	mov	rsi, r15
-	jmp	bc_run
+/* bcrun_r15 removed — verify now uses r14 for the slot buffer. */
 bcrun_r14:
 	mov	rsi, r14
 	/* FALLTHROUGH */
@@ -364,21 +362,24 @@ Fsqr:	mov	rdx, rsi
 Fsub:	lea	rcx, [rip+cP]
 	jmp	fe_sub_m
 .Lop2:
-/* Fadd is ONLY called from the bytecode interpreter, which holds the
- * slot-buffer base in r12.  Slot 15 is never used by any bytecode
- * stream (pt ops use 0-11; verify streams use 0-14), so we use it as
- * Fadd's temp — saving the 40-byte stack frame and its setup/teardown.
- * This makes Fadd a non-standard-ABI function (relies on r12 from
- * bc_run's context), which is fine here. */
+/* Fadd is ONLY called from the bytecode interpreter (r12 = slot buf).
+ * Slot 3 (= H in pt_add) is the ONE slot that's safe to clobber across
+ * every ADD:
+ *   - bc_dbl never uses slot 3 at all
+ *   - bc_add2's ONLY ADD writes TO slot 3 (H ← 2V) intentionally, and
+ *     all reads of the old-H value occur before that ADD
+ *   - bc_v1 never uses slot 3
+ * Using slot 3 as temp keeps Fadd at 34 bytes without corrupting ONE
+ * at slot 15 or T3 at slot 11.  r12+96 is disp8 too — win on encoding. */
 Fadd:	push	rdi
 	push	rsi
-	lea	rdi, [r12+15*32]    /* slot 15 temp (disp32 but still wins) */
+	lea	rdi, [r12+3*32]     /* slot 3 — disp8! */
 	lea	rsi, [rip+cP]
-	call	fe_sub_raw           /* slot[15] = p - b */
-	lea	rdx, [r12+15*32]
+	call	fe_sub_raw
+	lea	rdx, [r12+3*32]
 	pop	rsi
 	pop	rdi
-	jmp	Fsub                 /* r = Fsub(a, slot[15]) = a + b mod p */
+	jmp	Fsub
 .Lop5:
 Nmul:	lea	rcx, [rip+cN]
 	mov	r8, [rcx-8]          /* cN_M0I is at cN-8 */
@@ -539,30 +540,50 @@ pt_mul:
 	.globl	tv_ecdsa_p256_verify_asm
 	.type	tv_ecdsa_p256_verify_asm, @function
 
+/*
+ * SINGLE SLOT BUFFER architecture.  One 512-byte buffer serves both
+ * verify's bytecode streams AND pt_mul/pt_add_acc.  bc_v1 writes Q
+ * directly into slots 4-6 (= pt_mul's base slots) — no copy needed.
+ *
+ * Slot map:
+ *   0-2: scratch → acc/R1 during pt ops
+ *   3: H (pt ops)
+ *   4-6: Q (bc_v1) = base (pt ops)  ← key: same slots!
+ *   7: Rr → later Z⁻¹
+ *   8-10: N,P,BM consts (bc_v1) → pt locals (reused after bc_v1)
+ *   11: pt locals
+ *   12: r (persistent — pt ops never touch slots ≥12)
+ *   13: s → e → u1 (persistent)
+ *   14: u2 (persistent)
+ *   15: one (for bc_v2 + Q.z; CLOBBERED by Fadd during pt ops;
+ *            REBUILT before bc_v3)
+ *
+ * Stack layout:  slot buf (512) + R2 storage (96) = 608, round to 616.
+ *
+ * Register budget:
+ *   r14 = slot buf base (= rsp)
+ *   r13 = mid-pointer into high slots (rsp+384 = slot 12)
+ *   r12 = sig → &cN (as before)
+ *   rbx = hv → &R2 storage (rsp+512)
+ *   rbp = mid-pointer for low slots (rsp+64)
+ *   r15 DROPPED — one fewer push/pop, -2 bytes + no bcrun_r15
+ */
 tv_ecdsa_p256_verify_asm:
 	push	rbp
 	push	rbx
 	push	r12
 	push	r13
 	push	r14
-	push	r15
-	/* Stack: primary slot buf (512, used for validation/u1u2/affine),
-	 * secondary slot buf (512, used by pt_mul — acc@0-2, base@4-6),
-	 * R2 storage (96).  Total = 1128 rounded. */
-	sub	rsp, 1128
+	sub	rsp, 616
 
-	lea	rbp, [rsp+64]        /* slots 0..4 disp8 via rbp-64..+64 */
-	mov	r15, rsp             /* primary slot buf base */
-	lea	r13, [rsp+512]       /* secondary slot buf (pt_mul's acc+base) */
-	lea	r14, [rsp+1024]      /* R2 storage (96 bytes) */
+	mov	r14, rsp             /* slot buf base */
+	lea	rbp, [rsp+64]        /* slots 0-4 disp8 via rbp */
+	lea	r13, [rsp+12*32]     /* slot 12+ disp8 via r13 */
 
-	/* r12: sig → &cN.  pub stashed in r8 (fe_from_be touches only
-	 * rax/rcx/rsi/rdi so r8 survives the four decode calls). */
 	mov	r12, rdi             /* sig */
 	mov	rbx, r8              /* hv */
-	mov	r8, rdx              /* pub */
+	mov	r8, rdx              /* pub (survives fe_from_be) */
 
-	/* Length checks. */
 	xor	eax, eax
 	cmp	rsi, 64
 	jne	.Lf
@@ -573,134 +594,117 @@ tv_ecdsa_p256_verify_asm:
 	cmp	r9, 64
 	ja	.Lf
 
-	/* Decode r -> slot 3, s -> slot 4. */
+	/* r → slot 12 (via r13), s → slot 13. */
 	mov	rsi, r12
-	lea	rdi, [rbp+32]
+	lea	rdi, [r13+0]
 	call	fe_from_be
 	lea	rsi, [r12+32]
-	lea	rdi, [rbp+64]
+	lea	rdi, [r13+32]
 	call	fe_from_be
-	/* sig dead. */
 
 	cmp	BYTE PTR [r8], 0x04
 	jne	.Lf
 	lea	rsi, [r8+1]
-	lea	rdi, [rbp-64]
+	lea	rdi, [rbp-64]        /* qx → slot 0 */
 	call	fe_from_be
 	lea	rsi, [r8+33]
-	lea	rdi, [rbp-32]
+	lea	rdi, [rbp-32]        /* qy → slot 1 */
 	call	fe_from_be
-	/* pub dead; r12 -> &cN for rest of function. */
 	lea	r12, [rip+cN]
 
-	/* Block-load constants N,P,BM -> slots 11..13. */
-	lea	rdi, [r15+11*32]
+	/* Constants N,P,BM → slots 8-10. */
+	lea	rdi, [r14+8*32]
 	mov	rsi, r12
 	mov	ecx, 12
 	rep	movsq
-	/* After rep movsq, rdi = r15+11*32+96 = r15+448 = slot 14.
-	 * Slot 10 is at rdi-128 — disp8!  Saves a full disp32 lea. */
-	sub	rdi, 128
+	/* rdi now at slot 11. Slot 15 (one) is at rdi+128 — disp32,
+	 * but can chain from r13: r13+96 = slot 15, disp8! */
+	lea	rdi, [r13+96]
 	call	build_one
 
 	/* ===== Stream 1: validation + curve check + Q.z ===== */
 	lea	rdi, [rip+bc_v1]
-	call	bcrun_r15
+	call	bcrun_r14
 	test	eax, eax
 	jnz	.Lf
+	/* Q is now at slots 4-6 = pt_mul's base.  NO COPY NEEDED. */
 
-	/* Copy Q (primary slots 5-7) -> secondary buf's BASE slots. */
-	lea	rdi, [r13+4*32]      /* disp32, 1 use */
-	lea	rsi, [r15+5*32]
-	call	cpy3
-
-	/* ===== w = s^{-1} · R² mod n =====
-	 * Feeding raw s (not Montgomery-converted) to fe_inv_m gives
-	 * (s·R⁻¹)⁻¹·R = s⁻¹·R² instead of s⁻¹·R.  bc_v2 compensates
-	 * with an extra mmul-by-one per result.  Net: saves 32 bytes
-	 * rodata (cR2N gone) + ~18 bytes code (Nmul call gone) at the
-	 * cost of 4 bytes of bytecode. */
-	lea	rdi, [rbp-64]
-	lea	rsi, [rbp+64]        /* s */
-	mov	rdx, r12             /* n */
-	mov	rcx, [r12-8]         /* cN_M0I at cN-8 */
+	/* w = s⁻¹·R² mod n (cR2N-free flow). */
+	lea	rdi, [rbp-64]        /* slot 0 */
+	lea	rsi, [r13+32]        /* s @ slot 13 */
+	mov	rdx, r12
+	mov	rcx, [r12-8]
 	call	fe_inv_m
 
-	/* e = hash -> slot 4; cond-sub n. */
+	/* e = hash → slot 13 (overwrites s); cond-sub n. */
 	mov	rsi, rbx
-	lea	rdi, [rbp+64]
+	lea	rdi, [r13+32]
 	call	fe_from_be
-	lea	rdi, [rbp+64]
+	lea	rdi, [r13+32]
 	call	cond_sub_n
-	/* hv dead — reuse rbx to cache r13+128 (base slots), saving
-	 * 3 disp32 leas below. */
-	lea	rbx, [r13+128]
+	/* hv dead — reuse rbx for R2 storage ptr (rsp+512). */
+	lea	rbx, [r14+512]
 
-	/* ===== Stream 2: u1, u2 ===== */
+	/* Stream 2: u1, u2 (slots 13, 14). */
 	lea	rdi, [rip+bc_v2]
-	call	bcrun_r15
+	call	bcrun_r14
 
-	/* ===== R2 = u2 * Q ===== */
-	mov	rdi, r13
-	lea	rsi, [rbp+0]
-	call	pt_mul
+	/* ===== R2 = u2 * Q =====  Q already at base slots 4-6! */
 	mov	rdi, r14
-	mov	rsi, r13
-	call	cpy3
-
-	/* ===== R1 = u1 * G =====  cGXM, cGYM adjacent in rodata —
-	 * block-copy both (64 bytes) in one shot.  base.z unchanged. */
-	mov	rdi, rbx
-	lea	rsi, [rip+cGXM]
-	mov	ecx, 8
-	rep	movsq
-	mov	rdi, r13
-	lea	rsi, [rbp-32]
+	lea	rsi, [r13+64]        /* u2 @ slot 14 */
 	call	pt_mul
-
-	/* ===== R1 += R2 ===== */
+	/* Save R2 (acc @ 0-2) to external storage. */
 	mov	rdi, rbx
 	mov	rsi, r14
 	call	cpy3
-	mov	rdi, r13
+
+	/* ===== R1 = u1 * G =====  Load G into base (4-6); z unchanged. */
+	lea	rdi, [r14+4*32]      /* disp32, 1 use */
+	lea	rsi, [rip+cGXM]
+	mov	ecx, 8
+	rep	movsq
+	mov	rdi, r14
+	lea	rsi, [r13+32]        /* u1 @ slot 13 */
+	call	pt_mul
+
+	/* ===== R1 += R2 =====  Load R2 into base slots. */
+	lea	rdi, [r14+4*32]
+	mov	rsi, rbx
+	call	cpy3
+	mov	rdi, r14
 	call	pt_add_acc
 
-	/* R1 at infinity?  acc.z = r13[64]. */
-	lea	rdi, [r13+64]
+	/* R1 infinity? acc.z @ slot 2 = rbp+0. */
+	lea	rdi, [rbp+0]
 	call	fe_iszero
 	test	al, al
 	jnz	.Lf
 
-	/* ===== Affine x =====  cP is at cN+32 = r12+32. */
-	lea	rdi, [rbp-32]
-	lea	rsi, [r13+64]
-	lea	rdx, [r12+32]
+	/* Affine x: Z⁻¹ → slot 7.  (Fadd's temp is now slot 11, so
+	 * "one" at slot 15 survives pt ops — no rebuild needed.) */
+	lea	rdi, [r14+7*32]
+	lea	rsi, [rbp+0]         /* R1.z */
+	lea	rdx, [r12+32]        /* cP */
 	mov	ecx, 1
 	call	fe_inv_m
 
-	/* slot 8 = R1.x; slot 10 already = "1". */
-	lea	rdi, [r15+8*32]
-	mov	rsi, r13
-	call	fe_cpy
-
 	lea	rdi, [rip+bc_v3]
-	call	bcrun_r15
+	call	bcrun_r14
 
-	/* reduce mod n; compare r. */
-	lea	rdi, [rbp-32]
+	/* Result in slot 7.  Reduce mod n, compare r. */
+	lea	rdi, [r14+7*32]
 	call	cond_sub_n
-	lea	rdi, [rbp-32]
+	lea	rdi, [r14+7*32]
 	mov	rsi, rdi
-	lea	rdx, [rbp+32]
+	lea	rdx, [r13+0]         /* r @ slot 12 */
 	call	fe_sub_raw
-	lea	rdi, [rbp-32]
+	lea	rdi, [r14+7*32]
 	call	fe_iszero
 	jmp	.Ld
 
 .Lf:	xor	eax, eax
-.Ld:	add	rsp, 1128
-	pop	r15
-	jmp	.Lepi5             /* shared 5-pop epilogue in bc_run */
+.Ld:	add	rsp, 616
+	jmp	.Lepi5             /* 5-pop epilogue in bc_run */
 
 /* ======================================================================
  * Bytecode streams.  See the Python generator for annotations.
@@ -725,29 +729,32 @@ bc_add1:
 	.byte 0xb0,0x99, 0x20,0x75, 0xa0,0x77, 0x83,0x33, 0x93,0x77
 	.byte 0x0f,0x00
 
+/* bc_add2: reordered so T3 (slot 11) is fully consumed BEFORE the
+ * ADD — Fadd's slot-11 temp is then safe to clobber it. */
 bc_add2:
 	.byte 0x60,0xa2, 0x30,0x2a, 0x01,0xa3, 0xa0,0xb3, 0xa0,0x88
-	.byte 0x01,0x07, 0xb3,0x00, 0x82,0x38, 0x33,0x00, 0x03,0x38
-	.byte 0x30,0x37, 0xb0,0x99, 0x93,0x13, 0x0f,0x00
+	.byte 0xb0,0x99, 0x01,0x07, 0xb3,0x00, 0x82,0x38, 0x33,0x00
+	.byte 0x03,0x38, 0x30,0x37, 0x93,0x13, 0x0f,0x00
 
-/* verify stream 1: validate r,s,qx,qy; convert qx,qy to Mont; curve
- * check; Q.z = 1_mont.
- * slots: 0=qx, 1=qy, 3=r, 4=s, 5=Qx, 6=Qy, 7=Qz,
- *        10=one, 11=N, 12=P, 13=BM */
+/* verify stream 1 (SINGLE-BUFFER layout):
+ * slots: 0=qx/t0, 1=qy/t1, 4=Qx, 5=Qy, 6=Qz (= pt_mul's base!),
+ *        8=N, 9=P, 10=BM, 12=r, 13=s, 15=one.
+ * Q.z set BEFORE the curve check (whose ADD clobbers slot 15 via
+ * Fadd's temp). */
 bc_v1:
-	.byte 0x07,0x30, 0x06,0x3b, 0x07,0x40, 0x06,0x4b
-	.byte 0x06,0x0c, 0x06,0x1c, 0x09,0x50, 0x09,0x61
-	.byte 0x01,0x06, 0x01,0x15, 0x50,0x11, 0x53,0x11
-	.byte 0x53,0x11, 0x53,0x11, 0xd2,0x11, 0x13,0x00
-	.byte 0x08,0x00, 0x09,0x7a, 0x0f,0x00
+	.byte 0x07,0xc0, 0x06,0xc8, 0x07,0xd0, 0x06,0xd8
+	.byte 0x06,0x09, 0x06,0x19, 0x09,0x40, 0x09,0x51
+	.byte 0x09,0x6f, 0x01,0x05, 0x01,0x14, 0x40,0x11
+	.byte 0x43,0x11, 0x43,0x11, 0x43,0x11, 0xa2,0x11
+	.byte 0x13,0x00, 0x08,0x00, 0x0f,0x00
 
-/* bc_v2: 4 NMULs (2 extra mmul-by-one to compensate for skipping the
- * s → Mont conversion; see cR2N-free flow in verify).  slot 10 = one. */
+/* bc_v2: u1 = e*w→u1*one, u2 = r*w→u2*one. slots 13/14. */
 bc_v2:
-	.byte 0x05,0x14, 0xa5,0x11, 0x05,0x23, 0xa5,0x22, 0x0f,0x00
+	.byte 0x05,0xdd, 0xf5,0xdd, 0x05,0xec, 0xf5,0xee, 0x0f,0x00
 
+/* bc_v3: slot7 = Z⁻² * R1.x(slot0) * one(slot15). */
 bc_v3:
-	.byte 0x01,0x11, 0x80,0x11, 0xa0,0x11, 0x0f,0x00
+	.byte 0x01,0x77, 0x00,0x77, 0xf0,0x77, 0x0f,0x00
 
 /* ----------------------------------------------------------------------
  * Constants.  No alignment directive — x86-64 handles misaligned qword
