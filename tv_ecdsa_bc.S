@@ -102,15 +102,13 @@ fe_add_raw:
 	loop	1b
 	ret
 
-/* fe_geq(a=rdi, b=rsi) -> al (1 if a>=b).  Upper bits garbage. */
+/* fe_geq(a=rdi, b=rsi) -> al (1 if a>=b).  `loop` for -2 bytes. */
 fe_geq:
 	mov	ecx, 4
 1:	mov	rax, [rdi+rcx*8-8]
 	cmp	rax, [rsi+rcx*8-8]
-	jne	2f
-	dec	ecx
-	jnz	1b
-2:	setae	al
+	loopz	1b             /* loop while equal AND ecx > 0 */
+	setae	al
 	ret
 
 /* fe_sub_m(dst,a,b,m). */
@@ -230,19 +228,13 @@ fe_inv_m:
 	call	fe_cpy
 	sub	QWORD PTR [rsp], 2
 
-	/* bl = started flag, bh = bit.  Both survive fe_mul_m (rbx is
-	 * callee-saved).  The `mov rcx,r14; mov r8,r15` pair before each
-	 * fe_mul_m call is factored into .Lfm (saves ~4 bytes net). */
+	/* bl = started flag.  `bt [rsp], rbp` tests bit ebp of the
+	 * 256-bit exponent directly — no manual extract needed.  CF is
+	 * saved in bh (survives fe_mul_m since rbx is callee-saved). */
 	xor	ebx, ebx
 	mov	ebp, 255
-.Le:	mov	ecx, ebp
-	shr	ecx, 6
-	mov	rax, [rsp+rcx*8]
-	mov	ecx, ebp
-	and	ecx, 63
-	shr	rax, cl
-	mov	bh, al
-	and	bh, 1
+.Le:	bt	QWORD PTR [rsp], rbp
+	setc	bh
 	test	bl, bl
 	jz	.Lns
 	lea	rdi, [rsp+32]
@@ -285,14 +277,13 @@ fe_inv_m:
 	mov	r8, r15
 	jmp	fe_mul_m
 
-/* fe_from_be(dst=rdi, src=rsi). */
+/* fe_from_be(dst=rdi, src=rsi).  `loop` saves 2 bytes vs dec+jnz. */
 fe_from_be:
 	mov	ecx, 4
 1:	mov	rax, [rsi+rcx*8-8]
 	bswap	rax
 	stosq
-	dec	ecx
-	jnz	1b
+	loop	1b
 	ret
 
 /* ======================================================================
@@ -516,19 +507,15 @@ pt_mul:
 	rep	stosq
 
 	mov	r13d, 255
-.Lpm:	/* double: just run bc_dbl (acc at slots 0-2, locals at 3-6). */
-	lea	rdi, [rip+bc_dbl]
+.Lpm:	lea	rdi, [rip+bc_dbl]
 	mov	rsi, rbx
 	call	bc_run
-	/* bit test */
-	mov	ecx, r13d
-	shr	ecx, 6
-	mov	rax, [rbp+rcx*8]
-	mov	ecx, r13d
-	and	ecx, 63
-	shr	rax, cl
-	test	al, 1
-	jz	1f
+	/* `bt [mem], reg` treats the memory operand as a bit string
+	 * spanning multiple qwords — the bit index in r13 directly
+	 * addresses bit r13 of the 256-bit scalar.  7 bytes total
+	 * (vs 24 for the manual extract-shift-test). */
+	bt	QWORD PTR [rbp], r13
+	jnc	1f
 	mov	rdi, rbx
 	call	pt_add_acc
 1:	dec	r13d
@@ -636,14 +623,15 @@ tv_ecdsa_p256_verify_asm:
 	lea	rsi, [r15+5*32]
 	call	cpy3
 
-	/* ===== w = s^{-1} (Montgomery, mod n) ===== */
+	/* ===== w = s^{-1} · R² mod n =====
+	 * Feeding raw s (not Montgomery-converted) to fe_inv_m gives
+	 * (s·R⁻¹)⁻¹·R = s⁻¹·R² instead of s⁻¹·R.  bc_v2 compensates
+	 * with an extra mmul-by-one per result.  Net: saves 32 bytes
+	 * rodata (cR2N gone) + ~18 bytes code (Nmul call gone) at the
+	 * cost of 4 bytes of bytecode. */
 	lea	rdi, [rbp-64]
-	lea	rsi, [rbp+64]
-	lea	rdx, [rip+cR2N]
-	call	Nmul
-	lea	rdi, [rbp-64]
-	mov	rsi, rdi
-	mov	rdx, r12
+	lea	rsi, [rbp+64]        /* s */
+	mov	rdx, r12             /* n */
 	mov	rcx, [r12-8]         /* cN_M0I at cN-8 */
 	call	fe_inv_m
 
@@ -769,8 +757,10 @@ bc_v1:
 	.byte 0x53,0x11, 0x53,0x11, 0xd2,0x11, 0x13,0x00
 	.byte 0x08,0x00, 0x09,0x7a, 0x0f,0x00
 
+/* bc_v2: 4 NMULs (2 extra mmul-by-one to compensate for skipping the
+ * s → Mont conversion; see cR2N-free flow in verify).  slot 10 = one. */
 bc_v2:
-	.byte 0x05,0x14, 0x05,0x23, 0x0f,0x00
+	.byte 0x05,0x14, 0xa5,0x11, 0x05,0x23, 0xa5,0x22, 0x0f,0x00
 
 bc_v3:
 	.byte 0x01,0x11, 0x80,0x11, 0xa0,0x11, 0x0f,0x00
@@ -799,8 +789,7 @@ cBM:	.quad 0xd89cdf6229c4bddf, 0xacf005cd78843090
 
 cR2P:	.quad 0x0000000000000003, 0xfffffffbffffffff
 	.quad 0xfffffffffffffffe, 0x00000004fffffffd
-cR2N:	.quad 0x83244c95be79eea2, 0x4699799c49bd6fa6
-	.quad 0x2845b2392b6bec59, 0x66e12d94f3d95620
+/* cR2N removed — see cR2N-free inversion flow above. */
 cGXM:	.quad 0x79e730d418a9143c, 0x75ba95fc5fedb601
 	.quad 0x79fb732b77622510, 0x18905f76a53755c6
 cGYM:	.quad 0xddf25357ce95560a, 0x8b4ab8e4ba19e45c
