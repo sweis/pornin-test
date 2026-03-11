@@ -7,6 +7,8 @@ From requestor:
 
 Try to make the code as small as possible while being safe and correct. Ensure commmon cryptographic mistakes are avoided. Add a suite of test vectors based on publicly availble sources to verify correctness. Look for good unit tests for common cryptographic failures, perhaps using Wycheproof as motivation.
 
+Here is a method signature:
+```
 /*
  * Verify signature 'sig' (size 'sig_len' bytes) against public key
  * 'pub' (of size 'pub_len' bytes) over hash value 'hv' (of size
@@ -45,3 +47,4 @@ Try to make the code as small as possible while being safe and correct. Ensure c
 int tv_ecdsa_p256_verify(const void *sig, size_t sig_len,
         const void *pub, size_t pub_len,
         const void *hv, size_t hv_len);
+```
