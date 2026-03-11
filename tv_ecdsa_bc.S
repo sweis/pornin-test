@@ -584,7 +584,9 @@ tv_ecdsa_p256_verify_asm:
 	mov	rbx, r8              /* hv */
 	mov	r8, rdx              /* pub (survives fe_from_be) */
 
-	xor	eax, eax
+	/* Length checks.  .Lf/.Ld placed INLINE right after the checks
+	 * so all four branches are rel8 (2 bytes) instead of rel32 (6).
+	 * The last check inverted (jbe skips fail block).  Saves ~16B. */
 	cmp	rsi, 64
 	jne	.Lf
 	cmp	rcx, 65
@@ -592,8 +594,11 @@ tv_ecdsa_p256_verify_asm:
 	cmp	r9, 32
 	jb	.Lf
 	cmp	r9, 64
-	ja	.Lf
-
+	jbe	1f
+.Lf:	xor	eax, eax
+.Ld:	add	rsp, 616
+	jmp	.Lepi5             /* 5-pop epilogue in bc_run */
+1:
 	/* r → slot 12 (via r13), s → slot 13. */
 	mov	rsi, r12
 	lea	rdi, [r13+0]
@@ -680,9 +685,11 @@ tv_ecdsa_p256_verify_asm:
 	test	al, al
 	jnz	.Lf
 
-	/* Affine x: Z⁻¹ → slot 3 (= H, garbage after pt ops — safe).
-	 * slot 3 = r14+96, disp8 everywhere (vs slot 7 = 224 disp32). */
-	lea	rdi, [r14+96]
+	/* rbx dead after pt_add_acc — cache slot 3 ptr (4 uses below). */
+	lea	rbx, [r14+96]
+
+	/* Affine x: Z⁻¹ → slot 3 (= H, dead after pt ops). */
+	mov	rdi, rbx
 	lea	rsi, [rbp+0]         /* R1.z @ slot 2 */
 	lea	rdx, [r12+32]
 	mov	ecx, 1
@@ -692,19 +699,15 @@ tv_ecdsa_p256_verify_asm:
 	call	bcrun_r14
 
 	/* Result in slot 3.  Reduce mod n, compare r. */
-	lea	rdi, [r14+96]
+	mov	rdi, rbx
 	call	cond_sub_n
-	lea	rdi, [r14+96]
+	mov	rdi, rbx
 	mov	rsi, rdi
 	lea	rdx, [r13+0]
 	call	fe_sub_raw
-	lea	rdi, [r14+96]
+	mov	rdi, rbx
 	call	fe_iszero
 	jmp	.Ld
-
-.Lf:	xor	eax, eax
-.Ld:	add	rsp, 616
-	jmp	.Lepi5             /* 5-pop epilogue in bc_run */
 
 /* ======================================================================
  * Bytecode streams.  See the Python generator for annotations.
