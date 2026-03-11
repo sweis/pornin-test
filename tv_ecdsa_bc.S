@@ -146,6 +146,13 @@ muladd4:
 	adc	QWORD PTR [r9+40], 0
 	ret
 
+/* .Lfm: fe_inv_m's "multiply with saved modulus" helper.  Placed
+ * immediately before fe_mul_m so it falls through (no jmp).
+ * r14 = m, r15 = m0i are fe_inv_m's saved params — valid whenever
+ * .Lfm is called from fe_inv_m's loop. */
+.Lfm:	mov	rcx, r14
+	mov	r8, r15
+	/* FALLTHROUGH */
 /* fe_mul_m(r,a,b,m,m0i): Montgomery mul, CIOS. */
 fe_mul_m:
 	push	r12
@@ -162,11 +169,11 @@ fe_mul_m:
 
 	xor	eax, eax
 	mov	ecx, 6
-	lea	rdi, [rsp]
+	mov	rdi, rsp
 	rep	stosq
 
 	xor	r11d, r11d
-.Lm:	lea	r9, [rsp]           /* t (was rbp — r9 avoids forced disp) */
+.Lm:	mov	r9, rsp             /* t (r9 avoids forced disp; mov<lea) */
 	mov	r8, [r15+r11]
 	mov	rsi, [rsp+48]
 	call	muladd4
@@ -186,13 +193,13 @@ fe_mul_m:
 	jb	.Lm
 
 	mov	rdi, r12
-	lea	rsi, [rsp]
+	mov	rsi, rsp
 	mov	rdx, r13
 	call	fe_sub_raw
 	sub	eax, [rsp+32]
 	jz	2f
 	mov	rdi, r12
-	lea	rsi, [rsp]
+	mov	rsi, rsp
 	call	fe_cpy
 2:
 	add	rsp, 56
@@ -228,7 +235,7 @@ fe_inv_m:
 	mov	r14, rdx           /* m */
 	mov	r15, rcx           /* m0i */
 
-	lea	rdi, [rsp]
+	mov	rdi, rsp
 	mov	rsi, r14
 	call	fe_cpy
 	sub	QWORD PTR [rsp], 2
@@ -256,12 +263,7 @@ fe_inv_m:
 	add	rsp, 40
 	jmp	.Lepi4
 
-/* Local helper: load (m, m0i) and tail-call fe_mul_m.  Placed
- * after fe_inv_m so rel8 jmp works if fe_mul_m were adjacent;
- * still saves the repeated 6-byte (mov rcx + mov r8) sequence. */
-.Lfm:	mov	rcx, r14
-	mov	r8, r15
-	jmp	fe_mul_m
+/* .Lfm moved above fe_mul_m (falls through). */
 
 /* fe_from_be(dst=rdi, src=rsi).  `loop` saves 2 bytes vs dec+jnz. */
 fe_from_be:
