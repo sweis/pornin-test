@@ -199,6 +199,8 @@ fe_mul_m:
 	call	fe_cpy
 2:
 	add	rsp, 56
+	/* 6-pop epilogue shared with fe_inv_m (jumps here). */
+.Lepi6:
 	pop	r15
 	pop	r14
 	pop	r13
@@ -262,13 +264,7 @@ fe_inv_m:
 	call	fe_cpy
 
 	add	rsp, 72
-	pop	r15
-	pop	r14
-	pop	r13
-	pop	r12
-	pop	rbx
-	pop	rbp
-	ret
+	jmp	.Lepi6             /* shared 6-pop epilogue in fe_mul_m */
 
 /* Local helper: load (m, m0i) and tail-call fe_mul_m.  Placed
  * after fe_inv_m so rel8 jmp works if fe_mul_m were adjacent;
@@ -385,7 +381,9 @@ Fadd:	push	rdi
 Nmul:	lea	rcx, [rip+cN]
 	mov	r8, [rcx-8]          /* cN_M0I is at cN-8 */
 	jmp	fe_mul_m
-.Lop4:	jmp	fe_cpy
+/* CPY (op 4) is dead — no bytecode stream uses it.  .Ljt[4] points
+ * at .Lop5 (harmless; op 4 is never dispatched). */
+.equ .Lop4, .Lop5
 
 /* ----------------------------------------------------------------------
  * Helpers.
@@ -433,42 +431,42 @@ cond_sub_n:
  *
  * Expects slot buffer ptr in rdi.  Preserves it in r14 internally.
  * -------------------------------------------------------------------- */
+/* bcrun_r14: run bytecode with slot buf = r14.  Saves 3 bytes per
+ * call site (× 3 in pt_add_acc). */
+bcrun_r14:
+	mov	rsi, r14
+	jmp	bc_run
+
 pt_add_acc:
 	push	r14
 	push	r15
 	mov	r14, rdi
-	lea	r15, [r14+128]     /* mid-pointer: base@-0..+64, Rr@+96 disp8 */
+	lea	r15, [r14+128]
 
-	/* If acc.z == 0: acc = base. */
 	lea	rdi, [r14+64]
 	call	fe_iszero
 	test	al, al
 	jz	1f
 	mov	rdi, r14
-	lea	rsi, [r15+0]       /* base; now disp8 via r15 */
+	lea	rsi, [r15+0]
 	call	cpy3
 	jmp	.Laa
-1:	/* If base.z == 0: acc unchanged. */
-	lea	rdi, [r15+64]      /* base.z */
+1:	lea	rdi, [r15+64]
 	call	fe_iszero
 	test	al, al
 	jnz	.Laa
 	lea	rdi, [rip+bc_add1]
-	mov	rsi, r14
-	call	bc_run
-	/* H == 0? (slot 3 = r14+96, disp8) */
+	call	bcrun_r14
 	lea	rdi, [r14+96]
 	call	fe_iszero
 	test	al, al
 	jz	3f
-	/* H=0: check Rr (slot 7 = r15+96, now disp8) */
 	lea	rdi, [r15+96]
 	call	fe_iszero
 	test	al, al
 	jz	.Lai
 	lea	rdi, [rip+bc_dbl]
-	mov	rsi, r14
-	call	bc_run
+	call	bcrun_r14
 	jmp	.Laa
 .Lai:	mov	rdi, r14
 	xor	eax, eax
@@ -476,8 +474,7 @@ pt_add_acc:
 	rep	stosq
 	jmp	.Laa
 3:	lea	rdi, [rip+bc_add2]
-	mov	rsi, r14
-	call	bc_run
+	call	bcrun_r14
 .Laa:
 	pop	r15
 	pop	r14
