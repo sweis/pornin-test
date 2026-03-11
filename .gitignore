@@ -1,4 +1,5 @@
 *.o
 test_ecdsa
 test_ecdsa_asm
+test_ecdsa_bc
 /tmp/
