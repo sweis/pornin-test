@@ -19,10 +19,44 @@ Run `make size` to reproduce.
 
 | Implementation | Target | Compiler | text+rodata | Notes |
 |---|---|---|---|---|
-| **Pure x86-64 asm, 64-bit limbs** | x86-64 | GAS | **2873 B** | `tv_ecdsa_amd64.S` — zero undef syms |
-| C, 32-bit limbs | x86-64 | GCC 13.3 `-Os` | 3076 B | `tv_ecdsa.c` — zero undef syms |
-| C, 32-bit limbs | x86-64 | clang 18 `-Os` | ~3856 B | larger; different inliner |
-| C, 32-bit limbs | Cortex-M4 Thumb-2 | arm-none-eabi | *(todo)* | expected ~1.7–2.0 KB |
+| **C, 32-bit limbs** | **Cortex-M4 Thumb-2** | arm-none-eabi-gcc 13.2 `-Os` | **2082 B** | realistic boot-ROM target |
+| Pure x86-64 asm, 64-bit limbs | x86-64 | GAS | 2875 B | `tv_ecdsa_amd64.S` |
+| C, 32-bit limbs | x86-64 | GCC 13.3 `-Os` | 3076 B | `tv_ecdsa.c` |
+| C, 32-bit limbs | x86-64 | clang 18 `-Os` | ~3856 B | different inliner |
+
+All object files have **zero undefined symbols** — no memcpy/memmove/memset/libc.
+
+### ARM Cortex-M4 breakdown (the boot-ROM number)
+
+```
+.text.fe_zero                  16
+.text.fe_cpy                   18
+.text.fe_iszero                26
+.text.fe_sub_raw               46
+.text.fe_geq                   36
+.text.muladd10                 60
+.text.fe_mul_m                110   (vs 170 on x86-64: -35%)
+.text.fe_inv_m                124
+.text.Fmul                     24
+.text.Fsqr                     24
+.text.Fto_mont                 28
+.text.pt_cpy                   34
+.text.pt_set_inf               28
+.text.fe_from_be               24
+.text.Fsub                     52
+.text.Fadd                     36
+.text.pt_dbl                  254   (vs 468 on x86-64: -46%)
+.text.pt_add                  332   (vs 593 on x86-64: -44%)
+.text.pt_mul                   54
+.text.tv_ecdsa_p256_verify    532   (vs 889 on x86-64: -40%)
+.rodata  (7 × 32 B)           224
+                            ──────
+                             2082
+```
+
+Thumb-2's 16-bit instruction encoding is extremely dense for this kind
+of pointer-passing code — the three largest functions are 40–46% smaller
+than their x86-64 equivalents.
 
 The object file has **no external symbol references** — no `memcpy`, no
 `memmove`, no `memset`, no libc. The only imports are the two standard
@@ -98,7 +132,7 @@ The hand-written assembly (`tv_ecdsa_amd64.S`) uses **64-bit limbs** (4 per
 256-bit number, vs 8×32-bit in the C version). x86-64's `mulq` gives a
 free 64×64→128 product and `adc/sbb` make carry chains trivial.
 
-**Size: 2873 bytes** (text 2641 + rodata 232) — 203 bytes (6.6%) smaller
+**Size: 2875 bytes** (text 2643 + rodata 232) — 201 bytes (6.5%) smaller
 than the C version's 3076. All 33 tests pass, clean under ASAN/UBSAN.
 
 ### Per-function comparison
@@ -124,7 +158,9 @@ than the C version's 3076. All 33 tests pass, clean under ASAN/UBSAN.
 
 2. **Tail-call wrappers**: `Fsqr` is just `mov rdx,rsi; jmp Fmul` — 5 bytes
    total.  `Fsub` is `lea rcx,[rip+cP]; jmp fe_sub_m` — 12 bytes.
-   The C compiler can't do this because it must emit a proper prologue.
+   GCC can sibling-call-optimise in some cases, but with differing
+   argument counts and no inlining heuristics in its favour it emits
+   a full prologue+epilogue here (the C `Fsub` is 51 bytes).
 
 3. **In-place wrappers**: ~25 field ops in `pt_dbl`/`pt_add`/`verify`
    have `dst == src1`. Wrapper `Fmul_i: mov rsi,rdi; jmp Fmul` (5 bytes)
@@ -154,6 +190,7 @@ than the C version's 3076. All 33 tests pass, clean under ASAN/UBSAN.
 | `r14`/`r15` base regs in `pt_dbl`/`pt_add` | (incl.) | |
 | Mid-frame base pointers (every slot in disp8) | 2983 B | -47 B |
 | In-place wrappers (`Fmul_i` etc.) | 2873 B | -110 B |
+| pt_mul stack-alignment fix (ABI compliance) | 2875 B | +2 B |
 
 ## Correctness
 

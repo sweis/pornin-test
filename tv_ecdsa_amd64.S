@@ -290,7 +290,9 @@ fe_inv_m:
 	mov	r14, rdx            /* m */
 	mov	r15, rcx            /* m0i */
 
-	/* e = m - 2  (m is odd, m[0] > 2 so no borrow past limb 0) */
+	/* e = m - 2.  For both P and N the low 64-bit limb is >= 3
+	 * (P[0]=0xFFFF..FFFF, N[0]=0xF3B9CAC2FC632551), so subtracting
+	 * 2 from limb 0 cannot underflow — no borrow propagation needed. */
 	lea	rdi, [rsp]
 	mov	rsi, r14
 	call	fe_cpy
@@ -472,22 +474,11 @@ pt_set_inf:
 
 /* ----------------------------------------------------------------------
  * pt_dbl(r=rdi, p=rsi) : Jacobian doubling, a = -3.
+ * Safe for r == p (p->x/y/z are each fully consumed before the
+ * corresponding r->x/y/z is first written).
  *
- * Formula (EFD dbl-2001-b / "dbl-2007-bl" a=-3):
- *   delta = Z^2
- *   gamma = Y^2
- *   beta  = X*gamma
- *   alpha = 3*(X-delta)*(X+delta)
- *   X3 = alpha^2 - 8*beta
- *   Z3 = (Y+Z)^2 - gamma - delta
- *   Y3 = alpha*(4*beta - X3) - 8*gamma^2
- *
- * Stack layout (5 fe = 160 bytes):
- *   off  0: gamma
- *   off 32: beta
- *   off 64: alpha
- *   off 96: t1
- *  off 128: t2  (also used for delta)
+ * See the inline comment block for the reordered formula and the
+ * 4-fe stack layout.
  * -------------------------------------------------------------------- */
 pt_dbl:
 	push	rbp
@@ -618,13 +609,12 @@ pt_dbl:
  * pt_add(r=rdi, p=rsi, q=rdx) : Jacobian addition.
  * Handles P=O, Q=O, P=Q (doubles), P=-Q (returns O).
  *
- * Stack: 6 fe = 192 bytes.
- *   off   0: u1   (later: v)
- *   off  32: s1
- *   off  64: t0   (= h, later scratch)
- *   off  96: t1   (= rr)
- *   off 128: t2   (= hh, later scratch)
- *   off 160: t3   (= hhh)
+ * Aliasing: safe for r == p and for r == q. All reads from p and q
+ * occur before the first write to r (Z3 is written only after
+ * Z1,Z2 have been consumed; X3/Y3 likewise). pt_mul relies on
+ * this (it calls pt_add(acc, acc, base)).
+ *
+ * See inline comment for the dual-base-register stack layout.
  * -------------------------------------------------------------------- */
 pt_add:
 	push	rbp
@@ -800,6 +790,8 @@ pt_mul:
 	push	rbx
 	push	r12
 	push	r13
+	push	rax                /* dummy push: re-align stack to 16
+	                            * (4 pushes = 32 bytes, odd parity) */
 	mov	rbx, rdi           /* r */
 	mov	rbp, rsi           /* k */
 	mov	r12, rdx           /* p */
@@ -830,6 +822,7 @@ pt_mul:
 	dec	r13d
 	jns	.Lpmi
 
+	pop	rax
 	pop	r13
 	pop	r12
 	pop	rbx
