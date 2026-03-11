@@ -680,25 +680,25 @@ tv_ecdsa_p256_verify_asm:
 	test	al, al
 	jnz	.Lf
 
-	/* Affine x: Z⁻¹ → slot 7.  (Fadd's temp is now slot 11, so
-	 * "one" at slot 15 survives pt ops — no rebuild needed.) */
-	lea	rdi, [r14+7*32]
-	lea	rsi, [rbp+0]         /* R1.z */
-	lea	rdx, [r12+32]        /* cP */
+	/* Affine x: Z⁻¹ → slot 3 (= H, garbage after pt ops — safe).
+	 * slot 3 = r14+96, disp8 everywhere (vs slot 7 = 224 disp32). */
+	lea	rdi, [r14+96]
+	lea	rsi, [rbp+0]         /* R1.z @ slot 2 */
+	lea	rdx, [r12+32]
 	mov	ecx, 1
 	call	fe_inv_m
 
 	lea	rdi, [rip+bc_v3]
 	call	bcrun_r14
 
-	/* Result in slot 7.  Reduce mod n, compare r. */
-	lea	rdi, [r14+7*32]
+	/* Result in slot 3.  Reduce mod n, compare r. */
+	lea	rdi, [r14+96]
 	call	cond_sub_n
-	lea	rdi, [r14+7*32]
+	lea	rdi, [r14+96]
 	mov	rsi, rdi
-	lea	rdx, [r13+0]         /* r @ slot 12 */
+	lea	rdx, [r13+0]
 	call	fe_sub_raw
-	lea	rdi, [r14+7*32]
+	lea	rdi, [r14+96]
 	call	fe_iszero
 	jmp	.Ld
 
@@ -752,9 +752,10 @@ bc_v1:
 bc_v2:
 	.byte 0x05,0xdd, 0xf5,0xdd, 0x05,0xec, 0xf5,0xee, 0x0f,0x00
 
-/* bc_v3: slot7 = Z⁻² * R1.x(slot0) * one(slot15). */
+/* bc_v3: slot3 = Z⁻² * R1.x(slot0) * one(slot15).  Slot 3 (H, dead
+ * after pt ops) = r14+96 disp8 — saves 4 disp32 leas vs slot 7. */
 bc_v3:
-	.byte 0x01,0x77, 0x00,0x77, 0xf0,0x77, 0x0f,0x00
+	.byte 0x01,0x33, 0x00,0x33, 0xf0,0x33, 0x0f,0x00
 
 /* ----------------------------------------------------------------------
  * Constants.  No alignment directive — x86-64 handles misaligned qword
