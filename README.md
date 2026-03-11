@@ -19,7 +19,7 @@ Run `make size` to reproduce.
 
 | Implementation | Target | Compiler | text+rodata | Notes |
 |---|---|---|---|---|
-| **x86-64 asm, bytecode-interpreted** | **x86-64** | **GAS** | **2018 B** | `tv_ecdsa_bc.S` |
+| **x86-64 asm, bytecode-interpreted** | **x86-64** | **GAS** | **1712 B** | `tv_ecdsa_bc.S` |
 | C, 32-bit limbs | Cortex-M4 Thumb-2 | arm-none-eabi-gcc 13.2 `-Os` | 2082 B | realistic boot-ROM target |
 | Pure x86-64 asm, 64-bit limbs | x86-64 | GAS | 2875 B | `tv_ecdsa_amd64.S` |
 | C, 32-bit limbs | x86-64 | GCC 13.3 `-Os` | 3076 B | `tv_ecdsa.c` |
@@ -27,37 +27,63 @@ Run `make size` to reproduce.
 
 All object files have **zero undefined symbols** — no memcpy/memmove/memset/libc.
 
-### The 2018-byte bytecode-interpreted version (`tv_ecdsa_bc.S`)
+### The 1712-byte bytecode-interpreted version (`tv_ecdsa_bc.S`)
 
-Replaces the ~60 field-operation call sites across pt_dbl, pt_add, and
-verify with **2-byte bytecode instructions** executed by a shared
-interpreter.  Each call site that would normally be ~15 bytes of
-`lea rdi,…; lea rsi,…; lea rdx,…; call Fop` becomes 2 bytes of bytecode.
+Replaces the ~60 field-op call sites with **2-byte bytecode instructions**
+executed by a shared interpreter.  Each site (~15 bytes of `lea; lea; lea;
+call`) becomes 2 bytes. Net savings vs conventional hand-asm: **1163 bytes**.
 
-- **2-byte bytecode, 16 contiguous slots.** Instruction = `(op<<4)|dst` +
-  `(s1<<4)|s2`. 10 opcodes: MUL/SQR/ADD/SUB/CPY (mod p), NMUL (mod n),
-  TOMONT, and three validation checks (CGEQ/CZ/CNZ) that set a fail flag.
-  Slot address = base + slot×32; no pointer indirection.
-- **In-place pt_mul.** Accumulator lives at slots 0–2, base at 4–6.
-  pt_dbl is inlined as a bare `bc_run(bc_dbl)` — no separate function,
-  no copy-in/out per iteration. bc_dbl's locals at slots 8–11 so they
-  don't clobber the base.
-- **Validation in bytecode.** r/s/qx/qy range checks and the on-curve
-  check are CGEQ/CZ/CNZ ops in a single bytecode stream instead of
-  ~150 bytes of branches.
-- **x86 `loop` for carry-preserving big-int ops.** `loop` decrements
-  ecx and branches without touching *any* flag — CF survives across
-  iterations. With `lea` for pointer bump, this is the tightest looped
-  big-integer subtract/add possible.
-- **Contiguous-constant block copies.** N,P,BM adjacent in rodata →
-  one `rep movsq` loads all three. GXM,GYM adjacent → one `rep movsq`
-  loads G. `cN_M0I` placed immediately *before* cN so it's reachable
-  as `[ptr-8]` with disp8.
-- **Register recycling.** r12 cycles sig→pub→&cN as each dies.
-  rbx cycles hv→(r13+128 cache) after the hash decode.
+**Core architecture:**
 
-Bytecode totals 152 bytes (5 streams); interpreter + dispatch ~165 bytes.
-Net savings vs the non-bytecode hand-asm: **857 bytes**.
+- **2-byte bytecode, 16 contiguous slots.** Word = `(dst<<12)|(s1<<8)|(s2<<4)|op`.
+  Op-in-low-nibble lets the decoder extract all 3 slot addresses with a
+  uniform `shr eax, 4` loop — push s2/s1/dst, pop reverse → rdi/rsi/rdx
+  in 23 bytes.
+- **Single slot buffer.** One 512-byte buffer serves verify's bytecode
+  AND pt ops. bc_v1 writes Q directly into slots 4-6 (= pt_mul's base) —
+  no copy between validation and scalar mult.
+- **In-place pt_mul.** Acc @ 0-2, base @ 4-6. pt_dbl = `bc_run(bc_dbl)`,
+  no separate function, no copy/iter. Locals @ 8-11 preserve base.
+- **`bt [mem], reg`** tests bit N of a multi-qword operand — bit index
+  spans qwords automatically. 7-byte bit test vs 24-byte manual extract.
+
+**Key size tricks:**
+
+- `loop`/`loopz` preserve CF → tightest carry-preserving big-int add/sub.
+- Fadd's temp at slot 3 of the buffer (r12+96, disp8). Slot 3 is always
+  safe: bc_dbl never uses it; bc_add2's only ADD writes TO it.
+- cR2N dropped: raw s → fe_inv_m gives s⁻¹·R²; 2 extra NMUL-by-one
+  compensate. −32 rodata, −18 code.
+- fe_inv_m uses caller's r buffer as accumulator. Both moduli have
+  bit 255 set → init t=a, start at bit 254, no "started" flag.
+- muladd4 base reg r9 (not rbp) → no forced disp8 byte. Drops rbp/rbx
+  from fe_mul_m/fe_inv_m entirely; 4-pop shared epilogue.
+- `.Lf`/`.Ld` inline after length checks → 6 branches rel8 not rel32.
+- Contiguous rodata: N,P,BM one rep movsq. GXM,GYM one rep movsq.
+  cN_M0I at [cN-8] = disp8.
+- Dead base.z check removed (P-256 cofactor 1, so u2·Q ≠ ∞).
+- `.Lfm` falls through into fe_mul_m. bcrun_r14 falls into bc_run.
+
+**Optimization journey (2875 → 1712):**
+
+| Size | Key technique |
+|---|---|
+| 2875 | baseline hand-asm |
+| 2591 | 2-byte bytecode, slot pointer table |
+| 2398 | 10 ops, contiguous slots, no ptr indirect |
+| 2207 | block-copy consts, mid-frame ptrs |
+| 2062 | in-place pt_mul (pt_dbl inlined) |
+| 2018 | `loop` + cN_M0I@[cN-8] + misc — **target met** |
+| 1992 | loop-based decode, new encoding |
+| 1912 | `bt [mem],reg` + drop cR2N |
+| 1870 | Fadd uses slot temp; bcrun fallthrough |
+| 1840 | dead base.z check removed + single-branch cond-sub |
+| 1816 | bit-255-always-1, drop rbx/rbp from mul/inv |
+| 1793 | fe_inv_m in-place accumulator |
+| 1743 | single slot buffer (Q→base direct, no copy) |
+| 1712 | inline .Lf/.Ld (6 branches rel8) |
+
+rodata 356 B: bytecode 156 B (5 streams) + constants 200 B. text 1356 B.
 
 ### ARM Cortex-M4 breakdown (the boot-ROM number)
 
