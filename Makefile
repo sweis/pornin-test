@@ -22,15 +22,22 @@ SIZE_CFLAGS = -std=c99 -Os -ffreestanding -fno-strict-aliasing \
               -fno-asynchronous-unwind-tables -fno-ident \
               -fno-stack-protector -fno-tree-loop-distribute-patterns
 
-.PHONY: all test size clean
+.PHONY: all test test-asm size size-asm clean
 
-all: test_ecdsa
+all: test_ecdsa test_ecdsa_asm
 
 test_ecdsa: tv_ecdsa.c test_ecdsa.c tv_ecdsa.h
 	$(CC) $(CFLAGS) -o $@ tv_ecdsa.c test_ecdsa.c
 
+# Pure-assembly variant (x86-64 only).
+test_ecdsa_asm: tv_ecdsa_amd64.S test_ecdsa_asm.c test_ecdsa.c
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_amd64.S test_ecdsa_asm.c
+
 test: test_ecdsa
 	./test_ecdsa
+
+test-asm: test_ecdsa_asm
+	./test_ecdsa_asm
 
 # Build just the crypto core with size flags and show section sizes.
 # This is the number that matters for ROM budgeting.
@@ -44,6 +51,19 @@ size: tv_ecdsa_size.o
 	@echo "=== detailed section sizes ==="
 	@size -A $< | grep -E '^\.(text|rodata|data|bss)' || true
 
+# Assemble the pure-asm version and report its size.
+tv_ecdsa_amd64.o: tv_ecdsa_amd64.S
+	$(CC) -c -o $@ $<
+
+size-asm: tv_ecdsa_amd64.o
+	@echo "=== size of tv_ecdsa_amd64.S (pure assembly, 64-bit limbs) ==="
+	@size $<
+	@echo ""
+	@size -A $< | grep -E '^\.(text|rodata|data|bss)' || true
+	@echo ""
+	@echo "=== undefined symbols ==="
+	@nm $< | grep ' U ' || echo "NONE — fully self-contained"
+
 # Optional: Thumb-2 build for a realistic embedded target (requires
 # arm-none-eabi-gcc). Not built by default.
 tv_ecdsa_thumb.o: tv_ecdsa.c tv_ecdsa.h
@@ -54,4 +74,4 @@ size-thumb: tv_ecdsa_thumb.o
 	@arm-none-eabi-size $<
 
 clean:
-	rm -f test_ecdsa tv_ecdsa_size.o tv_ecdsa_thumb.o
+	rm -f test_ecdsa test_ecdsa_asm tv_ecdsa_size.o tv_ecdsa_thumb.o tv_ecdsa_amd64.o

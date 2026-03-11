@@ -174,9 +174,12 @@ static void fe_sub_m(u32 *r, const u32 *a, const u32 *b, const u32 *m)
 }
 
 /*
- * Internal helper: t[0..9] += x * y[0..7], with carry propagation
- * into the two high limbs. Used twice per iteration in Montgomery
- * multiplication; factoring it saves ~100 bytes.
+ * Internal helper: t[0..7] += x * y[0..7], with carry propagation
+ * into t[8] and, if needed, t[9]. The carry loop is unbounded in
+ * form but fe_mul_m's invariant (t < 2m after each outer iteration,
+ * hence intermediate t < 2^290) guarantees it never touches t[10].
+ * Used twice per iteration in the Montgomery core; factoring it out
+ * lets the two uses share one inner loop.
  */
 static void muladd10(u32 *t, u32 x, const u32 *y)
 {
@@ -238,7 +241,9 @@ static void fe_inv_m(u32 *r, const u32 *a, const u32 *m, u32 m0i)
 	fe t, e;
 	int i, started = 0;
 
-	/* e = m - 2. m is odd and > 2 so no borrow past limb 0. */
+	/* e = m - 2. For both P and N the low 32-bit limb is >= 3
+	 * (P[0]=0xFFFFFFFF, N[0]=0xFC632551), so subtracting 2 from
+	 * limb 0 cannot underflow and no borrow propagation is needed. */
 	fe_cpy(e, m);
 	e[0] -= 2;
 
@@ -325,8 +330,12 @@ static NOINLINE void pt_set_inf(jac *r)
 /*
  * Point doubling: R = 2*P. Formula exploits a = -3.
  * Input and output in Jacobian/Montgomery form.
- * Works for all inputs including the point at infinity (if P.z = 0
- * then R.z will also be 0).
+ * Works for all inputs including the point at infinity: if P.z = 0
+ * then Z3 = (Y+0)^2 - Y^2 - 0 = 0 as well.
+ *
+ * Aliasing: safe for r == p. All reads from p->x/y/z complete
+ * before the corresponding r->x/y/z is first written. pt_mul
+ * relies on this, calling pt_dbl(acc, acc).
  *
  * Ref: EFD "dbl-2007-bl" with a = -3 optimisation.
  *   delta = Z^2
@@ -382,6 +391,10 @@ static void pt_dbl(jac *r, const jac *p)
 /*
  * Point addition: R = P + Q. Full Jacobian + Jacobian.
  * Handles all special cases: P or Q is infinity, P = Q, P = -Q.
+ *
+ * Aliasing: safe for r == p and for r == q (all reads from p/q
+ * happen before the first write to r). pt_mul relies on this,
+ * calling pt_add(acc, acc, base).
  *
  * Ref: EFD "add-2007-bl".
  *   Z1Z1 = Z1^2
