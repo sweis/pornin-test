@@ -288,6 +288,13 @@ fe_from_be:
  *
  * bc_run(bytecode=rdi, slot_buf=rsi) -> eax = fail flag
  * ====================================================================== */
+/* bcrun_r14 immediately before bc_run → falls through (no jmp). */
+bcrun_r15:
+	mov	rsi, r15
+	jmp	bc_run
+bcrun_r14:
+	mov	rsi, r14
+	/* FALLTHROUGH */
 bc_run:
 	push	rbp
 	push	rbx
@@ -330,6 +337,8 @@ bc_run:
 	jmp	.Lbc
 
 .Lbce:	movzx	eax, r13b
+	/* 5-pop epilogue shared with verify (jumps here after pop r15). */
+.Lepi5:
 	pop	r14
 	pop	r13
 	pop	r12
@@ -363,20 +372,21 @@ Fsqr:	mov	rdx, rsi
 Fsub:	lea	rcx, [rip+cP]
 	jmp	fe_sub_m
 .Lop2:
+/* Fadd is ONLY called from the bytecode interpreter, which holds the
+ * slot-buffer base in r12.  Slot 15 is never used by any bytecode
+ * stream (pt ops use 0-11; verify streams use 0-14), so we use it as
+ * Fadd's temp — saving the 40-byte stack frame and its setup/teardown.
+ * This makes Fadd a non-standard-ABI function (relies on r12 from
+ * bc_run's context), which is fine here. */
 Fadd:	push	rdi
 	push	rsi
-	sub	rsp, 40
-	lea	rdi, [rsp]
+	lea	rdi, [r12+15*32]    /* slot 15 temp (disp32 but still wins) */
 	lea	rsi, [rip+cP]
-	call	fe_sub_raw
-	mov	rdx, rsp
-	mov	rsi, [rsp+40]
-	mov	rdi, [rsp+48]
-	call	Fsub
-	add	rsp, 40
+	call	fe_sub_raw           /* slot[15] = p - b */
+	lea	rdx, [r12+15*32]
 	pop	rsi
 	pop	rdi
-	ret
+	jmp	Fsub                 /* r = Fsub(a, slot[15]) = a + b mod p */
 .Lop5:
 Nmul:	lea	rcx, [rip+cN]
 	mov	r8, [rcx-8]          /* cN_M0I is at cN-8 */
@@ -431,11 +441,7 @@ cond_sub_n:
  *
  * Expects slot buffer ptr in rdi.  Preserves it in r14 internally.
  * -------------------------------------------------------------------- */
-/* bcrun_r14: run bytecode with slot buf = r14.  Saves 3 bytes per
- * call site (× 3 in pt_add_acc). */
-bcrun_r14:
-	mov	rsi, r14
-	jmp	bc_run
+/* (bcrun_r14 / bcrun_r15 moved above bc_run for fall-through) */
 
 pt_add_acc:
 	push	r14
@@ -610,8 +616,7 @@ tv_ecdsa_p256_verify_asm:
 
 	/* ===== Stream 1: validation + curve check + Q.z ===== */
 	lea	rdi, [rip+bc_v1]
-	mov	rsi, r15
-	call	bc_run
+	call	bcrun_r15
 	test	eax, eax
 	jnz	.Lf
 
@@ -644,8 +649,7 @@ tv_ecdsa_p256_verify_asm:
 
 	/* ===== Stream 2: u1, u2 ===== */
 	lea	rdi, [rip+bc_v2]
-	mov	rsi, r15
-	call	bc_run
+	call	bcrun_r15
 
 	/* ===== R2 = u2 * Q ===== */
 	mov	rdi, r13
@@ -691,8 +695,7 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_cpy
 
 	lea	rdi, [rip+bc_v3]
-	mov	rsi, r15
-	call	bc_run
+	call	bcrun_r15
 
 	/* reduce mod n; compare r. */
 	lea	rdi, [rbp-32]
@@ -708,12 +711,7 @@ tv_ecdsa_p256_verify_asm:
 .Lf:	xor	eax, eax
 .Ld:	add	rsp, 1128
 	pop	r15
-	pop	r14
-	pop	r13
-	pop	r12
-	pop	rbx
-	pop	rbp
-	ret
+	jmp	.Lepi5             /* shared 5-pop epilogue in bc_run */
 
 /* ======================================================================
  * Bytecode streams.  See the Python generator for annotations.
@@ -763,12 +761,11 @@ bc_v3:
 	.byte 0x01,0x11, 0x80,0x11, 0xa0,0x11, 0x0f,0x00
 
 /* ----------------------------------------------------------------------
- * Constants.  N, P, BM, ONE_M are CONTIGUOUS in this order so that
- * verify can block-copy all four into slots 11..14 with one rep movsq.
- * 8-byte alignment suffices for qword access; saves a few bytes of
- * padding versus 32-byte alignment.
+ * Constants.  No alignment directive — x86-64 handles misaligned qword
+ * loads correctly (slower, but this is a boot-ROM one-shot).  The
+ * bytecode above is 156 bytes, so cN_M0I lands at an odd alignment;
+ * saves the 4 padding bytes that .p2align 3 would insert.
  * -------------------------------------------------------------------- */
-	.p2align 3
 
 /* cN_M0I placed IMMEDIATELY BEFORE cN so that any pointer to cN
  * can reach it as [ptr-8] with disp8 addressing.  Nmul and verify's
