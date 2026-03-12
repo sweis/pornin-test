@@ -29,9 +29,14 @@
  *   9 TOMONT s[d] = s[a] * R^2 mod p   (enter Montgomery domain, mod p)
  *   F END    return fail flag in eax
  *
- * Instruction encoding: 2 bytes.
- *   byte[0] = (opcode << 4) | dst_slot
- *   byte[1] = (src1_slot << 4) | src2_slot
+ * Instruction encoding: 2 bytes (little-endian word).
+ *   word = (dst << 12) | (src1 << 8) | (src2 << 4) | opcode
+ * i.e. nibbles low-to-high: op, s2, s1, dst.  This order lets the
+ * interpreter decode all three slot addresses with a single uniform
+ * shift-right loop — after masking off the opcode, shr eax,4 three
+ * times yields s2, s1, dst in sequence.  Pushed in that order and
+ * popped in reverse gives rdi=dst, rsi=s1, rdx=s2 in ~20 bytes
+ * instead of 41.
  *
  * Security
  * --------
@@ -48,13 +53,10 @@
  * 256-bit big-integer primitives (4 × u64 limbs, little-endian).
  * -------------------------------------------------------------------- */
 
-/* fe_cpy(dst=rdi, src=rsi).  lodsq/stosq loop.  14 bytes. */
+/* fe_cpy(dst=rdi, src=rsi).  rep movsq: 9 bytes total. */
 fe_cpy:
 	mov	ecx, 4
-1:	lodsq
-	stosq
-	dec	ecx
-	jnz	1b
+	rep	movsq
 	ret
 
 /* fe_iszero(a=rdi) -> eax (1 if zero).  Full 32-bit result since
@@ -100,15 +102,13 @@ fe_add_raw:
 	loop	1b
 	ret
 
-/* fe_geq(a=rdi, b=rsi) -> al (1 if a>=b).  Upper bits garbage. */
+/* fe_geq(a=rdi, b=rsi) -> al (1 if a>=b).  `loop` for -2 bytes. */
 fe_geq:
 	mov	ecx, 4
 1:	mov	rax, [rdi+rcx*8-8]
 	cmp	rax, [rsi+rcx*8-8]
-	jne	2f
-	dec	ecx
-	jnz	1b
-2:	setae	al
+	loopz	1b             /* loop while equal AND ecx > 0 */
+	setae	al
 	ret
 
 /* fe_sub_m(dst,a,b,m). */
@@ -124,37 +124,43 @@ fe_sub_m:
 	jmp	fe_add_raw
 1:	ret
 
-/* muladd4(t=rbp, x=rbx, y=rsi).  t[0..3] += x*y, carry into t[4],t[5]. */
+/* muladd4(t=r9, x=r8, y=rsi).  t[0..3] += x*y, carry into t[4],t[5].
+ * Using r9 instead of rbp avoids the forced disp8 byte on [rbp+rdi]
+ * (SIB with rbp base and mod=00 means disp32, so mod=01+disp8=0 is
+ * forced).  [r9+rdi] encodes with no displacement.  -2 bytes. */
 muladd4:
 	xor	ecx, ecx
 	xor	edi, edi
-1:	mov	rax, rbx
+1:	mov	rax, r8
 	mul	QWORD PTR [rsi+rdi]
-	add	rax, [rbp+rdi]
+	add	rax, [r9+rdi]
 	adc	rdx, 0
 	add	rax, rcx
 	adc	rdx, 0
-	mov	[rbp+rdi], rax
+	mov	[r9+rdi], rax
 	mov	rcx, rdx
 	add	rdi, 8
 	cmp	rdi, 32
 	jb	1b
-	add	[rbp+32], rcx
-	adc	QWORD PTR [rbp+40], 0
+	add	[r9+32], rcx
+	adc	QWORD PTR [r9+40], 0
 	ret
 
+/* .Lfm: fe_inv_m's "multiply with saved modulus" helper.  Placed
+ * immediately before fe_mul_m so it falls through (no jmp).
+ * r14 = m, r15 = m0i are fe_inv_m's saved params — valid whenever
+ * .Lfm is called from fe_inv_m's loop. */
+.Lfm:	mov	rcx, r14
+	mov	r8, r15
+	/* FALLTHROUGH */
 /* fe_mul_m(r,a,b,m,m0i): Montgomery mul, CIOS. */
 fe_mul_m:
-	push	rbp
-	push	rbx
 	push	r12
 	push	r13
 	push	r14
 	push	r15
-	sub	rsp, 56
+	sub	rsp, 56             /* 4 pushes + retaddr = 40; +56 = 96 aligned */
 
-	/* r12 = r (dst ptr) — survives everything; b (rdx) stashed on
-	 * stack and reloaded once per iteration. */
 	mov	r12, rdi
 	mov	[rsp+48], rdx       /* b */
 	mov	r13, rcx            /* m */
@@ -163,16 +169,16 @@ fe_mul_m:
 
 	xor	eax, eax
 	mov	ecx, 6
-	lea	rdi, [rsp]
+	mov	rdi, rsp
 	rep	stosq
 
 	xor	r11d, r11d
-.Lm:	lea	rbp, [rsp]
-	mov	rbx, [r15+r11]
-	mov	rsi, [rsp+48]       /* b */
+.Lm:	mov	r9, rsp             /* t (r9 avoids forced disp; mov<lea) */
+	mov	r8, [r15+r11]
+	mov	rsi, [rsp+48]
 	call	muladd4
-	mov	rbx, [rsp]
-	imul	rbx, r14
+	mov	r8, [rsp]
+	imul	r8, r14
 	mov	rsi, r13
 	call	muladd4
 	xor	ecx, ecx
@@ -181,116 +187,91 @@ fe_mul_m:
 	add	ecx, 8
 	cmp	ecx, 40
 	jb	1b
-	and	QWORD PTR [rsp+40], 0   /* imm8 sign-extended: 6 bytes vs 9 */
+	and	QWORD PTR [rsp+40], 0
 	add	r11, 8
 	cmp	r11, 32
 	jb	.Lm
 
 	mov	rdi, r12
-	lea	rsi, [rsp]
+	mov	rsi, rsp
 	mov	rdx, r13
 	call	fe_sub_raw
-	cmp	DWORD PTR [rsp+32], 0
-	jnz	2f
-	test	eax, eax
+	sub	eax, [rsp+32]
 	jz	2f
 	mov	rdi, r12
-	lea	rsi, [rsp]
+	mov	rsi, rsp
 	call	fe_cpy
 2:
 	add	rsp, 56
+	/* 4-pop epilogue (rbp and rbx no longer saved — neither used). */
+.Lepi4:
 	pop	r15
 	pop	r14
 	pop	r13
 	pop	r12
-	pop	rbx
-	pop	rbp
 	ret
 
 /* fe_inv_m(r,a,m,m0i): Fermat inversion in Montgomery form.
  * Low limb of both P and N is >= 3, so m[0]-2 cannot underflow. */
+/* fe_inv_m(r, a, m, m0i): Fermat inversion.
+ *
+ * The accumulator t lives DIRECTLY IN the caller's output buffer r
+ * (fe_mul_m is safe for dst==src since it copies operands into an
+ * internal temp before overwriting dst).  This saves 32 bytes of
+ * local stack + the final copy-out (~14 bytes).
+ *
+ * r10 holds the loop counter — caller-saved but untouched by
+ * fe_mul_m's entire call tree (fe_mul_m uses r8,r9,r11; muladd4
+ * uses r8,r9; fe_sub_raw/fe_cpy use no high regs). */
 fe_inv_m:
-	push	rbp
-	push	rbx
 	push	r12
 	push	r13
 	push	r14
 	push	r15
-	sub	rsp, 72
+	sub	rsp, 40            /* e[4] only; 40+40=80 aligned */
 
-	mov	r12, rdi
-	mov	r13, rsi
-	mov	r14, rdx
-	mov	r15, rcx
+	mov	r12, rdi           /* r = t accumulator */
+	mov	r13, rsi           /* a */
+	mov	r14, rdx           /* m */
+	mov	r15, rcx           /* m0i */
 
-	lea	rdi, [rsp]
+	mov	rdi, rsp
 	mov	rsi, r14
 	call	fe_cpy
 	sub	QWORD PTR [rsp], 2
 
-	/* bl = started flag, bh = bit.  Both survive fe_mul_m (rbx is
-	 * callee-saved).  The `mov rcx,r14; mov r8,r15` pair before each
-	 * fe_mul_m call is factored into .Lfm (saves ~4 bytes net). */
-	xor	ebx, ebx
-	mov	ebp, 255
-.Le:	mov	ecx, ebp
-	shr	ecx, 6
-	mov	rax, [rsp+rcx*8]
-	mov	ecx, ebp
-	and	ecx, 63
-	shr	rax, cl
-	mov	bh, al
-	and	bh, 1
-	test	bl, bl
-	jz	.Lns
-	lea	rdi, [rsp+32]
-	mov	rsi, rdi
-	mov	rdx, rdi
-	call	.Lfm
-	test	bh, bh
-	jz	.Lnx
-	lea	rdi, [rsp+32]
-	mov	rsi, rdi
-	mov	rdx, r13
-	call	.Lfm
-	jmp	.Lnx
-.Lns:	test	bh, bh
-	jz	.Lnx
-	lea	rdi, [rsp+32]
+	/* t = a; top bit of exponent is always 1 → start at bit 254. */
+	mov	rdi, r12
 	mov	rsi, r13
 	call	fe_cpy
-	mov	bl, 1
-.Lnx:	dec	ebp
-	jns	.Le
 
+	mov	r10d, 254
+.Le:	mov	rdi, r12
+	mov	rsi, rdi
+	mov	rdx, rdi
+	call	.Lfm               /* t = t² (in r) */
+	bt	QWORD PTR [rsp], r10
+	jnc	.Lnx
 	mov	rdi, r12
-	lea	rsi, [rsp+32]
-	call	fe_cpy
+	mov	rsi, rdi
+	mov	rdx, r13
+	call	.Lfm               /* t *= a */
+.Lnx:	dec	r10d
+	jns	.Le
+	/* t is already in r — no copy-out. */
 
-	add	rsp, 72
-	pop	r15
-	pop	r14
-	pop	r13
-	pop	r12
-	pop	rbx
-	pop	rbp
-	ret
+	add	rsp, 40
+	jmp	.Lepi4
 
-/* Local helper: load (m, m0i) and tail-call fe_mul_m.  Placed
- * after fe_inv_m so rel8 jmp works if fe_mul_m were adjacent;
- * still saves the repeated 6-byte (mov rcx + mov r8) sequence. */
-.Lfm:	mov	rcx, r14
-	mov	r8, r15
-	jmp	fe_mul_m
+/* .Lfm moved above fe_mul_m (falls through). */
 
-/* fe_from_be(dst=rdi, src=rsi). */
+/* fe_from_be(dst=rdi, src=rsi).  `loop` saves 2 bytes vs dec+jnz. */
 fe_from_be:
 	mov	ecx, 4
 1:	mov	rax, [rsi+rcx*8-8]
 	bswap	rax
 	stosq
-	dec	ecx
-	jnz	1b
+	loop	1b
 	ret
 
 /* ======================================================================
@@ -299,6 +280,11 @@ fe_from_be:
  *
  * bc_run(bytecode=rdi, slot_buf=rsi) -> eax = fail flag
  * ====================================================================== */
+/* bcrun_r14 immediately before bc_run → falls through (no jmp). */
+/* bcrun_r15 removed — verify now uses r14 for the slot buffer. */
+bcrun_r14:
+	mov	rsi, r14
+	/* FALLTHROUGH */
 bc_run:
 	push	rbp
 	push	rbx
@@ -311,25 +297,28 @@ bc_run:
 .Lbc:
 	movzx	eax, WORD PTR [rbx]
 	add	rbx, 2
-	/* al=(op<<4)|dst  ah=(s1<<4)|s2 */
+	/* low nibble = op; next three nibbles = s2, s1, dst. */
 	mov	r14d, eax
-	shr	r14d, 4
 	and	r14d, 0xF
 	cmp	r14b, 0xF
 	je	.Lbce
+	shr	eax, 4               /* drop op; now bits 0-3=s2, 4-7=s1, 8-11=dst */
 
-	/* Slot-to-address helper is called 3× with different nibbles.
-	 * Input: cl = raw nibble byte; output: rcx = slot address. */
-	mov	cl, al
-	call	.Lsa
-	mov	rdi, rcx           /* dst */
-	mov	cl, ah
-	shr	cl, 4
-	call	.Lsa
-	mov	rsi, rcx           /* src1 */
-	mov	cl, ah
-	call	.Lsa
-	mov	rdx, rcx           /* src2 */
+	/* Uniform shift-right loop computes and pushes s2, s1, dst addrs.
+	 * Pop in reverse → rdi=dst, rsi=s1, rdx=s2.  ~23 bytes vs the
+	 * previous 41-byte triple-call approach. */
+	mov	cl, 3
+1:	mov	edx, eax
+	and	edx, 0xF
+	shl	edx, 5
+	lea	rdx, [r12+rdx]
+	push	rdx
+	shr	eax, 4
+	dec	cl
+	jnz	1b
+	pop	rdi
+	pop	rsi
+	pop	rdx
 
 	lea	rbp, [rip+.Ljt]
 	movzx	ecx, BYTE PTR [rbp+r14]
@@ -337,13 +326,9 @@ bc_run:
 	call	rbp
 	jmp	.Lbc
 
-.Lsa:	/* and-shl-lea: 4-bit nibble in cl -> address in rcx. */
-	and	ecx, 0xF
-	shl	ecx, 5
-	lea	rcx, [r12+rcx]
-	ret
-
 .Lbce:	movzx	eax, r13b
+	/* 5-pop epilogue shared with verify (jumps here after pop r15). */
+.Lepi5:
 	pop	r14
 	pop	r13
 	pop	r12
@@ -377,25 +362,31 @@ Fsqr:	mov	rdx, rsi
 Fsub:	lea	rcx, [rip+cP]
 	jmp	fe_sub_m
 .Lop2:
+/* Fadd is ONLY called from the bytecode interpreter (r12 = slot buf).
+ * Slot 3 (= H in pt_add) is the ONE slot that's safe to clobber across
+ * every ADD:
+ *   - bc_dbl never uses slot 3 at all
+ *   - bc_add2's ONLY ADD writes TO slot 3 (H ← 2V) intentionally, and
+ *     all reads of the old-H value occur before that ADD
+ *   - bc_v1 never uses slot 3
+ * Using slot 3 as temp keeps Fadd at 34 bytes without corrupting ONE
+ * at slot 15 or T3 at slot 11.  r12+96 is disp8 too — win on encoding. */
 Fadd:	push	rdi
 	push	rsi
-	sub	rsp, 40
-	lea	rdi, [rsp]
+	lea	rdi, [r12+3*32]     /* slot 3 — disp8! */
 	lea	rsi, [rip+cP]
 	call	fe_sub_raw
-	mov	rdx, rsp
-	mov	rsi, [rsp+40]
-	mov	rdi, [rsp+48]
-	call	Fsub
-	add	rsp, 40
+	lea	rdx, [r12+3*32]
 	pop	rsi
 	pop	rdi
-	ret
+	jmp	Fsub
 .Lop5:
 Nmul:	lea	rcx, [rip+cN]
 	mov	r8, [rcx-8]          /* cN_M0I is at cN-8 */
 	jmp	fe_mul_m
-.Lop4:	jmp	fe_cpy
+/* CPY (op 4) is dead — no bytecode stream uses it.  .Ljt[4] points
+ * at .Lop5 (harmless; op 4 is never dispatched). */
+.equ .Lop4, .Lop5
 
 /* ----------------------------------------------------------------------
  * Helpers.
@@ -406,13 +397,14 @@ cpy3:
 	rep	movsq
 	ret
 
-/* build_one(dst=rdi): write normal-form 1 (qword 1 + three zeros).
- * Replaces the cONE_M rodata constant. */
+/* build_one(dst=rdi): write normal-form 1.  stosq the 1 first, then
+ * zero the rest — one byte shorter than zero-all + backpatch. */
 build_one:
+	mov	eax, 1
+	stosq
 	xor	eax, eax
-	mov	ecx, 4
+	mov	ecx, 3
 	rep	stosq
-	mov	QWORD PTR [rdi-32], 1
 	ret
 
 /* cond_sub_n(val=rdi): if *val >= n, subtract n in place.
@@ -442,42 +434,36 @@ cond_sub_n:
  *
  * Expects slot buffer ptr in rdi.  Preserves it in r14 internally.
  * -------------------------------------------------------------------- */
+/* (bcrun_r14 / bcrun_r15 moved above bc_run for fall-through) */
+
+/* With the dead base.z check gone, the r15 mid-pointer is used only
+ * twice (rare paths) — push/pop/lea overhead (9 bytes) exceeds the
+ * disp32 cost (2×3 = 6 bytes).  Dropped. */
 pt_add_acc:
 	push	r14
-	push	r15
 	mov	r14, rdi
-	lea	r15, [r14+128]     /* mid-pointer: base@-0..+64, Rr@+96 disp8 */
 
-	/* If acc.z == 0: acc = base. */
 	lea	rdi, [r14+64]
 	call	fe_iszero
 	test	al, al
 	jz	1f
 	mov	rdi, r14
-	lea	rsi, [r15+0]       /* base; now disp8 via r15 */
+	lea	rsi, [r14+128]     /* base; disp32, rare path */
 	call	cpy3
 	jmp	.Laa
-1:	/* If base.z == 0: acc unchanged. */
-	lea	rdi, [r15+64]      /* base.z */
-	call	fe_iszero
-	test	al, al
-	jnz	.Laa
-	lea	rdi, [rip+bc_add1]
-	mov	rsi, r14
-	call	bc_run
-	/* H == 0? (slot 3 = r14+96, disp8) */
+	/* base.z check removed — see analysis above: base is never ∞. */
+1:	lea	rdi, [rip+bc_add1]
+	call	bcrun_r14
 	lea	rdi, [r14+96]
 	call	fe_iszero
 	test	al, al
 	jz	3f
-	/* H=0: check Rr (slot 7 = r15+96, now disp8) */
-	lea	rdi, [r15+96]
+	lea	rdi, [r14+7*32]    /* Rr; disp32, very rare path (H=0) */
 	call	fe_iszero
 	test	al, al
 	jz	.Lai
 	lea	rdi, [rip+bc_dbl]
-	mov	rsi, r14
-	call	bc_run
+	call	bcrun_r14
 	jmp	.Laa
 .Lai:	mov	rdi, r14
 	xor	eax, eax
@@ -485,10 +471,8 @@ pt_add_acc:
 	rep	stosq
 	jmp	.Laa
 3:	lea	rdi, [rip+bc_add2]
-	mov	rsi, r14
-	call	bc_run
+	call	bcrun_r14
 .Laa:
-	pop	r15
 	pop	r14
 	ret
 
@@ -505,9 +489,10 @@ pt_mul:
 	push	rbp
 	push	rbx
 	push	r13
-	sub	rsp, 8             /* align */
-	mov	rbx, rdi           /* slot buffer */
-	mov	rbp, rsi           /* k */
+	/* No sub rsp needed: 3 pushes + retaddr = 32 bytes, already
+	 * aligned.  (The previous `sub rsp,8` actually MIS-aligned.) */
+	mov	rbx, rdi
+	mov	rbp, rsi
 
 	/* acc = infinity. */
 	mov	rdi, rbx
@@ -516,25 +501,20 @@ pt_mul:
 	rep	stosq
 
 	mov	r13d, 255
-.Lpm:	/* double: just run bc_dbl (acc at slots 0-2, locals at 3-6). */
-	lea	rdi, [rip+bc_dbl]
+.Lpm:	lea	rdi, [rip+bc_dbl]
 	mov	rsi, rbx
 	call	bc_run
-	/* bit test */
-	mov	ecx, r13d
-	shr	ecx, 6
-	mov	rax, [rbp+rcx*8]
-	mov	ecx, r13d
-	and	ecx, 63
-	shr	rax, cl
-	test	al, 1
-	jz	1f
+	/* `bt [mem], reg` treats the memory operand as a bit string
+	 * spanning multiple qwords — the bit index in r13 directly
+	 * addresses bit r13 of the 256-bit scalar.  7 bytes total
+	 * (vs 24 for the manual extract-shift-test). */
+	bt	QWORD PTR [rbp], r13
+	jnc	1f
 	mov	rdi, rbx
 	call	pt_add_acc
 1:	dec	r13d
 	jns	.Lpm
 
-	add	rsp, 8
 	pop	r13
 	pop	rbx
 	pop	rbp
@@ -560,31 +540,53 @@ pt_mul:
 	.globl	tv_ecdsa_p256_verify_asm
 	.type	tv_ecdsa_p256_verify_asm, @function
 
+/*
+ * SINGLE SLOT BUFFER architecture.  One 512-byte buffer serves both
+ * verify's bytecode streams AND pt_mul/pt_add_acc.  bc_v1 writes Q
+ * directly into slots 4-6 (= pt_mul's base slots) — no copy needed.
+ *
+ * Slot map:
+ *   0-2: scratch → acc/R1 during pt ops
+ *   3: H (pt ops)
+ *   4-6: Q (bc_v1) = base (pt ops)  ← key: same slots!
+ *   7: Rr → later Z⁻¹
+ *   8-10: N,P,BM consts (bc_v1) → pt locals (reused after bc_v1)
+ *   11: pt locals
+ *   12: r (persistent — pt ops never touch slots ≥12)
+ *   13: s → e → u1 (persistent)
+ *   14: u2 (persistent)
+ *   15: one (for bc_v2 + Q.z; CLOBBERED by Fadd during pt ops;
+ *            REBUILT before bc_v3)
+ *
+ * Stack layout:  slot buf (512) + R2 storage (96) = 608, round to 616.
+ *
+ * Register budget:
+ *   r14 = slot buf base (= rsp)
+ *   r13 = mid-pointer into high slots (rsp+384 = slot 12)
+ *   r12 = sig → &cN (as before)
+ *   rbx = hv → &R2 storage (rsp+512)
+ *   rbp = mid-pointer for low slots (rsp+64)
+ *   r15 DROPPED — one fewer push/pop, -2 bytes + no bcrun_r15
+ */
 tv_ecdsa_p256_verify_asm:
 	push	rbp
 	push	rbx
 	push	r12
 	push	r13
 	push	r14
-	push	r15
-	/* Stack: primary slot buf (512, used for validation/u1u2/affine),
-	 * secondary slot buf (512, used by pt_mul — acc@0-2, base@4-6),
-	 * R2 storage (96).  Total = 1128 rounded. */
-	sub	rsp, 1128
+	sub	rsp, 616
 
-	lea	rbp, [rsp+64]        /* slots 0..4 disp8 via rbp-64..+64 */
-	mov	r15, rsp             /* primary slot buf base */
-	lea	r13, [rsp+512]       /* secondary slot buf (pt_mul's acc+base) */
-	lea	r14, [rsp+1024]      /* R2 storage (96 bytes) */
+	mov	r14, rsp             /* slot buf base */
+	lea	rbp, [rsp+64]        /* slots 0-4 disp8 via rbp */
+	lea	r13, [rsp+12*32]     /* slot 12+ disp8 via r13 */
 
-	/* r12: sig → &cN.  pub stashed in r8 (fe_from_be touches only
-	 * rax/rcx/rsi/rdi so r8 survives the four decode calls). */
 	mov	r12, rdi             /* sig */
 	mov	rbx, r8              /* hv */
-	mov	r8, rdx              /* pub */
+	mov	r8, rdx              /* pub (survives fe_from_be) */
 
-	/* Length checks. */
-	xor	eax, eax
+	/* Length checks.  .Lf/.Ld placed INLINE right after the checks
+	 * so all four branches are rel8 (2 bytes) instead of rel32 (6).
+	 * The last check inverted (jbe skips fail block).  Saves ~16B. */
 	cmp	rsi, 64
 	jne	.Lf
 	cmp	rcx, 65
@@ -592,143 +594,120 @@ tv_ecdsa_p256_verify_asm:
 	cmp	r9, 32
 	jb	.Lf
 	cmp	r9, 64
-	ja	.Lf
-
-	/* Decode r -> slot 3, s -> slot 4. */
+	jbe	1f
+.Lf:	xor	eax, eax
+.Ld:	add	rsp, 616
+	jmp	.Lepi5             /* 5-pop epilogue in bc_run */
+1:
+	/* r → slot 12 (via r13), s → slot 13. */
 	mov	rsi, r12
-	lea	rdi, [rbp+32]
+	lea	rdi, [r13+0]
 	call	fe_from_be
 	lea	rsi, [r12+32]
-	lea	rdi, [rbp+64]
+	lea	rdi, [r13+32]
 	call	fe_from_be
-	/* sig dead. */
 
 	cmp	BYTE PTR [r8], 0x04
 	jne	.Lf
 	lea	rsi, [r8+1]
-	lea	rdi, [rbp-64]
+	lea	rdi, [rbp-64]        /* qx → slot 0 */
 	call	fe_from_be
 	lea	rsi, [r8+33]
-	lea	rdi, [rbp-32]
+	lea	rdi, [rbp-32]        /* qy → slot 1 */
 	call	fe_from_be
-	/* pub dead; r12 -> &cN for rest of function. */
 	lea	r12, [rip+cN]
 
-	/* Block-load constants N,P,BM -> slots 11..13. */
-	lea	rdi, [r15+11*32]
+	/* Constants N,P,BM → slots 8-10. */
+	lea	rdi, [r14+8*32]
 	mov	rsi, r12
 	mov	ecx, 12
 	rep	movsq
-	/* After rep movsq, rdi = r15+11*32+96 = r15+448 = slot 14.
-	 * Slot 10 is at rdi-128 — disp8!  Saves a full disp32 lea. */
-	sub	rdi, 128
+	/* rdi now at slot 11. Slot 15 (one) is at rdi+128 — disp32,
+	 * but can chain from r13: r13+96 = slot 15, disp8! */
+	lea	rdi, [r13+96]
 	call	build_one
 
 	/* ===== Stream 1: validation + curve check + Q.z ===== */
 	lea	rdi, [rip+bc_v1]
-	mov	rsi, r15
-	call	bc_run
+	call	bcrun_r14
 	test	eax, eax
 	jnz	.Lf
+	/* Q is now at slots 4-6 = pt_mul's base.  NO COPY NEEDED. */
 
-	/* Copy Q (primary slots 5-7) -> secondary buf's BASE slots. */
-	lea	rdi, [r13+4*32]      /* disp32, 1 use */
-	lea	rsi, [r15+5*32]
-	call	cpy3
-
-	/* ===== w = s^{-1} (Montgomery, mod n) ===== */
-	lea	rdi, [rbp-64]
-	lea	rsi, [rbp+64]
-	lea	rdx, [rip+cR2N]
-	call	Nmul
-	lea	rdi, [rbp-64]
-	mov	rsi, rdi
+	/* w = s⁻¹·R² mod n (cR2N-free flow). */
+	lea	rdi, [rbp-64]        /* slot 0 */
+	lea	rsi, [r13+32]        /* s @ slot 13 */
 	mov	rdx, r12
-	mov	rcx, [r12-8]         /* cN_M0I at cN-8 */
+	mov	rcx, [r12-8]
 	call	fe_inv_m
 
-	/* e = hash -> slot 4; cond-sub n. */
+	/* e = hash → slot 13 (overwrites s); cond-sub n. */
 	mov	rsi, rbx
-	lea	rdi, [rbp+64]
+	lea	rdi, [r13+32]
 	call	fe_from_be
-	lea	rdi, [rbp+64]
+	lea	rdi, [r13+32]
 	call	cond_sub_n
-	/* hv dead — reuse rbx to cache r13+128 (base slots), saving
-	 * 3 disp32 leas below. */
-	lea	rbx, [r13+128]
+	/* hv dead — reuse rbx for R2 storage ptr (rsp+512). */
+	lea	rbx, [r14+512]
 
-	/* ===== Stream 2: u1, u2 ===== */
+	/* Stream 2: u1, u2 (slots 13, 14). */
 	lea	rdi, [rip+bc_v2]
-	mov	rsi, r15
-	call	bc_run
+	call	bcrun_r14
 
-	/* ===== R2 = u2 * Q ===== */
-	mov	rdi, r13
-	lea	rsi, [rbp+0]
-	call	pt_mul
+	/* ===== R2 = u2 * Q =====  Q already at base slots 4-6! */
 	mov	rdi, r14
-	mov	rsi, r13
-	call	cpy3
-
-	/* ===== R1 = u1 * G =====  cGXM, cGYM adjacent in rodata —
-	 * block-copy both (64 bytes) in one shot.  base.z unchanged. */
-	mov	rdi, rbx
-	lea	rsi, [rip+cGXM]
-	mov	ecx, 8
-	rep	movsq
-	mov	rdi, r13
-	lea	rsi, [rbp-32]
+	lea	rsi, [r13+64]        /* u2 @ slot 14 */
 	call	pt_mul
-
-	/* ===== R1 += R2 ===== */
+	/* Save R2 (acc @ 0-2) to external storage. */
 	mov	rdi, rbx
 	mov	rsi, r14
 	call	cpy3
-	mov	rdi, r13
+
+	/* ===== R1 = u1 * G =====  Load G into base (4-6); z unchanged. */
+	lea	rdi, [r14+4*32]      /* disp32, 1 use */
+	lea	rsi, [rip+cGXM]
+	mov	ecx, 8
+	rep	movsq
+	mov	rdi, r14
+	lea	rsi, [r13+32]        /* u1 @ slot 13 */
+	call	pt_mul
+
+	/* ===== R1 += R2 =====  Load R2 into base slots. */
+	lea	rdi, [r14+4*32]
+	mov	rsi, rbx
+	call	cpy3
+	mov	rdi, r14
 	call	pt_add_acc
 
-	/* R1 at infinity?  acc.z = r13[64]. */
-	lea	rdi, [r13+64]
+	/* R1 infinity? acc.z @ slot 2 = rbp+0. */
+	lea	rdi, [rbp+0]
 	call	fe_iszero
 	test	al, al
 	jnz	.Lf
 
-	/* ===== Affine x =====  cP is at cN+32 = r12+32. */
-	lea	rdi, [rbp-32]
-	lea	rsi, [r13+64]
+	/* rbx dead after pt_add_acc — cache slot 3 ptr (4 uses below). */
+	lea	rbx, [r14+96]
+
+	/* Affine x: Z⁻¹ → slot 3 (= H, dead after pt ops). */
+	mov	rdi, rbx
+	lea	rsi, [rbp+0]         /* R1.z @ slot 2 */
 	lea	rdx, [r12+32]
 	mov	ecx, 1
 	call	fe_inv_m
 
-	/* slot 8 = R1.x; slot 10 already = "1". */
-	lea	rdi, [r15+8*32]
-	mov	rsi, r13
-	call	fe_cpy
-
 	lea	rdi, [rip+bc_v3]
-	mov	rsi, r15
-	call	bc_run
+	call	bcrun_r14
 
-	/* reduce mod n; compare r. */
-	lea	rdi, [rbp-32]
+	/* Result in slot 3.  Reduce mod n, compare r. */
+	mov	rdi, rbx
 	call	cond_sub_n
-	lea	rdi, [rbp-32]
+	mov	rdi, rbx
 	mov	rsi, rdi
-	lea	rdx, [rbp+32]
+	lea	rdx, [r13+0]
 	call	fe_sub_raw
-	lea	rdi, [rbp-32]
+	mov	rdi, rbx
 	call	fe_iszero
 	jmp	.Ld
-
-.Lf:	xor	eax, eax
-.Ld:	add	rsp, 1128
-	pop	r15
-	pop	r14
-	pop	r13
-	pop	r12
-	pop	rbx
-	pop	rbp
-	ret
 
 /* ======================================================================
  * Bytecode streams.  See the Python generator for annotations.
@@ -737,52 +716,56 @@ tv_ecdsa_p256_verify_asm:
 	.p2align 3
 
 /* pt_dbl: acc (= p = r) @ slots 0-2; locals @ 8-11 (HIGH — leaves
- * slots 3-7 untouched so pt_mul's base @ 4-6 survives the doubling). */
+ * slots 3-7 untouched so pt_mul's base @ 4-6 survives the doubling).
+ * New encoding: word = (dst<<12)|(s1<<8)|(s2<<4)|op. */
 bc_dbl:
-	.byte 0x1b,0x20, 0x19,0x10, 0x38,0x0b, 0x2a,0x0b, 0x0a,0x8a
-	.byte 0x28,0xaa, 0x2a,0x8a, 0x28,0x12, 0x18,0x80, 0x38,0x89
-	.byte 0x32,0x8b, 0x0b,0x09, 0x28,0xbb, 0x28,0x88, 0x2b,0x88
-	.byte 0x10,0xa0, 0x30,0x0b, 0x38,0x80, 0x08,0xa8, 0x19,0x90
-	.byte 0x29,0x99, 0x29,0x99, 0x29,0x99, 0x31,0x89, 0xf0,0x00
+	.byte 0x01,0xb2, 0x01,0x91, 0xb3,0x80, 0xb2,0xa0, 0xa0,0xa8
+	.byte 0xa2,0x8a, 0xa2,0xa8, 0x22,0x81, 0x01,0x88, 0x93,0x88
+	.byte 0xb3,0x28, 0x90,0xb0, 0xb2,0x8b, 0x82,0x88, 0x82,0xb8
+	.byte 0x01,0x0a, 0xb3,0x00, 0x03,0x88, 0x80,0x8a, 0x01,0x99
+	.byte 0x92,0x99, 0x92,0x99, 0x92,0x99, 0x93,0x18, 0x0f,0x00
 
 /* pt_add_acc: acc(=p=r)@0-2, H@3 (disp8 for driver!), base(=q)@4-6,
  *             Rr@7, U1/S1/T2/T3@8-11. */
 bc_add1:
-	.byte 0x1a,0x20, 0x1b,0x60, 0x08,0x0b, 0x03,0x4a, 0x09,0x16
-	.byte 0x09,0x9b, 0x07,0x52, 0x07,0x7a, 0x33,0x38, 0x37,0x79
-	.byte 0xf0,0x00
+	.byte 0x01,0xa2, 0x01,0xb6, 0xb0,0x80, 0xa0,0x34, 0x60,0x91
+	.byte 0xb0,0x99, 0x20,0x75, 0xa0,0x77, 0x83,0x33, 0x93,0x77
+	.byte 0x0f,0x00
 
+/* bc_add2: reordered so T3 (slot 11) is fully consumed BEFORE the
+ * ADD — Fadd's slot-11 temp is then safe to clobber it. */
 bc_add2:
-	.byte 0x0a,0x26, 0x02,0xa3, 0x1a,0x30, 0x0b,0x3a, 0x08,0x8a
-	.byte 0x10,0x70, 0x30,0x0b, 0x23,0x88, 0x30,0x03, 0x33,0x80
-	.byte 0x03,0x73, 0x09,0x9b, 0x31,0x39, 0xf0,0x00
+	.byte 0x60,0xa2, 0x30,0x2a, 0x01,0xa3, 0xa0,0xb3, 0xa0,0x88
+	.byte 0xb0,0x99, 0x01,0x07, 0xb3,0x00, 0x82,0x38, 0x33,0x00
+	.byte 0x03,0x38, 0x30,0x37, 0x93,0x13, 0x0f,0x00
 
-/* verify stream 1: validate r,s,qx,qy; convert qx,qy to Mont; curve
- * check; Q.z = 1_mont.
- * slots: 0=qx, 1=qy, 3=r, 4=s, 5=Qx, 6=Qy, 7=Qz,
- *        11=N, 12=P, 13=BM, 14=ONE_M  (matches rodata adjacency) */
+/* verify stream 1 (SINGLE-BUFFER layout):
+ * slots: 0=qx/t0, 1=qy/t1, 4=Qx, 5=Qy, 6=Qz (= pt_mul's base!),
+ *        8=N, 9=P, 10=BM, 12=r, 13=s, 15=one.
+ * Q.z set BEFORE the curve check (whose ADD clobbers slot 15 via
+ * Fadd's temp). */
 bc_v1:
-	.byte 0x73,0x00, 0x63,0xb0, 0x74,0x00, 0x64,0xb0
-	.byte 0x60,0xc0, 0x61,0xc0
-	.byte 0x95,0x00, 0x96,0x10
-	.byte 0x10,0x60, 0x11,0x50, 0x01,0x15
-	.byte 0x31,0x15, 0x31,0x15, 0x31,0x15
-	.byte 0x21,0x1d, 0x30,0x01, 0x80,0x00
-	.byte 0x97,0xa0, 0xf0,0x00
+	.byte 0x07,0xc0, 0x06,0xc8, 0x07,0xd0, 0x06,0xd8
+	.byte 0x06,0x09, 0x06,0x19, 0x09,0x40, 0x09,0x51
+	.byte 0x09,0x6f, 0x01,0x05, 0x01,0x14, 0x40,0x11
+	.byte 0x43,0x11, 0x43,0x11, 0x43,0x11, 0xa2,0x11
+	.byte 0x13,0x00, 0x08,0x00, 0x0f,0x00
 
+/* bc_v2: u1 = e*w→u1*one, u2 = r*w→u2*one. slots 13/14. */
 bc_v2:
-	.byte 0x51,0x40, 0x52,0x30, 0xf0,0x00
+	.byte 0x05,0xdd, 0xf5,0xdd, 0x05,0xec, 0xf5,0xee, 0x0f,0x00
 
+/* bc_v3: slot3 = Z⁻² * R1.x(slot0) * one(slot15).  Slot 3 (H, dead
+ * after pt ops) = r14+96 disp8 — saves 4 disp32 leas vs slot 7. */
 bc_v3:
-	.byte 0x11,0x10, 0x01,0x18, 0x01,0x1a, 0xf0,0x00
+	.byte 0x01,0x33, 0x00,0x33, 0xf0,0x33, 0x0f,0x00
 
 /* ----------------------------------------------------------------------
- * Constants.  N, P, BM, ONE_M are CONTIGUOUS in this order so that
- * verify can block-copy all four into slots 11..14 with one rep movsq.
- * 8-byte alignment suffices for qword access; saves a few bytes of
- * padding versus 32-byte alignment.
+ * Constants.  No alignment directive — x86-64 handles misaligned qword
+ * loads correctly (slower, but this is a boot-ROM one-shot).  The
+ * bytecode above is 156 bytes, so cN_M0I lands at an odd alignment;
+ * saves the 4 padding bytes that .p2align 3 would insert.
  * -------------------------------------------------------------------- */
-	.p2align 3
 
 /* cN_M0I placed IMMEDIATELY BEFORE cN so that any pointer to cN
  * can reach it as [ptr-8] with disp8 addressing.  Nmul and verify's
@@ -800,8 +783,7 @@ cBM:	.quad 0xd89cdf6229c4bddf, 0xacf005cd78843090
 
 cR2P:	.quad 0x0000000000000003, 0xfffffffbffffffff
 	.quad 0xfffffffffffffffe, 0x00000004fffffffd
-cR2N:	.quad 0x83244c95be79eea2, 0x4699799c49bd6fa6
-	.quad 0x2845b2392b6bec59, 0x66e12d94f3d95620
+/* cR2N removed — see cR2N-free inversion flow above. */
 cGXM:	.quad 0x79e730d418a9143c, 0x75ba95fc5fedb601
 	.quad 0x79fb732b77622510, 0x18905f76a53755c6
 cGYM:	.quad 0xddf25357ce95560a, 0x8b4ab8e4ba19e45c
