@@ -53,7 +53,7 @@ int tv_ecdsa_p256_verify(const void *sig, size_t sig_len,
 
 # Implementation notes (current state)
 
-**Best result:** `tv_ecdsa_fast.S` — 1511 bytes, ~1.20M cycles on
+**Best result:** `tv_ecdsa_fast.S` — 1441 bytes, ~1.20M cycles on
 Skylake-class Xeon. BMI2 required (`mulx`). See README.md for technique
 writeups and BENCHMARK.md for cycle attribution.
 
@@ -69,9 +69,11 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
 ## Invariants that silently cost bytes if broken
 
 - **Jump table offsets must fit u8.** `.Ljt` to each handler is stored
-  as one byte. Current max is Fadd at ~230/255. **~25 bytes of growth
-  headroom** before the handler block before Fadd overflows. Adding code
-  between `.Ljt` and `.Lop2` costs this budget.
+  as one byte. Current max is Fadd at **244**/255. **~11 bytes of
+  growth headroom** before overflow. cond_sub_n (9 B) + inlined fe_geq
+  (+10 B) both sit in the handler block now; adding code between `.Ljt`
+  and `.Lop2` costs this budget. The table itself is **8 entries** (op4
+  Fto_mont was absorbed into Fmul).
 
 - **Bytecode stream offsets must fit signed imm8.** All `push obc_X`
   encode as `6a XX` only if `obc_X` ≤ 127. Current max is bc_v1 at
@@ -83,13 +85,24 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
   2-byte `push imm8` encoding for backward references. Move `.rodata`
   back down and every `push obc_X` silently becomes 5 bytes.
 
-- **`oP_early` in the decoder is hardcoded (49).** It's asserted against
+- **`oP_early` in the decoder is hardcoded (48).** It's asserted against
   the real `oP` with `.error`. If `.Ljt` layout changes (table size, or
   reordering cN_M0I/cN), the assert fires. Good — but it means you'll
   hit a build error, not a runtime bug.
 
-- **cN→cP→cBM adjacency** is load-bearing for verify's bulk `rep movsq`
-  that loads the constants into slots 8-11.
+- **cN→cP→cBM→cR2P adjacency** is load-bearing for verify's 16-qword
+  `rep movsq` that loads the constants into slots 8-11. cR2P in slot 11
+  is how the to-Montgomery bytecode ops (plain Fmul with s2=0xb) work.
+
+- **r14 = slot base is an invariant through pt_add_acc/pt_mul.** Both
+  functions read r14 directly with no frame of their own. bc_run
+  pushes/pops r14 around every dispatch, so it always comes back. If
+  any future change has pt_mul/pt_add_acc called with a different r14,
+  this breaks silently.
+
+- **.Lai is called from pt_mul.** It's not just a label inside
+  pt_add_acc's infinity branch — pt_mul uses it to zero the accumulator
+  and relies on it returning eax=0.
 
 - **Slot layout in pt_add_acc:** bc_dbl/bc_add1/bc_add2 use slots 0-11.
   Slots 12-15 are preserved (verify stashes r,s,sinv,hash there).
@@ -111,6 +124,11 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
 | fe_cpy inlined | 3 callers × 5-byte call + 9-byte body = 24 B. Inlined: 3 × 8 B = 24 B. Wash. |
 | fe_inv_m caller sets r15=m0i directly | `pop r15` in `.Lepi4` (shared with fe_mul_m) restores the pushed value, not the caller's original. ABI break. |
 | cGXM in bytecode-offset scheme | 64 bytes; wherever it sits, it pushes some bc_X past 127. |
+| cGXM contiguous with cN..cR2P for 24-qw block copy | Landing slots conflict: slots 12-13 hold r,s. Every slot reshuffle tried hits a different conflict (G clobbered by bc_v2, or bc_v1's mont-conversion dst slots). −4 B best case, not worth the reshuffle risk. |
+| Embed muladd4 inside fe_mul_m for rel8 calls | **x86-64 has no `call rel8`** — only `call rel32`. The +2 B `jmp` over muladd4 buys nothing. |
+| Slot-9 as &cP for second fe_inv_m | Slot 9 has cP after the block copy but pt_mul's bc_dbl writes slot 9 as scratch — it's garbage by the time the second fe_inv_m needs it. |
+| 32-bit length compares (`cmp esi` vs `cmp rsi`) | −2 B but accepts sig_len = 4GB+64 as valid. Behaviorally harmless (reads 64 bytes, verification fails) but technically violates the API contract. Skipped out of caution. |
+| Inline verify epilogue + drop bc_run's r13 push | bc_run pushes r13 only for epilogue sharing with verify. Inlining verify's epilogue (9 B of pops) costs the same as the shared jmp+add (12 B minus 3 for the dropped jmp = ... it's a wash once you account for both sides). |
 
 ## x86-64 encoding facts that mattered
 
@@ -125,6 +143,10 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
   `pop`/`ret`/`loopz`/`stosq`/`lodsq` preserve all flags.
 - gas won't relax `disp(reg)` for forward references (unlike jumps).
   Forward-ref `lea r,[r+offset]` gets disp32 silently. Hardcode + assert.
+- `xchg eax, r32` is 1 byte (`90+r`). Only `eax` gets this encoding.
+  Useful when eax is dead after.
+- `and dl, imm8` is 3 bytes (80 e2 XX); `and al, imm8` is 2 bytes
+  (24 XX — special encoding). Matters for nibble extraction.
 
 ## Possible next directions
 
@@ -133,21 +155,36 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
   cycles, +10–20 B. See BENCHMARK.md.
 - **Shamir's trick** (interleave u1·G + u2·Q). Halves doublings, ~25%
   speed. Likely +30–50 B bytecode/handler. The hard part is pt_add_acc's
-  special-case handling with two bases.
+  special-case handling with two bases. Now that pt_add_acc reads r14
+  directly (no frame), a second base point would need to live at a
+  fixed slot — probably slots 7-9, which bc_dbl/add currently use.
 - **Remaining bytecode compression.** bc_dbl has `0x92,0x99`×4 (Fadd
   doubling, 8 B) and bc_v1 has `0x43,0x11`×3 (6 B). If a REPEAT-style
   encoding could ever be made cheap enough (~6 B handler), it's ~6-8 B
-  saved. Previously rejected but the margin was thin.
-- **Fsub's lea rcx is still present** (for the Fadd-jump-in path).
-  If Fadd could preserve rcx = &P through its fe_sub_raw call, Fsub
-  could drop it. fe_sub_raw's `xor ecx,ecx` is the killer — but that
-  xor doubles as the CF-clear for sbb. If Fadd pushed rcx before the
-  call and Fsub popped it... costs 1+1, saves 4. Net −2. Worth trying.
-- **4 rel32 jumps remain** (fe_mul_m, fe_sub_raw, .Lf trampoline,
-  .Lepi5). All >127 B. Function reordering hasn't helped yet, but
-  with each size reduction the distances shrink.
+  saved. Previously rejected but the margin was thin. **Warning:**
+  handler block headroom is down to ~11 B now.
+- **.Lf trampoline (5 B rel32).** Currently jumps +260 B forward to
+  .Lf2. Needs verify to shrink by ~133 B for this to become rel8 —
+  unlikely without extended bytecode.
+- **pt_add_acc's first path (acc.z==0 → copy Q to acc) shares
+  `mov rdi,r14` with .Lai.** Both paths set rdi=r14 then do a 12-qword
+  rep op (movsq vs stosq). Can't merge the rep itself but a
+  `.Lrdi14: mov rdi,r14; ret` helper costs 4 B and saves 3×3 = 9 B...
+  wait no, call is 5 B not 3. Net +4−9 = wash with 3 callers. With 2
+  callers: loss.
+- **The .Lf trampoline could move one slot earlier** (before the last
+  length check instead of after it). `jbe` would then need to jump
+  forward past it (+5 B) but all the jne's reach .Lf2 directly... no,
+  they'd go through the trampoline anyway. Doesn't help.
 
 ## Bigger restructures under evaluation
+
+**Note (post-1441B):** the r14-invariant pass found −70 B of
+structural wins WITHOUT any of these big restructures. The estimates
+below predate that — the actual verify body that extended-bytecode
+would replace is now ~50 B smaller. On the other hand, handler
+headroom dropped from 25 B to 11 B, so the jump-table overflow
+problem arrives sooner. Re-measure before committing to any of these.
 
 These each need a dedicated session. Byte accounting below is from
 actual disasm measurements, not estimates.
