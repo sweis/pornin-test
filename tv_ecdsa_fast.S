@@ -604,11 +604,10 @@ pt_mul:
 	push	r15
 	mov	r15, rsi            /* scalar ptr; r15 avoids r13's disp8=0 quirk */
 
-	mov	rdi, r14
-	xor	eax, eax
-	push	12
-	pop	rcx
-	rep	stosq
+	/* .Lai inside pt_add_acc is exactly `mov rdi,r14; xor eax;
+	 * push 12; pop rcx; rep stosq; ret` — zero the accumulator.
+	 * Call it.  Returns with eax=0, which the dec al below needs. */
+	call	.Lai
 
 	/* eax=0 after rep stosq; dec al wraps low byte to 0xff, high
 	 * bits stay 0.  xchg with eax is 1 byte; eax dead after. */
@@ -641,9 +640,10 @@ tv_ecdsa_p256_verify_asm:
 	sub	rsp, 616
 
 	/* r14 = rsp for the whole of verify (every callee saves r14).
-	 * r14 as base avoids rsp's SIB byte: −1 each on the rbp/r13 leas. */
+	 * r14 as base avoids rsp's SIB byte on the r13 lea.  rbp is
+	 * set later from fe_from_be's flowed-out rdi (= r14+64 after
+	 * decoding pub.x/y). */
 	mov	r14, rsp
-	lea	rbp, [r14+64]
 	lea	r13, [r14+12*32]
 
 	mov	r12, rdi
@@ -688,9 +688,10 @@ tv_ecdsa_p256_verify_asm:
 	cmp	BYTE PTR [rdx], 0x04
 	jne	.Lf
 	lea	rsi, [rdx+1]
-	mov	rdi, r14            /* rbp-64 = rsp = r14 */
+	mov	rdi, r14            /* slot 0 */
 	call	fe_from_be
-	call	fe_from_be_next     /* rsi+=32; rdi already r14+32 = rbp-32 */
+	call	fe_from_be_next     /* rsi+=32; rdi flowed to r14+64 */
+	mov	rbp, rdi            /* = slot 2; cheaper than lea from r14 */
 	lea	r12, [rip+cN]
 
 	lea	rdi, [r13-128]       /* slot 8 via r13: disp8 */
