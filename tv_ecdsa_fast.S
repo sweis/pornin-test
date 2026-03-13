@@ -4,8 +4,8 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx).
  *
- * 1604 bytes, ~1.21M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~2.16M cycles — so −108 bytes AND −44% cycles.
+ * 1596 bytes, ~1.21M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~2.16M cycles — so −116 bytes AND −44% cycles.
  *
  * Hot-path changes:
  *
@@ -312,7 +312,11 @@ bc_run:
 	push	r14
 	mov	rbx, rdi
 	mov	r12, rsi
-	xor	r13d, r13d
+	/* Check accumulator in ebp: xor is 2 bytes (no REX), and since only
+	 * the low byte is ever OR'd with 0/1, `mov eax,ebp` (2 bytes) works
+	 * at exit — upper bytes stay zero.  r13 is push/popped only for
+	 * epilogue sharing with verify; never written inside bc_run. */
+	xor	ebp, ebp
 	lea	r14, [rip+.Ljt]     /* Hoist: handlers are callee-saved, r14 lives. */
 .Lbc:
 	movzx	eax, WORD PTR [rbx]
@@ -346,7 +350,7 @@ bc_run:
 	call	rax
 	jmp	.Lbc
 
-.Lbce:	movzx	eax, r13b
+.Lbce:	mov	eax, ebp            /* upper bytes of ebp are 0: plain mov */
 .Lepi5:
 	pop	r14
 	pop	r13
@@ -383,7 +387,7 @@ cR2P:	.quad 0x0000000000000003, 0xfffffffbffffffff
 	jmp	.Lor
 .Lop8:	call	fe_iszero
 	xor	al, 1
-.Lor:	or	r13b, al
+.Lor:	or	bpl, al
 	ret
 .Lop5:
 Nmul:	lea	rcx, [r14+oN]
@@ -464,9 +468,10 @@ pt_add_acc:
 	sub	rdi, -128           /* r14+224 */
 	call	fe_iszero           /* ZF ⇔ Rr == 0 */
 	jnz	.Lai
+	/* Tail-share: both this path and 3: end with call bcrun_r14
+	 * then .Laa.  Short-jmp past .Lai to the shared call.  −5. */
 	lea	rdi, [rip+bc_dbl]
-	call	bcrun_r14
-	jmp	.Laa
+	jmp	.Lcall
 .Lai:	mov	rdi, r14
 	xor	eax, eax
 	push	12
@@ -474,7 +479,7 @@ pt_add_acc:
 	rep	stosq
 	jmp	.Laa
 3:	lea	rdi, [rip+bc_add2]
-	call	bcrun_r14
+.Lcall:	call	bcrun_r14
 .Laa:
 	pop	r14
 	ret
