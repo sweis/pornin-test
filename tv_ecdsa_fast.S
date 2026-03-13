@@ -496,7 +496,19 @@ Fmul:	push	1
  * so jnc replaces test+jz.  The add-back loop's first adc needs
  * CF=0: `xor ecx,ecx` clears it (we're on the CF=1 branch here
  * but mov+xor reset it).  −10 vs standalone fe_sub_m+fe_add_raw. */
-/* rcx = &P is supplied by the decoder.  Fadd now also preserves it
+/* cond_sub_n — r12=&cN.  Conditional subtract IS subtract-then-add-
+ * back-on-borrow, which is exactly .Lop3 with the modulus swapped
+ * from P to N.  Placed here to fall through.  .Lop3 computes
+ * dst = s1 - s2; on borrow adds back rcx.  With rcx=rdx=r12=&N and
+ * rsi=rdi=&a: result is a-N if a≥N else (a-N)+N = a.
+ * Not on the dispatch path — op3 in the jump table points at .Lop3
+ * proper, past these 9 bytes.  Fadd shifts to offset 244 (fits u8). */
+cond_sub_n:
+	mov	rcx, r12
+	mov	rsi, rdi
+	mov	rdx, r12
+	/* FALLTHROUGH */
+/* rcx = &P is supplied by the decoder.  Fadd also preserves it
  * across its fe_sub_raw call (push/pop around it, +2 B) and jumps to
  * .Lop3 directly — the old `Fsub: lea rcx,[r14+oP]` re-load is gone. */
 .Lop3:	push	rcx
@@ -538,22 +550,23 @@ Fadd:	push	rdi
 	rep	movsq
 .endm
 
-/* cond_sub_n — r12=&cN.  Conditional subtract IS subtract-then-
- * conditionally-add-back, which is exactly .Lop3 with the modulus
- * swapped from P to N.  Set up args and tail-jump.  .Lop3 computes
- * dst = s1 - s2; on borrow adds back rcx.  So with rsi=rdx=r12=&N,
- * rdi = rsi_caller = &a: a becomes a-N if a≥N, else (a-N)+N = a. */
-cond_sub_n:
-	mov	rcx, r12
-	mov	rsi, rdi
-	mov	rdx, r12
-	jmp	.Lop3
 
-/* ---------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+ * pt_add_acc and pt_mul take the slot base in r14 (caller-provided).
+ * Every caller already has r14 = slot base: verify sets it once at
+ * entry and never clobbers it; bc_run (called from inside both of
+ * these) pushes/pops r14.  So the old push-r14/mov-r14/pop-r14 frame
+ * in pt_add_acc was reconstructing a value that was never lost, and
+ * pt_mul's rbx = rdi copy was rbx = r14 by another name.
+ *
+ * With the frame gone, pt_add_acc's epilogue is just `ret`.  Two of
+ * the three paths that ended in `jmp .Laa` become plain `ret` (−1 B
+ * each), and the third — a call then fallthrough — becomes a tail
+ * jump (−1 B).  pt_mul drops its rbx push/mov/pop (−5 B) and the
+ * `mov rdi,rbx` arg to pt_add_acc (−3 B).  verify drops three
+ * `mov rdi,r14` preambles (−9 B).  Net −24 B.
+ * -------------------------------------------------------------------- */
 pt_add_acc:
-	push	r14
-	mov	r14, rdi
-
 	lea	rdi, [r14+64]
 	call	fe_iszero           /* ZF ⇔ acc.z == 0 */
 	jnz	1f
@@ -561,7 +574,7 @@ pt_add_acc:
 	lea	rsi, [rdi+64]       /* r14+128 */
 	mov	rdi, r14
 	cpy3
-	jmp	.Laa
+	ret
 1:	push	obc_add1
 	pop	rdi
 	call	bcrun_r14
@@ -572,8 +585,8 @@ pt_add_acc:
 	sub	rdi, -128           /* r14+224 */
 	call	fe_iszero           /* ZF ⇔ Rr == 0 */
 	jnz	.Lai
-	/* Tail-share: both this path and 3: end with call bcrun_r14
-	 * then .Laa.  Short-jmp past .Lai to the shared call.  −5. */
+	/* Tail-share: both this path and 3: end in `jmp bcrun_r14`.
+	 * Short-jmp past .Lai to the shared tail-jump. */
 	xor	edi, edi            /* obc_dbl = 0 */
 	jmp	.Lcall
 .Lai:	mov	rdi, r14
@@ -581,21 +594,17 @@ pt_add_acc:
 	push	12
 	pop	rcx
 	rep	stosq
-	jmp	.Laa
+	ret
 3:	push	obc_add2
 	pop	rdi
-.Lcall:	call	bcrun_r14
-.Laa:
-	pop	r14
-	ret
+.Lcall:	jmp	bcrun_r14
 
 pt_mul:
 	push	rbp
-	push	rbx
 	push	r15
-	mov	rbx, rdi
 	mov	r15, rsi            /* scalar ptr; r15 avoids r13's disp8=0 quirk */
 
+	mov	rdi, r14
 	xor	eax, eax
 	push	12
 	pop	rcx
@@ -606,17 +615,15 @@ pt_mul:
 	dec	al
 	xchg	ebp, eax
 .Lpm:	xor	edi, edi            /* obc_dbl = 0 */
-	mov	rsi, rbx
+	mov	rsi, r14
 	call	bcrun_off
 	bt	QWORD PTR [r15], rbp    /* 4 bytes; [r13] would be 5 */
 	jnc	1f
-	mov	rdi, rbx
 	call	pt_add_acc
 1:	dec	ebp                 /* −1 byte */
 	jns	.Lpm
 
 	pop	r15
-	pop	rbx
 	pop	rbp
 	ret
 
@@ -721,7 +728,6 @@ tv_ecdsa_p256_verify_asm:
 	pop	rdi
 	call	bcrun_r14
 
-	mov	rdi, r14
 	lea	rsi, [r13+64]
 	call	pt_mul
 	mov	rdi, rbx
@@ -734,14 +740,12 @@ tv_ecdsa_p256_verify_asm:
 	push	8
 	pop	rcx
 	rep	movsq
-	mov	rdi, r14
 	lea	rsi, [r13+32]
 	call	pt_mul
 
 	pop	rdi                  /* was lea rdi,[rbp+64] */
 	mov	rsi, rbx
 	cpy3
-	mov	rdi, r14
 	call	pt_add_acc
 
 	mov	rdi, rbp
