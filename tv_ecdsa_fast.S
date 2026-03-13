@@ -177,18 +177,6 @@ fe_sub_raw:
 	neg	eax
 	ret
 
-/* fe_geq — cold (validation + cond_sub_n).  Keep loopz: size wins.
- * Returns via CF: CF=0 iff a≥b.  loopz/ret preserve flags, so the
- * last cmp's CF is live at the caller.  Callers that need al=0/1
- * apply setae themselves; cond_sub_n just branches on CF. */
-fe_geq:
-	push	4
-	pop	rcx
-1:	mov	rax, [rdi+rcx*8-8]
-	cmp	rax, [rsi+rcx*8-8]
-	loopz	1b
-	ret
-
 /* muladd4(t=r9, x=rdx, y=rsi).  t[0..3] += x*y, carry into t[4..5].
  * Fully unrolled.  Uses mulx (BMI2) — high word written directly to
  * a chosen register, so the high-word carry chain hops rcx↔rdi
@@ -474,7 +462,16 @@ cR2P:	.quad 0x0000000000000003, 0xfffffffbffffffff
 .error "oP moved — update oP_early in bc_run"
 .endif
 
-.Lop5:	call	fe_geq
+/* fe_geq inlined (sole caller after cond_sub_n was rewritten as a
+ * .Lop3 stub).  Compare [rdi] to [rsi] limb-by-limb from the top;
+ * loopz falls out on first mismatch with cmp's CF live.  +10 B in
+ * the handler block (Fadd shifts from 225 to 235, still fits u8)
+ * but the 16-B standalone fe_geq is gone.  Net −6 B. */
+.Lop5:	push	4
+	pop	rcx
+1:	mov	rax, [rdi+rcx*8-8]
+	cmp	rax, [rsi+rcx*8-8]
+	loopz	1b
 	setae	al
 	jmp	.Lor
 .Lop6:	call	fe_iszero
@@ -541,15 +538,16 @@ Fadd:	push	rdi
 	rep	movsq
 .endm
 
-/* cond_sub_n — r12=&cN. fe_geq preserves rdi, returns CF=0 iff ≥N. */
+/* cond_sub_n — r12=&cN.  Conditional subtract IS subtract-then-
+ * conditionally-add-back, which is exactly .Lop3 with the modulus
+ * swapped from P to N.  Set up args and tail-jump.  .Lop3 computes
+ * dst = s1 - s2; on borrow adds back rcx.  So with rsi=rdx=r12=&N,
+ * rdi = rsi_caller = &a: a becomes a-N if a≥N, else (a-N)+N = a. */
 cond_sub_n:
-	mov	rsi, r12
-	call	fe_geq
-	jc	1f
+	mov	rcx, r12
 	mov	rsi, rdi
 	mov	rdx, r12
-	jmp	fe_sub_raw
-1:	ret
+	jmp	.Lop3
 
 /* ---------------------------------------------------------------------- */
 pt_add_acc:
