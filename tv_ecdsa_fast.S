@@ -4,8 +4,8 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx).
  *
- * 1564 bytes, ~1.19M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~2.16M cycles — so −148 bytes AND −45% cycles.
+ * 1537 bytes, ~1.20M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~2.16M cycles — so −175 bytes AND −44% cycles.
  *
  * Hot-path changes:
  *
@@ -208,14 +208,19 @@ fe_mul_m:
 	jnz	.Lm
 	/* r9 → t[4]; result at r9[0..3], carry at r9[4]. */
 
+	/* Save rdi/rsi across fe_sub_raw (stosq/lodsq advance both);
+	 * pop unconditionally before the branch → no stack leak on jz.
+	 * Replaces the 2-mov reload with push×2+pop×2: −2. */
 	mov	rdi, r12
 	mov	rsi, r9
+	push	rdi
+	push	rsi
 	mov	rdx, r13
 	call	fe_sub_raw
+	pop	rsi
+	pop	rdi
 	sub	eax, [r9+32]        /* borrow - carry: if ≠0, t < m → copy */
 	jz	2f
-	mov	rdi, r12
-	mov	rsi, r9
 	call	fe_cpy
 2:
 	add	rsp, 72
@@ -276,7 +281,11 @@ fe_inv_m:
 	pop	rbx
 	jmp	.Lepi4
 
-/* fe_from_be — cold (5 calls at setup). */
+/* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
+ * 32 first, for chained decode (rdi already advanced by the prior
+ * call's stosq×4).  Two call sites each drop their own add rsi,32. */
+fe_from_be_next:
+	add	rsi, 32
 fe_from_be:
 	push	4
 	pop	rcx
@@ -351,9 +360,12 @@ bc_run:
  * [r14+disp8] instead of 7-byte rip-relative leas.  r14 = .Ljt inside
  * bc_run; handlers run before fe_mul_m's push r14 overwrites it.
  * cN→cP→cBM adjacency is load-bearing (verify's rep movsq). */
+/* 9 entries: op9 renumbered→op4 (was unused alias to Nmul).  Table
+ * shrink misaligns cN_M0I by 1 — unaligned loads work fine on x86-64,
+ * and Nmul is cold (4 calls/verify). */
 .Ljt:
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt, .Lop4-.Ljt
-	.byte	.Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt, .Lop8-.Ljt, .Lop9-.Ljt
+	.byte	.Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt, .Lop8-.Ljt
 
 cN_M0I:	.quad 0xccd1c8aaee00bc4f
 cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
@@ -382,8 +394,7 @@ cR2P:	.quad 0x0000000000000003, 0xfffffffbffffffff
 Nmul:	lea	rcx, [r14+oN]
 	mov	r8, [rcx-8]
 	jmp	.Lmj               /* share Fmul's tail: short jmp, −3 bytes */
-.equ .Lop4, .Lop5
-.Lop9:	lea	rdx, [r14+oR2P]
+.Lop4:	lea	rdx, [r14+oR2P]
 	/* FALLTHROUGH to Fmul */
 .Lop0:
 Fmul:	lea	rcx, [r14+oP]
@@ -430,14 +441,11 @@ Fadd:	push	rdi
 	pop	rdi
 	jmp	Fsub
 
-/* ----------------------------------------------------------------------
- * Helpers.
- * -------------------------------------------------------------------- */
-cpy3:
+.macro	cpy3
 	push	12
 	pop	rcx
 	rep	movsq
-	ret
+.endm
 
 /* cond_sub_n — r12=&cN. fe_geq preserves rdi, returns CF=0 iff ≥N. */
 cond_sub_n:
@@ -460,7 +468,7 @@ pt_add_acc:
 	/* fe_iszero preserved rdi = r14+64; compute rsi from it (disp8). */
 	lea	rsi, [rdi+64]       /* r14+128 */
 	mov	rdi, r14
-	call	cpy3
+	cpy3
 	jmp	.Laa
 1:	lea	rdi, [rip+bc_add1]
 	call	bcrun_r14
@@ -550,30 +558,30 @@ tv_ecdsa_p256_verify_asm:
 	jb	.Lf
 	cmp	r9, 64
 	jbe	1f
-.Lf:	xor	eax, eax
-.Ld:	add	rsp, 616
-	jmp	.Lepi5
+/* .Lf trampoline: top checks (5 short jumps, up to −104 rel) stay
+ * short; the bottom jz+jmp now reach .Lf2/.Ld2 directly as short
+ * forward.  14-byte block → 5-byte rel32 jmp; bottom adds it back
+ * (+14) but saves rel32 je (−4) + rel32 jmp (−3).  Net −2. */
+.Lf:	jmp	.Lf2
 1:
+	/* fe_from_be: stosq×4 advances rdi by 32; rsi index-read only.
+	 * Chain: rdi flows call→call; rsi bumped +32 in place. */
 	mov	rsi, r12
 	mov	rdi, r13
 	call	fe_from_be
-	lea	rsi, [r12+32]
-	lea	rdi, [r13+32]
-	call	fe_from_be
+	call	fe_from_be_next     /* rsi+=32; rdi already r13+32 */
 
 	cmp	BYTE PTR [r8], 0x04
 	jne	.Lf
 	lea	rsi, [r8+1]
-	mov	rdi, r14            /* rbp-64 = rsp = r14; mov is −1 vs lea */
+	mov	rdi, r14            /* rbp-64 = rsp = r14 */
 	call	fe_from_be
-	lea	rsi, [r8+33]
-	lea	rdi, [rbp-32]
-	call	fe_from_be
+	call	fe_from_be_next     /* rsi+=32; rdi already r14+32 = rbp-32 */
 	lea	r12, [rip+cN]
 
 	lea	rdi, [r13-128]       /* slot 8 via r13: disp8 */
 	mov	rsi, r12
-	call	cpy3                /* same side-effects as inline, −1 byte */
+	cpy3                /* same side-effects as inline, −1 byte */
 	/* build_one inlined (sole caller): zero slot, set low limb = 1. */
 	lea	rdi, [r13+96]
 	push	4
@@ -587,19 +595,23 @@ tv_ecdsa_p256_verify_asm:
 	test	eax, eax
 	jnz	.Lf
 
-	mov	rdi, r14            /* rbp-64 = r14 */
+	/* [r13+32] needed three times across the next three calls;
+	 * compute once, stockpile on stack.  Two 4-byte leas → 2 pushes
+	 * + 2 pops.  2×8=16 preserves call alignment. */
+	mov	rdi, r14
 	lea	rsi, [r13+32]
+	push	rsi
+	push	rsi
 	mov	rdx, r12
 	mov	rcx, [r12-8]
 	call	fe_inv_m
 
 	mov	rsi, rbx
-	lea	rdi, [r13+32]
+	pop	rdi
 	call	fe_from_be
-	/* fe_from_be's 4×stosq left rdi = slot14 = r13+64.  slot16 is +64
-	 * from there: disp8.  Replaces a 7-byte disp32 lea from r14. */
+	/* fe_from_be's 4×stosq left rdi = r13+64. */
 	lea	rbx, [rdi+64]
-	lea	rdi, [r13+32]
+	pop	rdi
 	call	cond_sub_n
 
 	lea	rdi, [rip+bc_v2]
@@ -610,9 +622,10 @@ tv_ecdsa_p256_verify_asm:
 	call	pt_mul
 	mov	rdi, rbx
 	mov	rsi, r14
-	call	cpy3
+	cpy3
 
 	lea	rdi, [rbp+64]        /* slot 4 via rbp: disp8 */
+	push	rdi                 /* save for cpy3 after pt_mul */
 	lea	rsi, [rip+cGXM]
 	push	8
 	pop	rcx
@@ -621,15 +634,15 @@ tv_ecdsa_p256_verify_asm:
 	lea	rsi, [r13+32]
 	call	pt_mul
 
-	lea	rdi, [rbp+64]
+	pop	rdi                  /* was lea rdi,[rbp+64] */
 	mov	rsi, rbx
-	call	cpy3
+	cpy3
 	mov	rdi, r14
 	call	pt_add_acc
 
 	mov	rdi, rbp
 	call	fe_iszero           /* ZF ⇔ R1.z == 0 (R at ∞) */
-	jz	.Lf
+	jz	.Lf2
 
 	lea	rbx, [r14+96]
 
@@ -658,7 +671,10 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_sub_raw
 	pop	rdi
 	call	fe_iszero
-	jmp	.Ld
+	jmp	.Ld2                /* short: +2 past the xor */
+.Lf2:	xor	eax, eax
+.Ld2:	add	rsp, 616
+	jmp	.Lepi5
 
 /* ======================================================================
  * Bytecode.  SQR ops (low nibble 1) now have s2=s1 so that the
@@ -688,8 +704,8 @@ bc_add2:
 
 bc_v1:
 	.byte 0x07,0xc0, 0x06,0xc8, 0x07,0xd0, 0x06,0xd8
-	.byte 0x06,0x09, 0x06,0x19, 0x09,0x40, 0x09,0x51
-	.byte 0x09,0x6f, 0x51,0x05, 0x41,0x14, 0x40,0x11
+	.byte 0x06,0x09, 0x06,0x19, 0x04,0x40, 0x04,0x51
+	.byte 0x04,0x6f, 0x51,0x05, 0x41,0x14, 0x40,0x11
 	.byte 0x43,0x11, 0x43,0x11, 0x43,0x11, 0xa2,0x11
 	.byte 0x13,0x00, 0x08,0x00, 0x00,0x00
 
