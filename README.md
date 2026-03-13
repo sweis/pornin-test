@@ -1,31 +1,138 @@
 # Code size tracking — ECDSA/P-256 verify
 
-Measurements of the `tv_ecdsa.c` object file (the verification core only;
-the test harness is excluded).
+Size-optimised ECDSA/P-256 signature verification for boot-ROM-class
+targets. FIPS 186-5 compliant. Signature is raw 64 bytes (r‖s
+big-endian), public key is 65 bytes uncompressed (0x04‖X‖Y), hash is
+32–64 bytes (truncated to 32 per FIPS 186-5 §6.4).
 
-## Build command
+All measurements are of the verification object file only — the test
+harness is excluded. Every object has **zero undefined symbols**: no
+memcpy/memmove/memset/libc, nothing pulled in at link time.
+
+## Build
 
 ```
-cc -std=c99 -Os -ffreestanding -fno-strict-aliasing \
-   -ffunction-sections -fdata-sections \
-   -fno-asynchronous-unwind-tables -fno-ident \
-   -fno-stack-protector -fno-tree-loop-distribute-patterns \
-   -c -o tv_ecdsa_size.o tv_ecdsa.c
+make size-fast test-fast bench     # smallest-and-fastest (needs BMI2)
+make size-bc   test-bc             # portable x86-64, no BMI2
+make size      test                # portable C
+make size-thumb                    # ARM Cortex-M4 (needs arm-none-eabi-gcc)
 ```
-
-Run `make size` to reproduce.
 
 ## Current results
 
-| Implementation | Target | Compiler | text+rodata | Notes |
-|---|---|---|---|---|
-| **x86-64 asm, bytecode-interpreted** | **x86-64** | **GAS** | **1712 B** | `tv_ecdsa_bc.S` |
-| C, 32-bit limbs | Cortex-M4 Thumb-2 | arm-none-eabi-gcc 13.2 `-Os` | 2082 B | realistic boot-ROM target |
-| Pure x86-64 asm, 64-bit limbs | x86-64 | GAS | 2875 B | `tv_ecdsa_amd64.S` |
-| C, 32-bit limbs | x86-64 | GCC 13.3 `-Os` | 3076 B | `tv_ecdsa.c` |
-| C, 32-bit limbs | x86-64 | clang 18 `-Os` | ~3856 B | different inliner |
+| Implementation | Target | Compiler | text+rodata | Cycles | Notes |
+|---|---|---|---|---|---|
+| **x86-64 asm, bytecode + mulx** | **x86-64 (BMI2)** | **GAS** | **1511 B** | **~1.20M** | `tv_ecdsa_fast.S` |
+| x86-64 asm, bytecode-interpreted | x86-64 | GAS | 1712 B | ~2.14M | `tv_ecdsa_bc.S` |
+| C, 32-bit limbs | Cortex-M4 Thumb-2 | arm-none-eabi-gcc 13.2 `-Os` | 2082 B | — | realistic boot-ROM target |
+| Pure x86-64 asm, 64-bit limbs | x86-64 | GAS | 2875 B | — | `tv_ecdsa_amd64.S` |
+| C, 32-bit limbs | x86-64 | GCC 13.3 `-Os` | 3076 B | — | `tv_ecdsa.c` |
+| C, 32-bit limbs | x86-64 | clang 18 `-Os` | ~3856 B | — | different inliner |
 
-All object files have **zero undefined symbols** — no memcpy/memmove/memset/libc.
+### The 1511-byte speed+size version (`tv_ecdsa_fast.S`)
+
+Same bytecode architecture as `tv_ecdsa_bc.S`, with the Montgomery
+multiplier rebuilt for speed and another 200 bytes squeezed out. Requires
+BMI2 (`mulx`).
+
+**1511 B, ~1.20M cycles** vs `tv_ecdsa_bc.S` at 1712 B / ~2.14M: both
+**−201 bytes** and **−44% cycles**. text 1291 + rodata 220.
+
+Run `make size-fast test-fast bench` to reproduce.
+
+**Hot-path rewrites** (each one is smaller AND faster):
+
+- **Advancing-pointer CIOS.** After every reduction step t[0]=0 by
+  construction (the whole point of CIOS). Instead of memmoving t[1..5]
+  down to t[0..4] — 20 loads+stores per `fe_mul_m` — just advance the
+  base pointer. Needs a 9-word buffer; result lands at t[4..7]. Deletes
+  the shift loop outright: −21 bytes, huge cycle win.
+- **`muladd4` fully unrolled with `mulx`.** `mulx` writes its high word
+  to a chosen register, so the carry chain hops rcx↔rdi with no `mov`
+  between multiplies. Scalar passed in `rdx` (mulx's implicit source).
+  Low-limb writeback is a single RMW `add [mem],reg`. 85 bytes, 4 limbs.
+- **`lodsq`/`stosq` + `dec/jnz`** in `fe_sub_raw`. The string ops are
+  2 bytes each and flag-preserving; `dec` sets ZF but preserves CF for
+  the carry chain. `loop` is microcoded (~7 cyc/iter); `dec/jnz` is ~1.
+- **Straight-line nibble decode** in `bc_run`. The bytecode word lands
+  in al/ah; a nibble in bits [7:4] is already ×16, so `lea r,[base+r*2]`
+  finishes the ×32 slot stride. Replaces a 3-iter push/pop loop with 10
+  straight-line instructions — no memory traffic.
+- **t[0] in register across `muladd4` calls.** The first inner call's
+  result becomes the second's input; keeping it in `r8` cuts one
+  store-to-load forward from the critical path.
+- **`fe_cpy` unrolled, zero-init as dec-loop.** `rep movsq`/`rep stosq`
+  have ~25-cycle startup; hot paths at count=4..9 are faster as plain
+  loops. (Measured: `rep stosq` at count=9 in `fe_mul_m` costs ~140K
+  cycles/verify. Not worth 3 bytes.)
+
+**Size tricks** (on top of everything inherited from `tv_ecdsa_bc.S`):
+
+- **SQR dispatches to Fmul.** SQR bytecode encodes s2=s1; the decoder
+  already sets `rdx=rsi` for that case, so Fsqr's body is entirely
+  redundant. The jump table aliases `.Lop1 → .Lop0`. −5 B.
+- **Constants at `[r14+disp8]`.** cP/cN/cBM/cR2P live right after the
+  jump table; with `r14=.Ljt` hoisted, handlers compute constant
+  addresses as `lea r,[r14+49]` (4 bytes) instead of `lea r,[rip+cP]`
+  (7). Five sites, −15 B.
+- **Bytecode stream offset addressing.** All seven stream-pointer loads
+  were 7-byte `lea rdi,[rip+bc_X]`. Now each is `push imm8; pop rdi`
+  (or `xor edi,edi` for offset 0) and a shared `bcrun_off` entry does
+  `lea rax,[rip+bc_dbl]; add rdi,rax` once. Required reordering .rodata
+  so all offsets ≤ 118 (fits signed imm8), and placing `.section .rodata`
+  before `.text` so gas sees backward references and picks the short
+  `push` encoding. −20 B.
+- **Push/pop register stockpiling.** `push rbx` is 1 byte; when a
+  non-REX register feeds `rdi`/`rsi` across several calls that each
+  clobber it, `push rbx×4; pop rdi` etc. beats four 3-byte movs.
+  Applied at verify's final compare (−4) and for several one-shot
+  addresses (compute once, push, pop after the call that clobbers).
+- **Sole-caller inlining cascade.** `fe_sub_m` had one caller (Fsub);
+  inlining it made `fe_add_raw` single-caller, so that inlines too.
+  `build_one` similar. −18 B combined.
+- **Flag-through returns.** `fe_geq`'s last `cmp` sets CF; `loopz`/`ret`
+  preserve all flags, so callers branch on CF directly. `bc_run` returns
+  via CF too (`neg ebp` instead of `mov eax,ebp` — NEG sets CF=1 iff
+  nonzero; pops preserve it); the one caller that tests the result
+  drops `test eax,eax; jnz` for `jc`. −4 B combined.
+- **`fe_from_be` chaining.** Its `stosq×4` advances `rdi` by exactly
+  32 and it reads `rsi` index-only (no lodsq). Back-to-back decodes:
+  the second call's `rdi` is where the first left it; an alternate
+  entry `fe_from_be_next` bumps `rsi` by 32 first. −13 B.
+- **Decoder preloads `rcx = &P`.** Three handlers (Fmul, Fsub, Fadd)
+  want that address; the others overwrite `rcx` anyway. +4 in the
+  decoder (runs every bytecode op, ~12K times — negligible), −4 in
+  Fmul, −2 in Fadd. Fsub's direct-dispatch entry skips its `lea`
+  (`.Lop3` points past it); the Fadd-jump-in path still needs it
+  because `fe_sub_raw` zeroed `rcx`. −2 B net.
+- **`push N; pop reg`** replaces `mov reg,imm32` where N fits signed
+  imm8. 3 bytes vs 5–6. Pervasive.
+- `.Lf/.Ld` trampoline: fail/done block moved to verify's tail; top
+  checks reach a 5-byte rel32 trampoline but the bottom `jz`+`jmp`
+  become short forward. −2 B.
+- `cpy3` as a `.macro` (4 inline expansions of `push 12; pop rcx;
+  rep movsq`) beats call+ret overhead. −3 B.
+- `dec al` wraps 0→0xff after `rep stosq`; `mov ebp,eax` gives 255
+  in 4 bytes vs `mov ebp,255` at 5. −1 B.
+
+**Assembler gotcha:** forward-referenced displacements get disp32. The
+decoder's `lea rcx,[r14+oP]` sees `oP` as a forward reference (it's
+defined after the constants, which are after the decoder). gas won't
+relax `disp(reg)` the way it does jumps. Hardcoded with a `.error`
+assert so a layout change can't silently cost 3 bytes.
+
+**Optimisation journey (1712 → 1511):**
+
+| Size | Cycles | Key technique |
+|---|---|---|
+| 1712 | ~2.14M | `tv_ecdsa_bc.S` baseline |
+| 1660 | ~1.28M | advancing-pointer CIOS + mulx unrolled; SQR→Fmul |
+| 1622 | ~1.21M | straight-line decode; consts at `[r14+disp8]`; t[0] in reg |
+| 1604 | ~1.21M | r14=rsp drops SIB; ModRM quirk cleanup; slot16 from rdi |
+| 1596 | ~1.21M | pt_add_acc tail-share; check accumulator r13b→ebp |
+| 1564 | ~1.19M | sole-caller inline chain; CF returns; push/pop stockpile |
+| 1537 | ~1.20M | fe_from_be chaining; .Lf trampoline; cpy3 macro; op renumber |
+| 1511 | ~1.20M | bytecode offset addressing; CF return from bc_run; rcx preload |
 
 ### The 1712-byte bytecode-interpreted version (`tv_ecdsa_bc.S`)
 
