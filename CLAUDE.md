@@ -146,3 +146,183 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
 - **4 rel32 jumps remain** (fe_mul_m, fe_sub_raw, .Lf trampoline,
   .Lepi5). All >127 B. Function reordering hasn't helped yet, but
   with each size reduction the distances shrink.
+
+## Bigger restructures under evaluation
+
+These each need a dedicated session. Byte accounting below is from
+actual disasm measurements, not estimates.
+
+### Merge the bit-walkers (fe_inv_m + pt_mul)
+
+Both are MSB-to-LSB bit-scan loops: unconditional square/double, then
+conditional mul/add. Structurally identical.
+
+| | fe_inv_m | pt_mul |
+|---|---:|---:|
+| total | 97 B | 55 B |
+| loop body alone | 35 B | 28 B |
+| prologue/setup/epilogue | 62 B | 27 B |
+
+**Native callbacks don't fit.** A generic `bitwalk(bitvec, nbits,
+cb_sqr, cb_mul)` needs 4 regs for its own state plus the callbacks need
+access to the closure context. fe_inv_m's callbacks need r/a/m/m0i =
+4 regs. Total 8 callee-saved regs needed; x86-64 has 6. State spills to
+stack → callback stubs grow to ~15 B each → 4 stubs × 15 + ~20 B walker
+= 80 B shared. Net vs current 97+55 = 152 B: only −5 B after adding per-
+caller setup (~15 B × 4 = 60 B). Wash at best.
+
+**Bytecode callbacks are the real angle.** fe_inv_m's square IS a SQR
+bytecode op; its mul IS an Fmul op. A walker that takes two bytecode
+stream offsets and runs one (then conditionally the other) 255× would
+let fe_inv_m become: setup (46 B stays) + 2 tiny bytecode streams (4 B
+each w/ terminator) + walker call. Walker itself ~25 B.
+
+But fe_inv_m's loop needs .Lfm which loads m/m0i from r14/r15 set by
+fe_inv_m's prologue. A bytecode SQR op goes through bc_run which has its
+OWN r14/r15. So fe_inv_m-as-bytecode would need `Fmul` to use the right
+modulus — which it does, mod-p. For mod-n, use `Nmul`. So fe_inv_m mod-p
+= a loop of {SQR; conditional Fmul}, mod-n = {SQR-n?; conditional Nmul}.
+
+Problem: there's no SQR-mod-n opcode, and fe_inv_m's square is mod-m not
+mod-p. Would need either an Nmul-square variant or pass the modulus as
+a handler arg. Doable but ~10 B.
+
+**Bottom line:** this CONVERGES with extended bytecode (below). As a
+standalone change, +10 to −5 B — not worth it. As part of extended
+bytecode, fe_inv_m could become an INV opcode that runs a tight native
+bit-loop calling Fmul/Nmul handlers directly. The loop body would be
+~20 B and the 46 B setup mostly vanishes (decoder already computes
+slot addresses). Defer to extended-bytecode evaluation.
+
+### Derive structured constants at runtime
+
+Constant-structure survey (bytes that are 0x00 or 0xFF):
+
+| | size | structured | other | buildable? |
+|---|---:|---:|---:|---|
+| cP | 32 | **31** | 1 (`0x01`) | yes — 4 limbs, all 0x00/0xff except one byte |
+| cR2P | 32 | 27 | 5 | maybe — 5 bytes to patch on top of all-FF |
+| cN high 16 | 16 | **16** | 0 | yes — pure 0x00/0xff |
+| cN low 16 | 16 | 0 | 16 | no — random |
+| cBM, cN_M0I | 40 | ~0 | ~40 | no |
+
+A fill-FF-then-patch builder for cP alone:
+```
+push -1; pop rax; push 4; pop rcx; rep stosq  ; 9 B: 32 × 0xFF
+xor eax,eax; mov [rdi-16],rax; mov [rdi-20],eax ; 9 B: zero limb2 + limb1.hi
+mov DWORD PTR [rdi-8], 1                       ; 7 B: limb3.lo = 1
+```
+= 25 B of code for 32 B of data. Marginal (−7 B).
+
+**The real blocker is addressing geometry.** Handlers read cP via the
+decoder's `lea rcx,[r14+oP]` (r14 = .Ljt, disp8). Built constants live
+in RAM — verify's stack frame. Options:
+
+- **[r12+disp8]** (r12 = slot base in bc_run): only slots 0–3 are disp8-
+  reachable (0/32/64/96 ≤ 127). All four are working slots clobbered by
+  every bytecode stream. Would need to rebuild cP before each bc_run.
+- **[r12−disp8]** (below slot 0): that's bc_run's own saved-register
+  area (5 pushes = 40 B below slot 0). Conflict.
+- **A new base reg**: bc_run is out of callee-saved regs.
+
+**Cleanest path found so far:** build into slot 9 (where bc_v1 expects
+it anyway — replacing verify's cN/cP/cBM block copy), and have the
+handlers that need cP outside bc_v1 (which is all of Fmul/Fsub/Fadd)
+address it at `[r12+288]`. That's disp32: decoder's rcx preload grows
++3 B, Nmul's cN load grows +3 B, .Lop4's cR2P grows +3 B. Plus
+splitting the block copy (cN and cBM no longer adjacent once cP is
+gone) costs ~5 B.
+
+Net: −32 B (cP data) + ~25 B (builder) + 9 B (disp32 × 3) + 5 B
+(split copy) = **−7 B at best**. And that's only cP.
+
+**If the builder also covers cN-high and cR2P**, potential savings
+grow to ~−25 B. But cR2P's 5 patch bytes cost ~25 B of builder
+(5 × `mov BYTE PTR [rdi+N], V` ≈ 4-5 B each), and cN-high (16 B)
+needs its own patch sequence. Builder grows to ~50 B for 80 B of
+data = −30 B raw, minus addressing costs (~15 B) = **~−15 B**.
+
+**Verdict: worth a prototyping session.** The win is real but modest.
+The addressing problem might have a cleverer solution — e.g. build
+constants at verify entry into a spot that becomes disp8-reachable
+from r14 after rearranging .Ljt layout. Or: fold cR2P into the
+bytecode — it's only used by `.Lop4` (Fto_mont), which is called
+3 times in bc_v1. If Fto_mont read R²_p from a SLOT instead of .text,
+and that slot were built... this is the thread to pull.
+
+### Extended bytecode — verify as bytecode
+
+**This is the big one.** Currently verify is 355 B of hand-rolled arg
+marshalling; ~150 B of it is mov/lea/call sequences that would be 2 B
+each as bytecode ops.
+
+What would be new opcodes:
+- **INV** (r, a, mod_selector) → `fe_inv_m`. 2 invocations.
+- **PTMUL** (scalar_slot) → `pt_mul(r12, scalar)`. 2 invocations.
+- **CONDSUB** (slot) → `cond_sub_n`. 2 invocations.
+- **CPY3** (dst, src) → 12-qword copy. 3 invocations.
+- **PTADD** () → `pt_add_acc(r12)`. 1 invocation.
+- **RAWSUB** (dst, s1, s2) → `fe_sub_raw` (no mod fixup, for final
+  r-compare). 1 invocation.
+
+What stays native (~170 B):
+- Prologue/epilogue/reg-stash: ~40 B
+- Length checks + .Lf trampoline: ~31 B
+- `fe_from_be` × 5: ~30 B — external pointers, can't be slot indices
+- `cN/cP/cBM` block copy + `build_one`: ~25 B — source is .text
+- `cGXM` load: ~15 B — .rodata pointer
+- bc_run call glue (3-4 sites): ~30 B
+
+Bytecode streams: bc_verify_mid (~8 ops), bc_verify_tail (~5 ops)
+inlining existing bc_v2/bc_v3 content = ~40 B total.
+
+Handler cost: 6 handlers × ~10 B ≈ **60 B**.
+
+**Jump table overflow is the structural blocker.** Current table is
+9 × u8, Fadd at offset 234/255. Adding 6 handlers ≈ 60 B to the handler
+block puts Fadd at ~294 — overflows. Options:
+- **u16 table:** 9 existing + 6 new = 15 × 2 = 30 B table vs current
+  9 B. +21 B. Dispatch is `movzx eax, WORD PTR [r14+rcx*2]` — same 5 B.
+- **Trampolines:** 5-B `jmp rel32` for the 2-3 handlers that overflow.
+  +10-15 B. Cheaper than u16.
+- **Move constants out of handler reach:** cR2P (32 B) sits between
+  .Ljt and the handlers. If cR2P were built or moved, handler offsets
+  drop by 32 → Fadd at ~202, room for ~50 B of new handlers. Dovetails
+  with the derive-constants idea.
+
+**Slot-16+ is the other blocker.** The u2·Q stash lives at slots 16-18
+(outside nibble range). For CPY3 to address them, either:
+- 3-byte bytecode (5-bit slot indices). Costs ~10 B in decoder + 1 B
+  per existing op × ~72 ops = massive.
+- Re-layout slots so u2·Q fits in 0-15. pt_mul clobbers 0-11 via
+  bc_dbl/bc_add; only 12-15 survive. Slot 14 is free after first
+  pt_mul (it held u2, now consumed), but that's 1 slot, need 3.
+- Keep the stash native (~20 B). Cheap; this is what the estimate
+  above assumes.
+
+**SKIP_IF_ZERO isn't worth it.** Handlers can't modify bc_run's rbx
+(they're CALLed). A return-skip-count protocol costs +6 B in bc_run
+plus +2 B per handler (to clear al) × 15 handlers = +36 B, to save
+~4 B at two branch sites. Split verify into 2-3 streams with native
+`jc`/`jz` glue between them instead — that's the ~30 B of "bc_run
+call glue" above.
+
+**Net estimate: −40 to −60 B** (revised from a naive −190). The delta
+from the optimistic estimate is: jump table overflow (~+15 B), keeping
+fe_from_be/cGXM/stash native (~+80 B not saved), no SKIP opcode.
+bc_run IS reentrant (pt_mul already nests it), so PTADD/PTMUL handlers
+calling back into bc_run is fine.
+
+**pt_add_acc (89 B) is a worse candidate than verify.** Its branching
+is native and its leaf bodies are small (12 B zero-out, 12 B copy).
+Converting each to a 1-op bytecode stream costs 8 B call overhead
+per site — net loss for bodies this small. Would need the branching
+ITSELF in bytecode (SKIP_IF_ZERO), which we just ruled out.
+
+**Verdict: highest-potential idea, highest effort.** Recommend
+attacking jointly with derive-constants: moving cR2P out of the
+handler block solves BOTH the overflow and gives −32 B of data. A
+realistic combined target is **−60 to −80 B total**, getting to
+~1430 B. Start with the handler skeletons (no overflow mitigation —
+just see if the new ops work), then solve overflow once the set is
+known.
