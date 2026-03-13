@@ -91,7 +91,7 @@ bc_dbl:
 	.byte 0x92,0x99, 0x92,0x99, 0x92,0x99, 0x93,0x18, 0x00,0x00
 
 bc_v2:
-	.byte 0x05,0xdd, 0xf5,0xdd, 0x05,0xec, 0xf5,0xee, 0x00,0x00
+	.byte 0x04,0xdd, 0xf4,0xdd, 0x04,0xec, 0xf4,0xee, 0x00,0x00
 
 bc_v3:
 	.byte 0x31,0x33, 0x00,0x33, 0xf0,0x33, 0x00,0x00
@@ -106,12 +106,16 @@ bc_add2:
 	.byte 0xb0,0x99, 0x71,0x07, 0xb3,0x00, 0x82,0x38, 0x33,0x00
 	.byte 0x03,0x38, 0x30,0x37, 0x93,0x13, 0x00,0x00
 
+/* Opcode renumbering after op4 (Fto_mont) was absorbed into Fmul:
+ * R² is copied to slot 11 by verify's 16-qword block copy, so a to-
+ * Montgomery conversion is just Fmul with s2=0xb.  op5/6/7/8 shift
+ * down to 4/5/6/7; jump table drops one entry. */
 bc_v1:
-	.byte 0x07,0xc0, 0x06,0xc8, 0x07,0xd0, 0x06,0xd8
-	.byte 0x06,0x09, 0x06,0x19, 0x04,0x40, 0x04,0x51
-	.byte 0x04,0x6f, 0x51,0x05, 0x41,0x14, 0x40,0x11
+	.byte 0x06,0xc0, 0x05,0xc8, 0x06,0xd0, 0x05,0xd8
+	.byte 0x05,0x09, 0x05,0x19, 0xb0,0x40, 0xb0,0x51
+	.byte 0xb0,0x6f, 0x51,0x05, 0x41,0x14, 0x40,0x11
 	.byte 0x43,0x11, 0x43,0x11, 0x43,0x11, 0xa2,0x11
-	.byte 0x13,0x00, 0x08,0x00, 0x00,0x00
+	.byte 0x13,0x00, 0x07,0x00, 0x00,0x00
 
 .equ obc_dbl,  0
 .equ obc_v2,   bc_v2   - bc_dbl
@@ -399,14 +403,11 @@ bc_run:
 	 * decode: no push/pop, no loop.  Slot stride is 32 bytes; a
 	 * nibble in bits [7:4] is already ×16, so lea scale-2 finishes it.
 	 * `and edi,-16` = 3 bytes (imm8 sign-ext → 0xFFFFFFF0); works
-	 * because movzx cleared bits [31:8] already. */
-	mov	ecx, eax            /* op → ecx (survives decode) */
-	and	ecx, 0xF
-
-	and	al, 0xF0            /* al = s2<<4 */
-	movzx	edx, al
-	lea	rdx, [r12+rdx*2]    /* r12 + s2*32 */
-
+	 * because movzx cleared bits [31:8] already.
+	 *
+	 * Consume ah first (into edi/esi), then al (into edx), then
+	 * `and eax,0xF` for the op — using rax itself as the table
+	 * index.  No copy-to-ecx is needed. */
 	movzx	edi, ah             /* edi = (dst<<4)|s1 */
 	mov	esi, edi
 	and	esi, 0xF
@@ -415,13 +416,18 @@ bc_run:
 	and	edi, -16            /* edi = dst<<4 */
 	lea	rdi, [r12+rdi*2]    /* r12 + dst*32 */
 
-	movzx	eax, BYTE PTR [r14+rcx]
+	movzx	edx, al             /* edx = (s2<<4)|op; high bits cleared */
+	and	dl, 0xF0            /* edx = s2<<4 */
+	lea	rdx, [r12+rdx*2]    /* r12 + s2*32 */
+
+	and	eax, 0xF            /* op — ah already dead */
+	movzx	eax, BYTE PTR [r14+rax]
 	add	rax, r14
 	/* Most handlers want rcx = &P; those that don't overwrite it.
-	 * +4 here, −4 in Fmul, −2 in Fadd.  Fsub's Fadd-entry path still
-	 * needs its own lea (fe_sub_raw zeroed rcx).  oP is a forward
-	 * reference here, so gas picks disp32 — hardcode and assert. */
-.equ	oP_early, 49        /* .Ljt(9) + cN_M0I(8) + cN(32) */
+	 * +4 here, −4 in Fmul, −2 in Fadd.  Fadd now preserves it across
+	 * its own fe_sub_raw.  oP is a forward reference here, so gas
+	 * picks disp32 — hardcode and assert. */
+.equ	oP_early, 48        /* .Ljt(8) + cN_M0I(8) + cN(32) */
 	lea	rcx, [r14+oP_early]
 	call	rax
 	jmp	.Lbc
@@ -441,13 +447,16 @@ bc_run:
 /* .Ljt + constants in one block so handlers can address constants via
  * [r14+disp8] instead of 7-byte rip-relative leas.  r14 = .Ljt inside
  * bc_run; handlers run before fe_mul_m's push r14 overwrites it.
- * cN→cP→cBM adjacency is load-bearing (verify's rep movsq). */
-/* 9 entries: op9 renumbered→op4 (was unused alias to Nmul).  Table
- * shrink misaligns cN_M0I by 1 — unaligned loads work fine on x86-64,
- * and Nmul is cold (4 calls/verify). */
+ * cN→cP→cBM→cR2P adjacency is load-bearing (verify's rep movsq). */
+/* 8 entries.  The old Fto_mont opcode was just Fmul with a hardcoded
+ * s2 = &R²; now that verify copies R² into slot 11, Fto_mont is
+ * literally Fmul with s2=0xb in the bytecode and needs no handler.
+ * cR2P is never read from .text by any handler — only the block copy
+ * touches it — but it stays here because the copy reads cN..cR2P as
+ * one contiguous span. */
 .Ljt:
-	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt, .Lop4-.Ljt
-	.byte	.Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt, .Lop8-.Ljt
+	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
+	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
 
 cN_M0I:	.quad 0xccd1c8aaee00bc4f
 cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
@@ -461,26 +470,23 @@ cR2P:	.quad 0x0000000000000003, 0xfffffffbffffffff
 
 .equ oN,   cN   - .Ljt
 .equ oP,   cP   - .Ljt
-.equ oR2P, cR2P - .Ljt
 .if oP - oP_early
 .error "oP moved — update oP_early in bc_run"
 .endif
 
-.Lop6:	call	fe_geq
+.Lop5:	call	fe_geq
 	setae	al
 	jmp	.Lor
-.Lop7:	call	fe_iszero
+.Lop6:	call	fe_iszero
 	jmp	.Lor
-.Lop8:	call	fe_iszero
+.Lop7:	call	fe_iszero
 	xor	al, 1
 .Lor:	or	bpl, al
 	ret
-.Lop5:
+.Lop4:
 Nmul:	lea	rcx, [r14+oN]
 	mov	r8, [rcx-8]
 	jmp	.Lmj               /* share Fmul's tail: short jmp, −3 bytes */
-.Lop4:	lea	rdx, [r14+oR2P]
-	/* FALLTHROUGH to Fmul.  rcx = &P already set by the decoder. */
 .Lop0:
 Fmul:	push	1
 	pop	r8
@@ -493,9 +499,9 @@ Fmul:	push	1
  * so jnc replaces test+jz.  The add-back loop's first adc needs
  * CF=0: `xor ecx,ecx` clears it (we're on the CF=1 branch here
  * but mov+xor reset it).  −10 vs standalone fe_sub_m+fe_add_raw. */
-/* Fsub has two entries: direct dispatch (rcx = &P from decoder) and
- * from Fadd (rcx was zeroed by fe_sub_raw, so redo the lea). */
-Fsub:	lea	rcx, [r14+oP]
+/* rcx = &P is supplied by the decoder.  Fadd now also preserves it
+ * across its fe_sub_raw call (push/pop around it, +2 B) and jumps to
+ * .Lop3 directly — the old `Fsub: lea rcx,[r14+oP]` re-load is gone. */
 .Lop3:	push	rcx
 	push	rdi
 	call	fe_sub_raw
@@ -515,6 +521,7 @@ Fsub:	lea	rcx, [r14+oP]
 .Lop2:
 Fadd:	push	rdi
 	push	rsi
+	push	rcx                 /* save &P across fe_sub_raw */
 	lea	rdi, [r12+3*32]
 	/* Push scratch addr before fe_sub_raw clobbers rdi; pop into
 	 * rdx after.  rcx = &P from decoder → push/pop into rsi. */
@@ -523,9 +530,10 @@ Fadd:	push	rdi
 	pop	rsi
 	call	fe_sub_raw
 	pop	rdx
+	pop	rcx                 /* restore &P */
 	pop	rsi
 	pop	rdi
-	jmp	Fsub
+	jmp	.Lop3
 
 .macro	cpy3
 	push	12
@@ -596,9 +604,9 @@ pt_mul:
 	rep	stosq
 
 	/* eax=0 after rep stosq; dec al wraps low byte to 0xff, high
-	 * bits stay 0.  2+2 = 4 bytes vs mov ebp,255 at 5. */
+	 * bits stay 0.  xchg with eax is 1 byte; eax dead after. */
 	dec	al
-	mov	ebp, eax
+	xchg	ebp, eax
 .Lpm:	xor	edi, edi            /* obc_dbl = 0 */
 	mov	rsi, rbx
 	call	bcrun_off
@@ -636,7 +644,10 @@ tv_ecdsa_p256_verify_asm:
 
 	mov	r12, rdi
 	mov	rbx, r8
-	mov	r8, rdx
+	/* rdx (pub ptr, arg 3) survives the two fe_from_be calls below
+	 * (they touch only rsi/rdi/rcx/rax), so use it directly for the
+	 * 0x04 format-byte check.  Drops `mov r8,rdx` (−3) and the REX
+	 * byte on `cmp BYTE PTR [rdx],4` (−1). */
 
 	cmp	rsi, 64
 	jne	.Lf
@@ -659,9 +670,9 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi already r13+32 */
 
-	cmp	BYTE PTR [r8], 0x04
+	cmp	BYTE PTR [rdx], 0x04
 	jne	.Lf
-	lea	rsi, [r8+1]
+	lea	rsi, [rdx+1]
 	mov	rdi, r14            /* rbp-64 = rsp = r14 */
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi already r14+32 = rbp-32 */
@@ -669,7 +680,13 @@ tv_ecdsa_p256_verify_asm:
 
 	lea	rdi, [r13-128]       /* slot 8 via r13: disp8 */
 	mov	rsi, r12
-	cpy3                /* same side-effects as inline, −1 byte */
+	/* 16-qword copy: cN→slot8, cP→slot9, cBM→slot10, cR2P→slot11.
+	 * Slot 11 is never read during bc_v1 (only written later by
+	 * bc_dbl), so the R² living there lets the to-Montgomery ops
+	 * be plain Fmul with s2=0xb — no Fto_mont handler. */
+	push	16
+	pop	rcx
+	rep	movsq
 	/* build_one inlined (sole caller): zero slot, set low limb = 1. */
 	lea	rdi, [r13+96]
 	push	4
