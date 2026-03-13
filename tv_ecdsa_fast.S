@@ -4,8 +4,8 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx).
  *
- * 1511 bytes, ~1.20M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~2.16M cycles — so −201 bytes AND −44% cycles.
+ * 1441 bytes, ~1.20M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~2.16M cycles — so −271 bytes AND −44% cycles.
  *
  * Hot-path changes:
  *
@@ -65,6 +65,34 @@
  *   - bc_run returns check result in CF (neg ebp): caller drops
  *     test+jnz for jc.  −2.
  *   - Decoder preloads rcx = &P; Fmul/Fadd drop their leas.  −2.
+ *
+ * Structural wins (r14-invariant pass):
+ *
+ *   - r14 = slot base is an invariant throughout the call tree (every
+ *     callee that reassigns r14 also pushes/pops it).  pt_add_acc's
+ *     `push r14; mov r14,rdi; ...; pop r14` frame and pt_mul's rbx
+ *     copy were both reconstructing that live value.  Dropping them
+ *     cascades: pt_add_acc's epilogue becomes a bare `ret`, two of its
+ *     `jmp .Laa` paths become `ret`, one becomes a tail-jump; verify
+ *     drops three `mov rdi,r14` preambles; pt_mul drops its whole rbx
+ *     bookkeeping.  −27 combined.
+ *   - cond_sub_n = .Lop3 with rcx=rdx=&N.  Conditional subtract is
+ *     subtract-then-add-back-on-borrow, which is exactly the Fsub
+ *     handler — just with the modulus swapped.  A 9-byte stub (three
+ *     movs) placed right before .Lop3 falls through.  fe_geq then has
+ *     only one caller (.Lop5) and gets inlined.  −19.
+ *   - Fto_mont opcode eliminated.  verify's block copy takes cR2P
+ *     along for the ride (16 qwords instead of 12), landing R² in
+ *     slot 11.  A to-Montgomery conversion is then plain Fmul with
+ *     s2=0xb.  Drops the handler and one jump-table entry.  −5.
+ *   - pt_mul zeros its accumulator by calling .Lai (pt_add_acc's
+ *     set-to-infinity path — byte-identical code).  −6.
+ *   - verify: rdx (pub ptr) survives both fe_from_be calls unchanged;
+ *     Fadd preserves rcx=&P around its own fe_sub_raw; build_one
+ *     piggybacks on fe_from_be's advanced rdi; rbp set from that rdi
+ *     instead of a prologue lea.  −11 combined.
+ *   - bc_run decoder uses rax itself as the table index (consume ah
+ *     first, then `and eax,0xF`); pt_mul `xchg ebp,eax`.  −2.
  *
  * Security and validation are unchanged from tv_ecdsa_bc.S.
  * ====================================================================== */
