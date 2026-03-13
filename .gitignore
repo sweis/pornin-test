@@ -2,4 +2,7 @@
 test_ecdsa
 test_ecdsa_asm
 test_ecdsa_bc
+test_ecdsa_fast
+bench_bc
+bench_fast
 /tmp/
