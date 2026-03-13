@@ -615,8 +615,7 @@ pt_mul:
 	dec	al
 	xchg	ebp, eax
 .Lpm:	xor	edi, edi            /* obc_dbl = 0 */
-	mov	rsi, r14
-	call	bcrun_off
+	call	bcrun_r14           /* bcrun_r14 sets rsi = r14 for us */
 	bt	QWORD PTR [r15], rbp    /* 4 bytes; [r13] would be 5 */
 	jnc	1f
 	call	pt_add_acc
@@ -675,6 +674,17 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi already r13+32 */
 
+	/* build_one: rdi flowed out of the above at r13+64 (slot 14).
+	 * Zero 8 qwords = slots 14 and 15 (slot 14 is garbage until
+	 * bc_v2 writes it, slot 15 becomes `one`), then set slot15's
+	 * low limb.  Dropping the `lea rdi,[r13+96]`: −4 B.  rdx (pub
+	 * ptr) is still live; rep stosq doesn't touch it. */
+	push	8
+	pop	rcx
+	xor	eax, eax
+	rep	stosq
+	inc	DWORD PTR [rdi-32]
+
 	cmp	BYTE PTR [rdx], 0x04
 	jne	.Lf
 	lea	rsi, [rdx+1]
@@ -692,13 +702,6 @@ tv_ecdsa_p256_verify_asm:
 	push	16
 	pop	rcx
 	rep	movsq
-	/* build_one inlined (sole caller): zero slot, set low limb = 1. */
-	lea	rdi, [r13+96]
-	push	4
-	pop	rcx
-	xor	eax, eax
-	rep	stosq
-	inc	DWORD PTR [rdi-32]
 
 	push	obc_v1
 	pop	rdi
