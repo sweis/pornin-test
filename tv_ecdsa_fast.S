@@ -4,8 +4,8 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx).
  *
- * 1537 bytes, ~1.20M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~2.16M cycles — so −175 bytes AND −44% cycles.
+ * 1511 bytes, ~1.20M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~2.16M cycles — so −201 bytes AND −44% cycles.
  *
  * Hot-path changes:
  *
@@ -59,11 +59,73 @@
  *   - verify final-compare: push rbx×4, pop as needed.  −4.
  *   - Fadd: push scratch addr, pop into rdx after call.  −3.
  *   - pt_mul: dead mov removed; dec al → 255 via wrap.  −4.
+ *   - Bytecode streams addressed by imm8 offset from bc_dbl; bcrun_off
+ *     resolves.  7 sites × (7-byte lea → 2–3 byte load) vs +10.  −20.
+ *   - fe_inv_m: sub DWORD (low limb ≫ 2, no borrow) + bt DWORD.  −2.
+ *   - bc_run returns check result in CF (neg ebp): caller drops
+ *     test+jnz for jc.  −2.
+ *   - Decoder preloads rcx = &P; Fmul/Fadd drop their leas.  −2.
  *
  * Security and validation are unchanged from tv_ecdsa_bc.S.
  * ====================================================================== */
 
 	.intel_syntax noprefix
+
+/* ======================================================================
+ * Bytecode.  Placed before .text so stream offsets (bc_X - bc_dbl) are
+ * backward references at the call sites — gas picks the imm8 encoding
+ * for `push`.  Order chosen so all offsets ≤ 118 (fits signed imm8).
+ *
+ * Call sites load the offset as a small integer (push imm8; pop rdi,
+ * or xor edi,edi for bc_dbl itself), and bcrun_off adds the base.
+ * 7 sites × (7-byte rip-rel lea → 2–3 byte load) vs +10 in bcrun_off.
+ * ====================================================================== */
+	.section .rodata
+	.p2align 3
+
+bc_dbl:
+	.byte 0x21,0xb2, 0x11,0x91, 0xb3,0x80, 0xb2,0xa0, 0xa0,0xa8
+	.byte 0xa2,0x8a, 0xa2,0xa8, 0x22,0x81, 0x81,0x88, 0x93,0x88
+	.byte 0xb3,0x28, 0x90,0xb0, 0xb2,0x8b, 0x82,0x88, 0x82,0xb8
+	.byte 0xa1,0x0a, 0xb3,0x00, 0x03,0x88, 0x80,0x8a, 0x91,0x99
+	.byte 0x92,0x99, 0x92,0x99, 0x92,0x99, 0x93,0x18, 0x00,0x00
+
+bc_v2:
+	.byte 0x05,0xdd, 0xf5,0xdd, 0x05,0xec, 0xf5,0xee, 0x00,0x00
+
+bc_v3:
+	.byte 0x31,0x33, 0x00,0x33, 0xf0,0x33, 0x00,0x00
+
+bc_add1:
+	.byte 0x21,0xa2, 0x61,0xb6, 0xb0,0x80, 0xa0,0x34, 0x60,0x91
+	.byte 0xb0,0x99, 0x20,0x75, 0xa0,0x77, 0x83,0x33, 0x93,0x77
+	.byte 0x00,0x00
+
+bc_add2:
+	.byte 0x60,0xa2, 0x30,0x2a, 0x31,0xa3, 0xa0,0xb3, 0xa0,0x88
+	.byte 0xb0,0x99, 0x71,0x07, 0xb3,0x00, 0x82,0x38, 0x33,0x00
+	.byte 0x03,0x38, 0x30,0x37, 0x93,0x13, 0x00,0x00
+
+bc_v1:
+	.byte 0x07,0xc0, 0x06,0xc8, 0x07,0xd0, 0x06,0xd8
+	.byte 0x06,0x09, 0x06,0x19, 0x04,0x40, 0x04,0x51
+	.byte 0x04,0x6f, 0x51,0x05, 0x41,0x14, 0x40,0x11
+	.byte 0x43,0x11, 0x43,0x11, 0x43,0x11, 0xa2,0x11
+	.byte 0x13,0x00, 0x08,0x00, 0x00,0x00
+
+.equ obc_dbl,  0
+.equ obc_v2,   bc_v2   - bc_dbl
+.equ obc_v3,   bc_v3   - bc_dbl
+.equ obc_add1, bc_add1 - bc_dbl
+.equ obc_add2, bc_add2 - bc_dbl
+.equ obc_v1,   bc_v1   - bc_dbl
+
+cGXM:	.quad 0x79e730d418a9143c, 0x75ba95fc5fedb601
+	.quad 0x79fb732b77622510, 0x18905f76a53755c6
+cGYM:	.quad 0xddf25357ce95560a, 0x8b4ab8e4ba19e45c
+	.quad 0xd2e88688dd21f325, 0x8571ff1825885d85
+
+/* ---------------------------------------------------------------------- */
 	.text
 
 /* ----------------------------------------------------------------------
@@ -180,8 +242,8 @@ fe_mul_m:
 	mov	r14, r8             /* m0i */
 	mov	r15, rsi            /* a */
 
-	/* Zero t[0..8].  dec-loop — `rep stosq` has a ~25-cycle startup
-	 * for short counts, this runs in ~18. */
+	/* Zero t[0..8].  dec-loop — `rep stosq` costs ~140cyc/call here
+	 * (measured), ×~1000 ≈ +140K.  Not worth 3 bytes. */
 	xor	eax, eax
 	push	9
 	pop	rcx
@@ -251,7 +313,9 @@ fe_inv_m:
 	mov	rdi, rsp
 	mov	rsi, r14
 	call	fe_cpy
-	sub	QWORD PTR [rsp], 2
+	/* Both moduli have low limb ≫ 2 → no borrow into limb 1.
+	 * 32-bit sub drops REX.W: −1. */
+	sub	DWORD PTR [rsp], 2
 
 	mov	rdi, r12
 	mov	rsi, r13
@@ -267,7 +331,9 @@ fe_inv_m:
 	pop	rdx
 	pop	rsi
 	call	.Lfm
-	bt	QWORD PTR [rsp], rbx
+	/* bt with mem operand indexes an unbounded bit array; ebx ≤ 254
+	 * stays in signed 32-bit range.  Dropping REX.W: −1. */
+	bt	DWORD PTR [rsp], ebx
 	jnc	.Lnx
 	mov	rdi, r12
 	push	rdi
@@ -298,8 +364,15 @@ fe_from_be:
 /* ======================================================================
  * BYTECODE INTERPRETER
  * ====================================================================== */
+/* Callers pass rdi = byte offset into the bytecode block.  bcrun_off
+ * resolves it; bcrun_r14 also supplies rsi = r14.  Seven sites each
+ * drop a 7-byte rip-rel lea for a 2–3 byte offset load; we spend +10
+ * here once. */
 bcrun_r14:
 	mov	rsi, r14
+bcrun_off:
+	lea	rax, [rip+bc_dbl]
+	add	rdi, rax
 	/* FALLTHROUGH */
 bc_run:
 	push	rbp
@@ -344,10 +417,19 @@ bc_run:
 
 	movzx	eax, BYTE PTR [r14+rcx]
 	add	rax, r14
+	/* Most handlers want rcx = &P; those that don't overwrite it.
+	 * +4 here, −4 in Fmul, −2 in Fadd.  Fsub's Fadd-entry path still
+	 * needs its own lea (fe_sub_raw zeroed rcx).  oP is a forward
+	 * reference here, so gas picks disp32 — hardcode and assert. */
+.equ	oP_early, 49        /* .Ljt(9) + cN_M0I(8) + cN(32) */
+	lea	rcx, [r14+oP_early]
 	call	rax
 	jmp	.Lbc
 
-.Lbce:	mov	eax, ebp            /* upper bytes of ebp are 0: plain mov */
+/* NEG sets CF=1 iff operand was nonzero.  pops/ret preserve flags,
+ * so the bc_v1 caller branches on CF directly — other callers don't
+ * care.  ebp is about to be popped anyway.  Same 2 bytes as mov. */
+.Lbce:	neg	ebp
 .Lepi5:
 	pop	r14
 	pop	r13
@@ -380,6 +462,9 @@ cR2P:	.quad 0x0000000000000003, 0xfffffffbffffffff
 .equ oN,   cN   - .Ljt
 .equ oP,   cP   - .Ljt
 .equ oR2P, cR2P - .Ljt
+.if oP - oP_early
+.error "oP moved — update oP_early in bc_run"
+.endif
 
 .Lop6:	call	fe_geq
 	setae	al
@@ -395,10 +480,9 @@ Nmul:	lea	rcx, [r14+oN]
 	mov	r8, [rcx-8]
 	jmp	.Lmj               /* share Fmul's tail: short jmp, −3 bytes */
 .Lop4:	lea	rdx, [r14+oR2P]
-	/* FALLTHROUGH to Fmul */
+	/* FALLTHROUGH to Fmul.  rcx = &P already set by the decoder. */
 .Lop0:
-Fmul:	lea	rcx, [r14+oP]
-	push	1
+Fmul:	push	1
 	pop	r8
 .Lmj:	jmp	fe_mul_m
 /* SQR bytecode now encodes s2=s1, so the decode loop has already
@@ -409,9 +493,10 @@ Fmul:	lea	rcx, [r14+oP]
  * so jnc replaces test+jz.  The add-back loop's first adc needs
  * CF=0: `xor ecx,ecx` clears it (we're on the CF=1 branch here
  * but mov+xor reset it).  −10 vs standalone fe_sub_m+fe_add_raw. */
-.Lop3:
+/* Fsub has two entries: direct dispatch (rcx = &P from decoder) and
+ * from Fadd (rcx was zeroed by fe_sub_raw, so redo the lea). */
 Fsub:	lea	rcx, [r14+oP]
-	push	rcx
+.Lop3:	push	rcx
 	push	rdi
 	call	fe_sub_raw
 	pop	rdi
@@ -432,9 +517,10 @@ Fadd:	push	rdi
 	push	rsi
 	lea	rdi, [r12+3*32]
 	/* Push scratch addr before fe_sub_raw clobbers rdi; pop into
-	 * rdx after.  Replaces a second 5-byte lea with push+pop (2). */
+	 * rdx after.  rcx = &P from decoder → push/pop into rsi. */
 	push	rdi
-	lea	rsi, [r14+oP]
+	push	rcx
+	pop	rsi
 	call	fe_sub_raw
 	pop	rdx
 	pop	rsi
@@ -470,7 +556,8 @@ pt_add_acc:
 	mov	rdi, r14
 	cpy3
 	jmp	.Laa
-1:	lea	rdi, [rip+bc_add1]
+1:	push	obc_add1
+	pop	rdi
 	call	bcrun_r14
 	lea	rdi, [r14+96]
 	call	fe_iszero           /* ZF ⇔ H == 0 */
@@ -481,7 +568,7 @@ pt_add_acc:
 	jnz	.Lai
 	/* Tail-share: both this path and 3: end with call bcrun_r14
 	 * then .Laa.  Short-jmp past .Lai to the shared call.  −5. */
-	lea	rdi, [rip+bc_dbl]
+	xor	edi, edi            /* obc_dbl = 0 */
 	jmp	.Lcall
 .Lai:	mov	rdi, r14
 	xor	eax, eax
@@ -489,7 +576,8 @@ pt_add_acc:
 	pop	rcx
 	rep	stosq
 	jmp	.Laa
-3:	lea	rdi, [rip+bc_add2]
+3:	push	obc_add2
+	pop	rdi
 .Lcall:	call	bcrun_r14
 .Laa:
 	pop	r14
@@ -511,9 +599,9 @@ pt_mul:
 	 * bits stay 0.  2+2 = 4 bytes vs mov ebp,255 at 5. */
 	dec	al
 	mov	ebp, eax
-.Lpm:	lea	rdi, [rip+bc_dbl]
+.Lpm:	xor	edi, edi            /* obc_dbl = 0 */
 	mov	rsi, rbx
-	call	bc_run
+	call	bcrun_off
 	bt	QWORD PTR [r15], rbp    /* 4 bytes; [r13] would be 5 */
 	jnc	1f
 	mov	rdi, rbx
@@ -590,10 +678,10 @@ tv_ecdsa_p256_verify_asm:
 	rep	stosq
 	inc	DWORD PTR [rdi-32]
 
-	lea	rdi, [rip+bc_v1]
+	push	obc_v1
+	pop	rdi
 	call	bcrun_r14
-	test	eax, eax
-	jnz	.Lf
+	jc	.Lf                 /* bc_run's neg ebp left CF = failbit */
 
 	/* [r13+32] needed three times across the next three calls;
 	 * compute once, stockpile on stack.  Two 4-byte leas → 2 pushes
@@ -614,7 +702,8 @@ tv_ecdsa_p256_verify_asm:
 	pop	rdi
 	call	cond_sub_n
 
-	lea	rdi, [rip+bc_v2]
+	push	obc_v2
+	pop	rdi
 	call	bcrun_r14
 
 	mov	rdi, r14
@@ -653,7 +742,8 @@ tv_ecdsa_p256_verify_asm:
 	pop	rcx
 	call	fe_inv_m
 
-	lea	rdi, [rip+bc_v3]
+	push	obc_v3
+	pop	rdi
 	call	bcrun_r14
 
 	/* rbx loaded into rdi three times across three calls; stockpile
@@ -675,50 +765,5 @@ tv_ecdsa_p256_verify_asm:
 .Lf2:	xor	eax, eax
 .Ld2:	add	rsp, 616
 	jmp	.Lepi5
-
-/* ======================================================================
- * Bytecode.  SQR ops (low nibble 1) now have s2=s1 so that the
- * decoder sets rdx=rsi, letting SQR dispatch directly to Fmul.
- * ====================================================================== */
-	.section .rodata
-	.p2align 3
-
-/* bc_dbl: SQR ops with s2=s1.
- * Original 0x01,0xb2 (s1=2,s2=0) → 0x21,0xb2 (s1=2,s2=2) etc. */
-bc_dbl:
-	.byte 0x21,0xb2, 0x11,0x91, 0xb3,0x80, 0xb2,0xa0, 0xa0,0xa8
-	.byte 0xa2,0x8a, 0xa2,0xa8, 0x22,0x81, 0x81,0x88, 0x93,0x88
-	.byte 0xb3,0x28, 0x90,0xb0, 0xb2,0x8b, 0x82,0x88, 0x82,0xb8
-	.byte 0xa1,0x0a, 0xb3,0x00, 0x03,0x88, 0x80,0x8a, 0x91,0x99
-	.byte 0x92,0x99, 0x92,0x99, 0x92,0x99, 0x93,0x18, 0x00,0x00
-
-bc_add1:
-	.byte 0x21,0xa2, 0x61,0xb6, 0xb0,0x80, 0xa0,0x34, 0x60,0x91
-	.byte 0xb0,0x99, 0x20,0x75, 0xa0,0x77, 0x83,0x33, 0x93,0x77
-	.byte 0x00,0x00
-
-bc_add2:
-	.byte 0x60,0xa2, 0x30,0x2a, 0x31,0xa3, 0xa0,0xb3, 0xa0,0x88
-	.byte 0xb0,0x99, 0x71,0x07, 0xb3,0x00, 0x82,0x38, 0x33,0x00
-	.byte 0x03,0x38, 0x30,0x37, 0x93,0x13, 0x00,0x00
-
-bc_v1:
-	.byte 0x07,0xc0, 0x06,0xc8, 0x07,0xd0, 0x06,0xd8
-	.byte 0x06,0x09, 0x06,0x19, 0x04,0x40, 0x04,0x51
-	.byte 0x04,0x6f, 0x51,0x05, 0x41,0x14, 0x40,0x11
-	.byte 0x43,0x11, 0x43,0x11, 0x43,0x11, 0xa2,0x11
-	.byte 0x13,0x00, 0x08,0x00, 0x00,0x00
-
-bc_v2:
-	.byte 0x05,0xdd, 0xf5,0xdd, 0x05,0xec, 0xf5,0xee, 0x00,0x00
-
-bc_v3:
-	.byte 0x31,0x33, 0x00,0x33, 0xf0,0x33, 0x00,0x00
-
-/* ---------------------------------------------------------------------- */
-cGXM:	.quad 0x79e730d418a9143c, 0x75ba95fc5fedb601
-	.quad 0x79fb732b77622510, 0x18905f76a53755c6
-cGYM:	.quad 0xddf25357ce95560a, 0x8b4ab8e4ba19e45c
-	.quad 0xd2e88688dd21f325, 0x8571ff1825885d85
 
 	.section .note.GNU-stack,"",@progbits
