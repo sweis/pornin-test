@@ -22,7 +22,7 @@ SIZE_CFLAGS = -std=c99 -Os -ffreestanding -fno-strict-aliasing \
               -fno-asynchronous-unwind-tables -fno-ident \
               -fno-stack-protector -fno-tree-loop-distribute-patterns
 
-.PHONY: all test test-asm size size-asm clean
+.PHONY: all test test-asm size size-asm clean wp wp-fast wp-bc wp-asm wp-all
 
 all: test_ecdsa test_ecdsa_asm
 
@@ -102,6 +102,44 @@ size-fast: tv_ecdsa_fast.o
 	@echo "=== undefined symbols ==="
 	@nm $< | grep ' U ' || echo "NONE — fully self-contained"
 
+# ---- Wycheproof test suite ----------------------------------------
+# Vectors in wycheproof_vectors.h are checked in; regenerate with:
+#   make wycheproof_vectors.h
+
+WP_BASE = https://raw.githubusercontent.com/C2SP/wycheproof/master/testvectors_v1
+WP_FILES = ecdsa_secp256r1_sha256_p1363_test.json \
+           ecdsa_secp256r1_sha512_p1363_test.json
+
+wycheproof_vectors.h: gen_wycheproof.py
+	@for f in $(WP_FILES); do curl -sL $(WP_BASE)/$$f -o /tmp/$$f; done
+	python3 gen_wycheproof.py $(addprefix /tmp/,$(WP_FILES)) > $@
+
+test_wycheproof: tv_ecdsa.c test_wycheproof.c tv_ecdsa.h wycheproof_vectors.h
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa.c test_wycheproof.c
+
+test_wycheproof_fast: tv_ecdsa_fast.S test_wycheproof_asm.c test_wycheproof.c wycheproof_vectors.h
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_fast.S test_wycheproof_asm.c
+
+test_wycheproof_bc: tv_ecdsa_bc.S test_wycheproof_asm.c test_wycheproof.c wycheproof_vectors.h
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_bc.S test_wycheproof_asm.c
+
+test_wycheproof_asm: tv_ecdsa_amd64.S test_wycheproof_asm.c test_wycheproof.c wycheproof_vectors.h
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_amd64.S test_wycheproof_asm.c
+
+wp: test_wycheproof
+	./test_wycheproof
+
+wp-fast: test_wycheproof_fast
+	./test_wycheproof_fast
+
+wp-bc: test_wycheproof_bc
+	./test_wycheproof_bc
+
+wp-asm: test_wycheproof_asm
+	./test_wycheproof_asm
+
+wp-all: wp wp-asm wp-bc wp-fast
+
 # Cycle-count benchmark.  Links against any .S exporting the _asm symbol.
 bench_bc: tv_ecdsa_bc.S bench.c
 	$(CC) -O2 -o $@ $^
@@ -126,6 +164,7 @@ size-thumb: tv_ecdsa_thumb.o
 
 clean:
 	rm -f test_ecdsa test_ecdsa_asm test_ecdsa_bc test_ecdsa_fast \
+	      test_wycheproof test_wycheproof_asm test_wycheproof_bc test_wycheproof_fast \
 	      bench_bc bench_fast \
 	      tv_ecdsa_size.o tv_ecdsa_thumb.o tv_ecdsa_amd64.o \
 	      tv_ecdsa_bc.o tv_ecdsa_fast.o
