@@ -4,8 +4,8 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx).
  *
- * 1622 bytes, ~1.21M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~2.16M cycles — so −90 bytes AND −44% cycles.
+ * 1604 bytes, ~1.21M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~2.16M cycles — so −108 bytes AND −44% cycles.
  *
  * Hot-path changes:
  *
@@ -47,6 +47,11 @@
  *   - pt_add_acc: fe_iszero preserves rdi, so compute the next
  *     address from it with disp8/sub-imm8 instead of disp32 lea.  −6.
  *   - pt_mul counter in ebp (no REX) instead of r13d.  −2.
+ *   - r14=rsp in verify: r14 as base drops rsp's SIB byte.  −2.
+ *   - fe_from_be advances rdi; slot16 derived as [rdi+64] after it
+ *     instead of 7-byte disp32 from r14.  −3.
+ *   - fe_inv_m: push rdi (1 byte) instead of mov rsi,rdi (3).  −3.
+ *   - build_one: zero 4 qwords then inc DWORD[rdi-32].  −2.
  *
  * Security and validation are unchanged from tv_ecdsa_bc.S.
  * ====================================================================== */
@@ -262,13 +267,18 @@ fe_inv_m:
 	xor	ebx, ebx
 	mov	bl, 254
 .Le:	mov	rdi, r12
-	mov	rsi, rdi
-	mov	rdx, rdi
+	/* push rdi = 1 byte; so push/push/pop/pop = 4 bytes vs two
+	 * 3-byte movs.  Stack balances before the call. */
+	push	rdi
+	push	rdi
+	pop	rdx
+	pop	rsi
 	call	.Lfm
 	bt	QWORD PTR [rsp], rbx
 	jnc	.Lnx
 	mov	rdi, r12
-	mov	rsi, rdi
+	push	rdi
+	pop	rsi
 	mov	rdx, r13
 	call	.Lfm
 .Lnx:	dec	ebx
@@ -414,13 +424,11 @@ cpy3:
 	ret
 
 build_one:
-	push	1
-	pop	rax
-	stosq
-	xor	eax, eax
-	push	3
+	push	4
 	pop	rcx
+	xor	eax, eax
 	rep	stosq
+	inc	DWORD PTR [rdi-32]
 	ret
 
 /* cond_sub_n — r12=&cN. fe_geq preserves rdi. */
@@ -474,9 +482,9 @@ pt_add_acc:
 pt_mul:
 	push	rbp
 	push	rbx
-	push	r13
+	push	r15
 	mov	rbx, rdi
-	mov	r13, rsi            /* scalar ptr (both rbp/r13 need disp8=0, same) */
+	mov	r15, rsi            /* scalar ptr; r15 avoids r13's disp8=0 quirk */
 
 	mov	rdi, rbx
 	xor	eax, eax
@@ -488,14 +496,14 @@ pt_mul:
 .Lpm:	lea	rdi, [rip+bc_dbl]
 	mov	rsi, rbx
 	call	bc_run
-	bt	QWORD PTR [r13], rbp
+	bt	QWORD PTR [r15], rbp    /* 4 bytes; [r13] would be 5 */
 	jnc	1f
 	mov	rdi, rbx
 	call	pt_add_acc
 1:	dec	ebp                 /* −1 byte */
 	jns	.Lpm
 
-	pop	r13
+	pop	r15
 	pop	rbx
 	pop	rbp
 	ret
@@ -514,9 +522,11 @@ tv_ecdsa_p256_verify_asm:
 	push	r14
 	sub	rsp, 616
 
+	/* r14 = rsp for the whole of verify (every callee saves r14).
+	 * r14 as base avoids rsp's SIB byte: −1 each on the rbp/r13 leas. */
 	mov	r14, rsp
-	lea	rbp, [rsp+64]
-	lea	r13, [rsp+12*32]
+	lea	rbp, [r14+64]
+	lea	r13, [r14+12*32]
 
 	mov	r12, rdi
 	mov	rbx, r8
@@ -535,7 +545,7 @@ tv_ecdsa_p256_verify_asm:
 	jmp	.Lepi5
 1:
 	mov	rsi, r12
-	lea	rdi, [r13+0]
+	mov	rdi, r13
 	call	fe_from_be
 	lea	rsi, [r12+32]
 	lea	rdi, [r13+32]
@@ -544,7 +554,7 @@ tv_ecdsa_p256_verify_asm:
 	cmp	BYTE PTR [r8], 0x04
 	jne	.Lf
 	lea	rsi, [r8+1]
-	lea	rdi, [rbp-64]
+	mov	rdi, r14            /* rbp-64 = rsp = r14; mov is −1 vs lea */
 	call	fe_from_be
 	lea	rsi, [r8+33]
 	lea	rdi, [rbp-32]
@@ -553,9 +563,7 @@ tv_ecdsa_p256_verify_asm:
 
 	lea	rdi, [r13-128]       /* slot 8 via r13: disp8 */
 	mov	rsi, r12
-	push	12
-	pop	rcx
-	rep	movsq
+	call	cpy3                /* same side-effects as inline, −1 byte */
 	lea	rdi, [r13+96]
 	call	build_one
 
@@ -564,7 +572,7 @@ tv_ecdsa_p256_verify_asm:
 	test	eax, eax
 	jnz	.Lf
 
-	lea	rdi, [rbp-64]
+	mov	rdi, r14            /* rbp-64 = r14 */
 	lea	rsi, [r13+32]
 	mov	rdx, r12
 	mov	rcx, [r12-8]
@@ -573,9 +581,11 @@ tv_ecdsa_p256_verify_asm:
 	mov	rsi, rbx
 	lea	rdi, [r13+32]
 	call	fe_from_be
+	/* fe_from_be's 4×stosq left rdi = slot14 = r13+64.  slot16 is +64
+	 * from there: disp8.  Replaces a 7-byte disp32 lea from r14. */
+	lea	rbx, [rdi+64]
 	lea	rdi, [r13+32]
 	call	cond_sub_n
-	lea	rbx, [r14+512]
 
 	lea	rdi, [rip+bc_v2]
 	call	bcrun_r14
@@ -602,14 +612,14 @@ tv_ecdsa_p256_verify_asm:
 	mov	rdi, r14
 	call	pt_add_acc
 
-	lea	rdi, [rbp+0]
+	mov	rdi, rbp
 	call	fe_iszero           /* ZF ⇔ R1.z == 0 (R at ∞) */
 	jz	.Lf
 
 	lea	rbx, [r14+96]
 
 	mov	rdi, rbx
-	lea	rsi, [rbp+0]
+	mov	rsi, rbp
 	lea	rdx, [r12+32]
 	push	1
 	pop	rcx
@@ -622,7 +632,7 @@ tv_ecdsa_p256_verify_asm:
 	call	cond_sub_n
 	mov	rdi, rbx
 	mov	rsi, rdi
-	lea	rdx, [r13+0]
+	mov	rdx, r13
 	call	fe_sub_raw
 	mov	rdi, rbx
 	call	fe_iszero
