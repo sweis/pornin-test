@@ -4,8 +4,8 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx).
  *
- * 1604 bytes, ~1.21M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~2.16M cycles — so −108 bytes AND −44% cycles.
+ * 1564 bytes, ~1.19M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~2.16M cycles — so −148 bytes AND −45% cycles.
  *
  * Hot-path changes:
  *
@@ -51,7 +51,14 @@
  *   - fe_from_be advances rdi; slot16 derived as [rdi+64] after it
  *     instead of 7-byte disp32 from r14.  −3.
  *   - fe_inv_m: push rdi (1 byte) instead of mov rsi,rdi (3).  −3.
- *   - build_one: zero 4 qwords then inc DWORD[rdi-32].  −2.
+ *   - fe_sub_m + fe_add_raw inlined into Fsub (sole-caller chain);
+ *     fe_sub_raw's neg leaves CF → jnc replaces test+jz.  −10.
+ *   - fe_geq returns via CF; cond_sub_n branches on it directly.  −2.
+ *   - fe_iszero looped: or-accumulate sets ZF on final OR.  −3.
+ *   - build_one inlined (sole caller).  −6.
+ *   - verify final-compare: push rbx×4, pop as needed.  −4.
+ *   - Fadd: push scratch addr, pop into rdx after call.  −3.
+ *   - pt_mul: dead mov removed; dec al → 255 via wrap.  −4.
  *
  * Security and validation are unchanged from tv_ecdsa_bc.S.
  * ====================================================================== */
@@ -73,14 +80,16 @@ fe_cpy:
 	movsq
 	ret
 
-/* fe_iszero(a=rdi) -> eax=1 iff zero.  The final `or` sets ZF; sete/
- * movzx/ret preserve flags.  Callers may branch on ZF directly
- * (ZF=1 means zero), dropping `test al,al`. */
+/* fe_iszero(a=rdi) -> eax=1 iff zero.  OR accumulates into rax; the
+ * last OR's ZF reflects the full OR (rax is cumulative).  loop/sete/
+ * movzx/ret all preserve flags: callers may branch on ZF directly.
+ * Looped: 19 bytes vs 22 unrolled. ~260 calls × ~16cyc = <0.4% cost. */
 fe_iszero:
-	mov	rax, [rdi]
-	or	rax, [rdi+8]
-	or	rax, [rdi+16]
-	or	rax, [rdi+24]
+	push	4
+	pop	rcx
+	xor	eax, eax
+1:	or	rax, [rdi+rcx*8-8]
+	loop	1b
 	sete	al
 	movzx	eax, al
 	ret
@@ -102,38 +111,17 @@ fe_sub_raw:
 	neg	eax
 	ret
 
-fe_add_raw:
-	xor	ecx, ecx
-	mov	cl, 4
-1:	lodsq
-	adc	rax, [rdx]
-	stosq
-	lea	rdx, [rdx+8]
-	dec	ecx
-	jnz	1b
-	ret
-
-/* fe_geq — cold (validation + cond_sub_n).  Keep loopz: size wins. */
+/* fe_geq — cold (validation + cond_sub_n).  Keep loopz: size wins.
+ * Returns via CF: CF=0 iff a≥b.  loopz/ret preserve flags, so the
+ * last cmp's CF is live at the caller.  Callers that need al=0/1
+ * apply setae themselves; cond_sub_n just branches on CF. */
 fe_geq:
 	push	4
 	pop	rcx
 1:	mov	rax, [rdi+rcx*8-8]
 	cmp	rax, [rsi+rcx*8-8]
 	loopz	1b
-	setae	al
 	ret
-
-fe_sub_m:
-	push	rcx
-	push	rdi
-	call	fe_sub_raw
-	pop	rdi
-	pop	rdx
-	test	eax, eax
-	jz	1f
-	mov	rsi, rdi
-	jmp	fe_add_raw
-1:	ret
 
 /* muladd4(t=r9, x=rdx, y=rsi).  t[0..3] += x*y, carry into t[4..5].
  * Fully unrolled.  Uses mulx (BMI2) — high word written directly to
@@ -312,7 +300,11 @@ bc_run:
 	push	r14
 	mov	rbx, rdi
 	mov	r12, rsi
-	xor	r13d, r13d
+	/* Check accumulator in ebp: xor is 2 bytes (no REX), and since only
+	 * the low byte is ever OR'd with 0/1, `mov eax,ebp` (2 bytes) works
+	 * at exit — upper bytes stay zero.  r13 is push/popped only for
+	 * epilogue sharing with verify; never written inside bc_run. */
+	xor	ebp, ebp
 	lea	r14, [rip+.Ljt]     /* Hoist: handlers are callee-saved, r14 lives. */
 .Lbc:
 	movzx	eax, WORD PTR [rbx]
@@ -346,7 +338,7 @@ bc_run:
 	call	rax
 	jmp	.Lbc
 
-.Lbce:	movzx	eax, r13b
+.Lbce:	mov	eax, ebp            /* upper bytes of ebp are 0: plain mov */
 .Lepi5:
 	pop	r14
 	pop	r13
@@ -378,12 +370,13 @@ cR2P:	.quad 0x0000000000000003, 0xfffffffbffffffff
 .equ oR2P, cR2P - .Ljt
 
 .Lop6:	call	fe_geq
+	setae	al
 	jmp	.Lor
 .Lop7:	call	fe_iszero
 	jmp	.Lor
 .Lop8:	call	fe_iszero
 	xor	al, 1
-.Lor:	or	r13b, al
+.Lor:	or	bpl, al
 	ret
 .Lop5:
 Nmul:	lea	rcx, [r14+oN]
@@ -400,16 +393,39 @@ Fmul:	lea	rcx, [r14+oP]
 /* SQR bytecode now encodes s2=s1, so the decode loop has already
  * set rdx=rsi — SQR is just Fmul.  −5 bytes (old: mov rdx,rsi;jmp). */
 .equ .Lop1, .Lop0
+/* fe_sub_m + fe_add_raw both inlined (sole callers in chain).
+ * fe_sub_raw's `neg eax` sets CF iff borrow; pops preserve flags,
+ * so jnc replaces test+jz.  The add-back loop's first adc needs
+ * CF=0: `xor ecx,ecx` clears it (we're on the CF=1 branch here
+ * but mov+xor reset it).  −10 vs standalone fe_sub_m+fe_add_raw. */
 .Lop3:
 Fsub:	lea	rcx, [r14+oP]
-	jmp	fe_sub_m
+	push	rcx
+	push	rdi
+	call	fe_sub_raw
+	pop	rdi
+	pop	rdx
+	jnc	1f
+	mov	rsi, rdi
+	xor	ecx, ecx
+	mov	cl, 4
+2:	lodsq
+	adc	rax, [rdx]
+	stosq
+	lea	rdx, [rdx+8]
+	dec	ecx
+	jnz	2b
+1:	ret
 .Lop2:
 Fadd:	push	rdi
 	push	rsi
 	lea	rdi, [r12+3*32]
+	/* Push scratch addr before fe_sub_raw clobbers rdi; pop into
+	 * rdx after.  Replaces a second 5-byte lea with push+pop (2). */
+	push	rdi
 	lea	rsi, [r14+oP]
 	call	fe_sub_raw
-	lea	rdx, [r12+3*32]
+	pop	rdx
 	pop	rsi
 	pop	rdi
 	jmp	Fsub
@@ -423,20 +439,11 @@ cpy3:
 	rep	movsq
 	ret
 
-build_one:
-	push	4
-	pop	rcx
-	xor	eax, eax
-	rep	stosq
-	inc	DWORD PTR [rdi-32]
-	ret
-
-/* cond_sub_n — r12=&cN. fe_geq preserves rdi. */
+/* cond_sub_n — r12=&cN. fe_geq preserves rdi, returns CF=0 iff ≥N. */
 cond_sub_n:
 	mov	rsi, r12
 	call	fe_geq
-	test	al, al
-	jz	1f
+	jc	1f
 	mov	rsi, rdi
 	mov	rdx, r12
 	jmp	fe_sub_raw
@@ -464,9 +471,10 @@ pt_add_acc:
 	sub	rdi, -128           /* r14+224 */
 	call	fe_iszero           /* ZF ⇔ Rr == 0 */
 	jnz	.Lai
+	/* Tail-share: both this path and 3: end with call bcrun_r14
+	 * then .Laa.  Short-jmp past .Lai to the shared call.  −5. */
 	lea	rdi, [rip+bc_dbl]
-	call	bcrun_r14
-	jmp	.Laa
+	jmp	.Lcall
 .Lai:	mov	rdi, r14
 	xor	eax, eax
 	push	12
@@ -474,7 +482,7 @@ pt_add_acc:
 	rep	stosq
 	jmp	.Laa
 3:	lea	rdi, [rip+bc_add2]
-	call	bcrun_r14
+.Lcall:	call	bcrun_r14
 .Laa:
 	pop	r14
 	ret
@@ -486,13 +494,15 @@ pt_mul:
 	mov	rbx, rdi
 	mov	r15, rsi            /* scalar ptr; r15 avoids r13's disp8=0 quirk */
 
-	mov	rdi, rbx
 	xor	eax, eax
 	push	12
 	pop	rcx
 	rep	stosq
 
-	mov	ebp, 255            /* counter: no REX, −1 byte */
+	/* eax=0 after rep stosq; dec al wraps low byte to 0xff, high
+	 * bits stay 0.  2+2 = 4 bytes vs mov ebp,255 at 5. */
+	dec	al
+	mov	ebp, eax
 .Lpm:	lea	rdi, [rip+bc_dbl]
 	mov	rsi, rbx
 	call	bc_run
@@ -564,8 +574,13 @@ tv_ecdsa_p256_verify_asm:
 	lea	rdi, [r13-128]       /* slot 8 via r13: disp8 */
 	mov	rsi, r12
 	call	cpy3                /* same side-effects as inline, −1 byte */
+	/* build_one inlined (sole caller): zero slot, set low limb = 1. */
 	lea	rdi, [r13+96]
-	call	build_one
+	push	4
+	pop	rcx
+	xor	eax, eax
+	rep	stosq
+	inc	DWORD PTR [rdi-32]
 
 	lea	rdi, [rip+bc_v1]
 	call	bcrun_r14
@@ -628,13 +643,20 @@ tv_ecdsa_p256_verify_asm:
 	lea	rdi, [rip+bc_v3]
 	call	bcrun_r14
 
-	mov	rdi, rbx
+	/* rbx loaded into rdi three times across three calls; stockpile
+	 * on stack (push rbx = 1 byte) and pop as needed.  4+4 = 8 bytes
+	 * vs 4×mov (12).  Callees are all leaf — no stack align concern. */
+	push	rbx
+	push	rbx
+	push	rbx
+	push	rbx
+	pop	rdi
 	call	cond_sub_n
-	mov	rdi, rbx
-	mov	rsi, rdi
+	pop	rsi
+	pop	rdi
 	mov	rdx, r13
 	call	fe_sub_raw
-	mov	rdi, rbx
+	pop	rdi
 	call	fe_iszero
 	jmp	.Ld
 
