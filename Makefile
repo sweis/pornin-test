@@ -83,6 +83,38 @@ size-bc: tv_ecdsa_bc.o
 	@echo "=== undefined symbols ==="
 	@nm $< | grep ' U ' || echo "NONE — fully self-contained"
 
+# Speed+size optimized bytecode variant (BMI2 mulx).
+tv_ecdsa_fast.o: tv_ecdsa_fast.S
+	$(CC) -c -o $@ $<
+
+test_ecdsa_fast: tv_ecdsa_fast.S test_ecdsa_asm.c test_ecdsa.c
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_fast.S test_ecdsa_asm.c
+
+test-fast: test_ecdsa_fast
+	./test_ecdsa_fast
+
+size-fast: tv_ecdsa_fast.o
+	@echo "=== size of tv_ecdsa_fast.S (bytecode + mulx unrolled) ==="
+	@size $<
+	@echo ""
+	@size -A $< | grep -E '^\.(text|rodata|data|bss)' || true
+	@echo ""
+	@echo "=== undefined symbols ==="
+	@nm $< | grep ' U ' || echo "NONE — fully self-contained"
+
+# Cycle-count benchmark.  Links against any .S exporting the _asm symbol.
+bench_bc: tv_ecdsa_bc.S bench.c
+	$(CC) -O2 -o $@ $^
+
+bench_fast: tv_ecdsa_fast.S bench.c
+	$(CC) -O2 -o $@ $^
+
+bench: bench_bc bench_fast
+	@echo "=== tv_ecdsa_bc.S (baseline) ==="
+	@for i in 1 2 3 4 5; do ./bench_bc; done | sort -t: -k2 -n | head -1
+	@echo "=== tv_ecdsa_fast.S ==="
+	@for i in 1 2 3 4 5; do ./bench_fast; done | sort -t: -k2 -n | head -1
+
 # Optional: Thumb-2 build for a realistic embedded target (requires
 # arm-none-eabi-gcc). Not built by default.
 tv_ecdsa_thumb.o: tv_ecdsa.c tv_ecdsa.h
@@ -93,5 +125,7 @@ size-thumb: tv_ecdsa_thumb.o
 	@arm-none-eabi-size $<
 
 clean:
-	rm -f test_ecdsa test_ecdsa_asm test_ecdsa_bc \
-	      tv_ecdsa_size.o tv_ecdsa_thumb.o tv_ecdsa_amd64.o tv_ecdsa_bc.o
+	rm -f test_ecdsa test_ecdsa_asm test_ecdsa_bc test_ecdsa_fast \
+	      bench_bc bench_fast \
+	      tv_ecdsa_size.o tv_ecdsa_thumb.o tv_ecdsa_amd64.o \
+	      tv_ecdsa_bc.o tv_ecdsa_fast.o
