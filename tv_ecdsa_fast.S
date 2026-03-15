@@ -375,8 +375,7 @@ fe_from_be_next:
 fe_from_be:
 	push	4
 	pop	rcx
-1:	mov	rax, [rsi+rcx*8-8]
-	bswap	rax
+1:	movbe	rax, [rsi+rcx*8-8]  /* load+bswap; 7 B vs mov(5)+bswap(3) */
 	stosq
 	loop	1b
 	ret
