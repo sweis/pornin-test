@@ -4,8 +4,8 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx) and MOVBE.
  *
- * 1413 bytes, ~0.91M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~1.89M cycles — so −299 bytes AND −52% cycles.
+ * 1411 bytes, ~0.90M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~1.88M cycles — so −301 bytes AND −52% cycles.
  *
  * Hot-path changes:
  *
@@ -105,6 +105,8 @@
  *   - cGXM in .text right before .Ljt: [r12-80] (5 B, disp8 but
  *     r12 forces SIB) replaces 7-B rip-relative.  Handler offsets
  *     unaffected (cGXM is on the near side of .Ljt).  −2.
+ *   - hv_len range check (32..64) merged: sub r9,32 wraps low
+ *     values to huge, so cmp;jbe catches both ends.  −2.
  *
  * Security and validation are unchanged from tv_ecdsa_bc.S.
  * ====================================================================== */
