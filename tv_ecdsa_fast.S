@@ -256,7 +256,6 @@ fe_mul_m:
 	push	r13
 	push	r14
 	push	r15
-	sub	rsp, 72             /* 9 qwords for t; 40+72 = 112 aligned */
 
 	mov	r12, rdi            /* r */
 	mov	r10, rdx            /* b — stays in reg */
@@ -264,15 +263,14 @@ fe_mul_m:
 	mov	r14, r8             /* m0i */
 	mov	r15, rsi            /* a */
 
-	/* Zero t[0..8].  dec-loop — `rep stosq` costs ~140cyc/call here
-	 * (measured), ×~1000 ≈ +140K.  Not worth 3 bytes. */
+	/* Allocate + zero t[0..8] in one go: push rax×9 decrements rsp
+	 * by 72 and writes zeros.  11 B vs 18 B for sub + dec-loop.
+	 * 4 reg-pushes + 9 value-pushes = 104 B below entry rsp; entry
+	 * rsp%16=8 → final %16=0, same alignment as before. */
 	xor	eax, eax
-	push	9
-	pop	rcx
-	mov	rdi, rsp
-1:	stosq
-	dec	ecx
-	jnz	1b
+	.rept 9
+	push	rax
+	.endr
 
 	/* r11 counts −32→0; `add r11,8; jnz` drops the cmp.  a[i] is
 	 * then [r15+r11+32], disp8 (+1 byte), but net −2. */
