@@ -345,7 +345,11 @@ fe_inv_m:
 	push	r14
 	push	r15
 	push	rbx
-	sub	rsp, 32            /* 5×8 + 8(ret) + 32 = 80 aligned */
+	/* enter 32,0 pushes rbp too (−3 B at epilogue via leave; +0 B
+	 * here — 4 B vs sub rsp,32's 4 B).  rbp is never read in the
+	 * body and fe_mul_m/fe_cpy leave it alone, so the frame pointer
+	 * survives to leave.  Exponent buffer still at [rsp]. */
+	enter	32, 0
 
 	mov	r12, rdi
 	mov	r13, rsi
@@ -385,7 +389,7 @@ fe_inv_m:
 .Lnx:	dec	ebx
 	jns	.Le
 
-	add	rsp, 32
+	leave
 	pop	rbx
 	jmp	.Lepi4
 
