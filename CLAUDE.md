@@ -53,7 +53,7 @@ int tv_ecdsa_p256_verify(const void *sig, size_t sig_len,
 
 # Implementation notes (current state)
 
-**Best result:** `tv_ecdsa_fast.S` — 1406 bytes, ~0.90M cycles on
+**Best result:** `tv_ecdsa_fast.S` — 1405 bytes, ~0.90M cycles on
 Skylake-class Xeon (fast/bc ratio ~0.48). BMI2+MOVBE required. See
 README.md for technique writeups and BENCHMARK.md for cycle attribution.
 

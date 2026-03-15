@@ -4,8 +4,8 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx) and MOVBE.
  *
- * 1406 bytes, ~0.90M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~1.88M cycles — so −306 bytes AND −52% cycles.
+ * 1405 bytes, ~0.90M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~1.88M cycles — so −307 bytes AND −52% cycles.
  *
  * Hot-path changes:
  *
@@ -109,6 +109,8 @@
  *     values to huge, so cmp;jbe catches both ends.  −2.
  *   - pt_add_acc moved right before bcrun_r14: the add2 path falls
  *     through (no jmp), the dbl path's jmp is rel8.  −5.
+ *   - pt_mul moved right after bc_run's epilogue: its pop rbx;pop
+ *     rbp;ret (3 B) becomes a rel8 jmp into .Lepi5's tail (2 B).  −1.
  *
  * Security and validation are unchanged from tv_ecdsa_bc.S.
  * ====================================================================== */
@@ -524,9 +526,37 @@ bc_run:
 	pop	r14
 	pop	r13
 	pop	r12
+.Lepi2:
 	pop	rbx
 	pop	rbp
 	ret
+
+/* pt_mul placed here so its epilogue is a rel8 backward jmp into
+ * .Lepi2 (bc_run's pop rbx;pop rbp;ret).  2 B jmp vs 3 B inline.
+ * Every other reference is a call (always 5 B, layout-agnostic). */
+pt_mul:
+	push	rbp
+	push	rbx
+	mov	rbx, rsi            /* scalar ptr; push/pop rbx = 1B each (r15: 2B) */
+
+	/* .Lai inside pt_add_acc is exactly `mov rdi,r14; xor eax;
+	 * push 12; pop rcx; rep stosq; ret` — zero the accumulator.
+	 * Call it.  Returns with eax=0, which the dec al below needs. */
+	call	.Lai
+
+	/* eax=0 after rep stosq; dec al wraps low byte to 0xff, high
+	 * bits stay 0.  xchg with eax is 1 byte; eax dead after. */
+	dec	al
+	xchg	ebp, eax
+.Lpm:	xor	edi, edi            /* obc_dbl = 0 */
+	call	bcrun_r14           /* bcrun_r14 sets rsi = r14 for us */
+	bt	QWORD PTR [rbx], rbp    /* 4 bytes (REX.W only); rbx has no quirks */
+	jnc	1f
+	call	pt_add_acc
+1:	dec	ebp                 /* −1 byte */
+	jns	.Lpm
+
+	jmp	.Lepi2              /* shared pop rbx;pop rbp;ret */
 
 /* G.x, G.y in Montgomery form.  Placed right before .Ljt so verify
  * can address it as [r12-80] (r12=&cN, cN=.Ljt+16, cGXM=.Ljt-64).
@@ -651,32 +681,6 @@ Fadd:	push	rdi
 	pop	rsi
 	pop	rdi
 	jmp	.Lop3
-
-pt_mul:
-	push	rbp
-	push	rbx
-	mov	rbx, rsi            /* scalar ptr; push/pop rbx = 1B each (r15: 2B) */
-
-	/* .Lai inside pt_add_acc is exactly `mov rdi,r14; xor eax;
-	 * push 12; pop rcx; rep stosq; ret` — zero the accumulator.
-	 * Call it.  Returns with eax=0, which the dec al below needs. */
-	call	.Lai
-
-	/* eax=0 after rep stosq; dec al wraps low byte to 0xff, high
-	 * bits stay 0.  xchg with eax is 1 byte; eax dead after. */
-	dec	al
-	xchg	ebp, eax
-.Lpm:	xor	edi, edi            /* obc_dbl = 0 */
-	call	bcrun_r14           /* bcrun_r14 sets rsi = r14 for us */
-	bt	QWORD PTR [rbx], rbp    /* 4 bytes (REX.W only); rbx has no quirks */
-	jnc	1f
-	call	pt_add_acc
-1:	dec	ebp                 /* −1 byte */
-	jns	.Lpm
-
-	pop	rbx
-	pop	rbp
-	ret
 
 /* ======================================================================
  * Public entry point.
