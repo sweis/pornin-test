@@ -152,11 +152,6 @@ bc_v1:
 .equ obc_add2, bc_add2 - bc_dbl
 .equ obc_v1,   bc_v1   - bc_dbl
 
-cGXM:	.quad 0x79e730d418a9143c, 0x75ba95fc5fedb601
-	.quad 0x79fb732b77622510, 0x18905f76a53755c6
-cGYM:	.quad 0xddf25357ce95560a, 0x8b4ab8e4ba19e45c
-	.quad 0xd2e88688dd21f325, 0x8571ff1825885d85
-
 /* ---------------------------------------------------------------------- */
 	.text
 
@@ -459,6 +454,15 @@ bc_run:
 	pop	rbp
 	ret
 
+/* G.x, G.y in Montgomery form.  Placed right before .Ljt so verify
+ * can address it as [r12-80] (r12=&cN, cN=.Ljt+16, cGXM=.Ljt-64).
+ * 5-byte lea (r12 forces SIB) vs 7-byte rip-relative.  Handler
+ * offsets from .Ljt are unaffected since this is on the near side. */
+cGXM:	.quad 0x79e730d418a9143c, 0x75ba95fc5fedb601
+	.quad 0x79fb732b77622510, 0x18905f76a53755c6
+cGYM:	.quad 0xddf25357ce95560a, 0x8b4ab8e4ba19e45c
+	.quad 0xd2e88688dd21f325, 0x8571ff1825885d85
+
 /* .Ljt + constants in one block so handlers can address constants via
  * [r14+disp8] instead of 7-byte rip-relative leas.  r14 = .Ljt inside
  * bc_run; handlers run before fe_mul_m's push r14 overwrites it.
@@ -487,6 +491,9 @@ cR2P:	.quad 0x0000000000000003, 0xfffffffbffffffff
 .equ oP,   cP   - .Ljt
 .if oP - oP_early
 .error "oP moved — update oP_early in bc_run"
+.endif
+.if (cN - cGXM) - 80
+.error "cGXM-cN offset changed — update lea rsi,[r12-80] in verify"
 .endif
 
 /* fe_geq inlined (sole caller after cond_sub_n was rewritten as a
@@ -767,7 +774,7 @@ tv_ecdsa_p256_verify_asm:
 
 	lea	rdi, [rbp+64]        /* slot 4 via rbp: disp8 */
 	push	rdi                 /* save for cpy3 after pt_mul */
-	lea	rsi, [rip+cGXM]
+	lea	rsi, [r12-80]        /* cGXM: r12=&cN=.Ljt+16, cGXM=.Ljt-64 */
 	push	8
 	pop	rcx
 	rep	movsq
