@@ -480,14 +480,18 @@ bc_run:
 	push	rbp
 	push	rbx
 	push	r12
-	push	r13
 	push	r14
 	mov	rbx, rdi
 	mov	r12, rsi
 	/* Check accumulator in ebp: xor is 2 bytes (no REX), and since only
 	 * the low byte is ever OR'd with 0/1, `mov eax,ebp` (2 bytes) works
-	 * at exit — upper bytes stay zero.  r13 is push/popped only for
-	 * epilogue sharing with verify; never written inside bc_run. */
+	 * at exit — upper bytes stay zero.
+	 *
+	 * r13 is never read or written here (the decoder uses r12/r14,
+	 * handlers either don't touch r13 or push it themselves —
+	 * fe_mul_m does).  It was push/popped purely so verify could
+	 * share .Lepi5; now that verify has its own leave-based
+	 * epilogue, the push/pop is dead.  −4 B. */
 	xor	ebp, ebp
 	lea	r14, [rip+.Ljt]     /* Hoist: handlers are callee-saved, r14 lives. */
 .Lbc:
@@ -534,9 +538,7 @@ bc_run:
  * so the bc_v1 caller branches on CF directly — other callers don't
  * care.  ebp is about to be popped anyway.  Same 2 bytes as mov. */
 .Lbce:	neg	ebp
-.Lepi5:
 	pop	r14
-	pop	r13
 	pop	r12
 .Lepi2:
 	pop	rbx
