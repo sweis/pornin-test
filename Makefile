@@ -1,10 +1,18 @@
 # Build for ECDSA/P-256 verification (size-optimised).
 #
-# Targets:
-#   make           - build test binary (default)
-#   make test      - build and run tests
-#   make size      - build size-optimised object and report code size
-#   make clean     - remove build artifacts
+# Per-implementation targets (each has size-X / test-X / wp-X where
+# applicable):
+#   -fast   tv_ecdsa_fast.S   1427 B  BMI2+MOVBE  (best result)
+#   -bc     tv_ecdsa_bc.S     1712 B  portable x86-64
+#   -asm    tv_ecdsa_amd64.S  2875 B  conventional hand-asm
+#   (none)  tv_ecdsa.c        3076 B  portable C, 32-bit limbs
+#   -small  tv_ecdsa_small.c  ~3027 B ARM-tuned C (4-arg calls)
+#   -thumb  tv_ecdsa.c        2082 B  Cortex-M4 (needs arm-none-eabi-gcc)
+#
+# Other:
+#   make bench   - cycle-count fast.S vs bc.S
+#   make wp-all  - run Wycheproof suite on all four x86-64 impls
+#   make clean   - remove build artifacts
 
 CC      ?= cc
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wshadow -Wconversion -O2
@@ -22,7 +30,8 @@ SIZE_CFLAGS = -std=c99 -Os -ffreestanding -fno-strict-aliasing \
               -fno-asynchronous-unwind-tables -fno-ident \
               -fno-stack-protector -fno-tree-loop-distribute-patterns
 
-.PHONY: all test test-asm size size-asm clean wp wp-fast wp-bc wp-asm wp-all
+.PHONY: all test test-asm test-small size size-asm size-small clean \
+        wp wp-fast wp-bc wp-asm wp-all
 
 all: test_ecdsa test_ecdsa_asm
 
@@ -50,6 +59,21 @@ size: tv_ecdsa_size.o
 	@echo ""
 	@echo "=== detailed section sizes ==="
 	@size -A $< | grep -E '^\.(text|rodata|data|bss)' || true
+
+# ARM-tuned C variant: modulus+m0i bundled into a struct so every hot
+# call fits in 4 args (AAPCS r0-r3 -> sibling-call optimisation works).
+tv_ecdsa_small.o: tv_ecdsa_small.c tv_ecdsa.h
+	$(CC) $(SIZE_CFLAGS) -c -o $@ tv_ecdsa_small.c
+
+test_ecdsa_small: tv_ecdsa_small.c test_ecdsa.c tv_ecdsa.h
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_small.c test_ecdsa.c
+
+test-small: test_ecdsa_small
+	./test_ecdsa_small
+
+size-small: tv_ecdsa_small.o
+	@echo "=== size (-Os) of tv_ecdsa_small.c ==="
+	@size $<
 
 # Assemble the pure-asm version and report its size.
 tv_ecdsa_amd64.o: tv_ecdsa_amd64.S
@@ -166,5 +190,6 @@ clean:
 	rm -f test_ecdsa test_ecdsa_asm test_ecdsa_bc test_ecdsa_fast \
 	      test_wycheproof test_wycheproof_asm test_wycheproof_bc test_wycheproof_fast \
 	      bench_bc bench_fast \
-	      tv_ecdsa_size.o tv_ecdsa_thumb.o tv_ecdsa_amd64.o \
+	      test_ecdsa_small \
+	      tv_ecdsa_size.o tv_ecdsa_small.o tv_ecdsa_thumb.o tv_ecdsa_amd64.o \
 	      tv_ecdsa_bc.o tv_ecdsa_fast.o
