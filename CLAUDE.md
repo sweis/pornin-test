@@ -60,11 +60,12 @@ README.md for technique writeups and BENCHMARK.md for cycle attribution.
 ## Workflow
 
 ```
-make size-fast test-fast bench    # edit-build-test loop
+make size-fast test-fast wp-fast bench    # edit-build-test loop
 ```
 
-Test suite is 27 vectors + 6 length checks. Must pass 33/33 before any
-commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
+Full test gate is 33 hand-picked vectors + 574 Wycheproof = 607 tests.
+Must pass 607/607 before any commit. ASAN/UBSAN via the C harness in
+test_ecdsa.c.
 
 ## Invariants that silently cost bytes if broken
 
@@ -139,7 +140,6 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
 | fe_mul_m takes r12/r13/r14 directly (drop movs) | Fmul/Nmul must set r12/r13/r14 **before** the tail-jump, which is before fe_mul_m's `push` — so bc_run's loop invariants (r12=slot_base, r14=.Ljt) are destroyed between handler calls. fe_mul_m's push/pop restores the *clobbered* values, not bc_run's. Segfault on second dispatch. −12B estimate was a mirage. |
 | Drop `neg eax` from fe_sub_raw | (borrow=1,carry=1) is reachable under CIOS (carry=1 ⇒ t≥2^256 ⇒ t_low<m ⇒ borrow=1). With −1/0 instead of 1/0, `sub eax,carry` gives −2≠0 for (1,1); the old 1−1=0 correctly takes jz to skip the copy (r already holds t−m). |
 | Indexed fe_sub_raw (no pointer advance) | Down-count `[rsi+rcx*8-8]` with `loop` processes high limb first — borrows propagate low-to-high, so this computes the wrong result. Up-count needs inc+cmp+jne (7 B > 4 B for lea+dec+jnz). |
-| 32-bit length compares (`cmp esi` vs `cmp rsi`) | −2 B but accepts sig_len = 4GB+64 as valid. Behaviorally harmless (reads 64 bytes, verification fails) but technically violates the API contract. Skipped out of caution. |
 
 ## x86-64 encoding facts that mattered
 

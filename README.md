@@ -12,35 +12,64 @@ memcpy/memmove/memset/libc, nothing pulled in at link time.
 ## Build
 
 ```
-make size-fast test-fast bench     # smallest-and-fastest (needs BMI2)
-make size-bc   test-bc             # portable x86-64, no BMI2
-make size      test                # portable C
-make size-thumb                    # ARM Cortex-M4 (needs arm-none-eabi-gcc)
+make size-fast test-fast wp-fast bench   # smallest-and-fastest (needs BMI2+MOVBE)
+make size-bc   test-bc   wp-bc           # portable x86-64, no BMI2
+make size      test      wp              # portable C
+make size-thumb                          # ARM Cortex-M4 (needs arm-none-eabi-gcc)
 ```
 
 ## Current results
 
 | Implementation | Target | Compiler | text+rodata | Cycles | Notes |
 |---|---|---|---|---|---|
-| **x86-64 asm, bytecode + mulx** | **x86-64 (BMI2)** | **GAS** | **1511 B** | **~1.20M** | `tv_ecdsa_fast.S` |
-| x86-64 asm, bytecode-interpreted | x86-64 | GAS | 1712 B | ~2.14M | `tv_ecdsa_bc.S` |
+| **x86-64 asm, bytecode + mulx + Shamir** | **x86-64 (BMI2+MOVBE)** | **GAS** | **1427 B** | **~0.65M** | `tv_ecdsa_fast.S` |
+| x86-64 asm, bytecode-interpreted | x86-64 | GAS | 1712 B | ~1.85M | `tv_ecdsa_bc.S` |
 | C, 32-bit limbs | Cortex-M4 Thumb-2 | arm-none-eabi-gcc 13.2 `-Os` | 2082 B | — | realistic boot-ROM target |
 | Pure x86-64 asm, 64-bit limbs | x86-64 | GAS | 2875 B | — | `tv_ecdsa_amd64.S` |
 | C, 32-bit limbs | x86-64 | GCC 13.3 `-Os` | 3076 B | — | `tv_ecdsa.c` |
 | C, 32-bit limbs | x86-64 | clang 18 `-Os` | ~3856 B | — | different inliner |
 
-### The 1511-byte speed+size version (`tv_ecdsa_fast.S`)
+Cycle counts are best-of-many on a 2.1 GHz Skylake-class Xeon; see
+[BENCHMARK.md](BENCHMARK.md) for methodology and attribution. Charts of
+the full optimisation history are in [`docs/`](docs/).
+
+## Correctness
+
+All implementations pass the same test gate:
+
+- **33 hand-picked vectors** (`make test-fast`): RFC 6979 reference
+  vectors, signature malleability (`s' = n − s`), all-zero hash, hash
+  numerically > n (must NOT be reduced mod n), 48/64-byte hash inputs
+  (truncated per FIPS 186-5), `r = 0` / `s = 0` / `r ≥ n` / `s ≥ n`,
+  public-key coordinates `≥ p`, point-not-on-curve, wrong format byte,
+  and a constructed case where `u1·G + u2·Q = O` → must reject.
+- **574 Wycheproof vectors** (`make wp-fast`): P-256 with SHA-256 and
+  SHA-512, P1363 raw format. 407 valid + 167 invalid.
+- **ASAN + UBSAN** via the C harness.
+
+## Per-implementation notes
+
+### The 1427-byte speed+size version (`tv_ecdsa_fast.S`)
 
 Same bytecode architecture as `tv_ecdsa_bc.S`, with the Montgomery
-multiplier rebuilt for speed and another 200 bytes squeezed out. Requires
-BMI2 (`mulx`).
+multiplier rebuilt around `mulx`, Shamir's trick for the scalar
+multiplication, and another ~280 bytes squeezed out. Requires BMI2
+(`mulx`) and MOVBE.
 
-**1511 B, ~1.20M cycles** vs `tv_ecdsa_bc.S` at 1712 B / ~2.14M: both
-**−201 bytes** and **−44% cycles**. text 1291 + rodata 220.
+**1427 B, ~0.65M cycles** vs `tv_ecdsa_bc.S` at 1712 B / ~1.85M: both
+**−285 bytes** and **−65% cycles**. text 1271 + rodata 156.
 
-Run `make size-fast test-fast bench` to reproduce.
+Run `make size-fast test-fast wp-fast bench` to reproduce.
 
 **Hot-path rewrites** (each one is smaller AND faster):
+
+- **Shamir's trick.** One 256-bit walk for u1·G + u2·Q instead of two
+  separate pt_mul calls — halves the doublings (256 vs 512). Per
+  iteration: double; if u2 bit set, add Q (already in slot 4-5); if u1
+  bit set, swap G.xy into slot 4-5, add, restore Q.xy. Both G and Q
+  have z = Mont(1), and slot 6 is never written by bc_dbl/add, so the
+  8-qword X,Y swap alone is enough — z serves both. +22 bytes, ~30%
+  cycles off (the biggest single speed win).
 
 - **Advancing-pointer CIOS.** After every reduction step t[0]=0 by
   construction (the whole point of CIOS). Instead of memmoving t[1..5]
@@ -50,7 +79,11 @@ Run `make size-fast test-fast bench` to reproduce.
 - **`muladd4` fully unrolled with `mulx`.** `mulx` writes its high word
   to a chosen register, so the carry chain hops rcx↔rdi with no `mov`
   between multiplies. Scalar passed in `rdx` (mulx's implicit source).
-  Low-limb writeback is a single RMW `add [mem],reg`. 85 bytes, 4 limbs.
+  `mulx` preserves *all* flags, so the CF from each mem-add is threaded
+  straight through the next `mulx` into the following limb's `adc` —
+  one `adc r,0` barrier per limb instead of two. 69 bytes, 4 limbs.
+  Also closes a latent edge case: the old two-adc form could wrap the
+  high-reg at exactly 2⁶⁴ with both carries set.
 - **`lodsq`/`stosq` + `dec/jnz`** in `fe_sub_raw`. The string ops are
   2 bytes each and flag-preserving; `dec` sets ZF but preserves CF for
   the carry chain. `loop` is microcoded (~7 cyc/iter); `dec/jnz` is ~1.
@@ -61,13 +94,22 @@ Run `make size-fast test-fast bench` to reproduce.
 - **t[0] in register across `muladd4` calls.** The first inner call's
   result becomes the second's input; keeping it in `r8` cuts one
   store-to-load forward from the critical path.
-- **`fe_cpy` unrolled, zero-init as dec-loop.** `rep movsq`/`rep stosq`
-  have ~25-cycle startup; hot paths at count=4..9 are faster as plain
-  loops. (Measured: `rep stosq` at count=9 in `fe_mul_m` costs ~140K
-  cycles/verify. Not worth 3 bytes.)
+- **`fe_cpy` is 4×movsq; zero-init is `push rax`×9.** `rep movsq`/
+  `rep stosq` have ~25-cycle startup; hot paths at count=4..9 are
+  faster unrolled. (Measured: `rep stosq` at count=9 in `fe_mul_m`
+  costs ~140K cycles/verify. Not worth 3 bytes.) The 9-word t buffer
+  in `fe_mul_m` is allocated-and-zeroed by `xor eax,eax` then nine
+  `push rax` — 11 bytes vs 18 for sub+stosq-loop.
 
 **Size tricks** (on top of everything inherited from `tv_ecdsa_bc.S`):
 
+- **r14 = slot-base is a global invariant.** verify sets `r14 = rsp`
+  once; bc_run pushes/pops r14 around every dispatch; so `r14 = slot
+  base` holds through the entire call tree. pt_add_acc and pt_mul read
+  r14 directly — no frame of their own, no argument-setup. Cascades:
+  pt_add_acc's epilogue becomes a bare `ret`, two of its paths that
+  jumped to it become `ret`, the third becomes a tail-jump, verify
+  drops three `mov rdi,r14` preambles. −24 B from one insight.
 - **SQR dispatches to Fmul.** SQR bytecode encodes s2=s1; the decoder
   already sets `rdx=rsi` for that case, so Fsqr's body is entirely
   redundant. The jump table aliases `.Lop1 → .Lop0`. −5 B.
@@ -121,11 +163,11 @@ defined after the constants, which are after the decoder). gas won't
 relax `disp(reg)` the way it does jumps. Hardcoded with a `.error`
 assert so a layout change can't silently cost 3 bytes.
 
-**Optimisation journey (1712 → 1511):**
+**Optimisation journey (1712 → 1427):**
 
 | Size | Cycles | Key technique |
 |---|---|---|
-| 1712 | ~2.14M | `tv_ecdsa_bc.S` baseline |
+| 1712 | ~1.85M | `tv_ecdsa_bc.S` baseline |
 | 1660 | ~1.28M | advancing-pointer CIOS + mulx unrolled; SQR→Fmul |
 | 1622 | ~1.21M | straight-line decode; consts at `[r14+disp8]`; t[0] in reg |
 | 1604 | ~1.21M | r14=rsp drops SIB; ModRM quirk cleanup; slot16 from rdi |
@@ -133,6 +175,15 @@ assert so a layout change can't silently cost 3 bytes.
 | 1564 | ~1.19M | sole-caller inline chain; CF returns; push/pop stockpile |
 | 1537 | ~1.20M | fe_from_be chaining; .Lf trampoline; cpy3 macro; op renumber |
 | 1511 | ~1.20M | bytecode offset addressing; CF return from bc_run; rcx preload |
+| 1498 | ~1.20M | Fto_mont folded into Fmul (R² in slot 11); Fadd→.Lop3 direct |
+| 1455 | ~0.86M | r14-invariant through pt ops (−24 B); cond_sub_n fallthrough |
+| 1425 | ~0.78M | muladd4 carry elision via mulx flag-preservation (−16 B, −9% cyc) |
+| 1405 | ~0.89M | push-allocate t; movbe; cGXM to .text; fallthrough+epilogue shares |
+| 1427 | ~0.65M | **Shamir's trick** (+22 B, −30% cyc) — current Pareto-optimal point |
+
+Size minimum is 1405 B (pre-Shamir). Spending 22 bytes for ~30% speed
+is a good trade for most contexts. Cycle numbers are fuzzy across the
+middle rows: different measurement sessions saw bc.S swing ±20%.
 
 ### The 1712-byte bytecode-interpreted version (`tv_ecdsa_bc.S`)
 
@@ -192,7 +243,34 @@ call`) becomes 2 bytes. Net savings vs conventional hand-asm: **1163 bytes**.
 
 rodata 356 B: bytecode 156 B (5 streams) + constants 200 B. text 1356 B.
 
-### ARM Cortex-M4 breakdown (the boot-ROM number)
+### Portable C version (`tv_ecdsa.c`)
+
+The reference implementation and the starting point for everything else.
+32-bit limbs (portable C99, no 128-bit intrinsics). Design choices that
+carry through to every variant:
+
+- **One generic Montgomery multiplier** parameterised by modulus — shared
+  between field-p arithmetic and scalar (mod-n) arithmetic. No duplicate
+  reduction code.
+- **One generic Fermat inverter** — exponent `m−2` is computed from the
+  modulus at runtime (saves 64 bytes of rodata versus storing both
+  `p−2` and `n−2`).
+- **No `memcpy`/`memset`/`memmove`** — all copies are explicit 8-word
+  loops; `-ffreestanding` prevents the compiler from substituting libc
+  calls.
+- **Point addition handles every special case** (`P=O`, `Q=O`, `P=Q`,
+  `P=−Q`). This is essential: adversary-controlled signature components
+  can force these cases during the scalar-mul loop.
+- **Simple double-and-add**, called twice, instead of Shamir's trick
+  (Shamir's is used only in `tv_ecdsa_fast.S`). Smaller code, ~2×
+  slower — the right trade for the C/ARM target.
+
+A variant, `tv_ecdsa_small.c`, repackages the modulus+m0i into a struct
+so every hot call fits in four arguments (ARM AAPCS r0–r3, enabling
+sibling-call optimisation in the wrappers). Same algorithm, same
+validation; use `make size-small test-small` to build it.
+
+#### ARM Cortex-M4 breakdown (the realistic boot-ROM number)
 
 ```
 .text.fe_zero                  16
@@ -230,7 +308,7 @@ typedefs `uint32_t` / `uint64_t` from `<stdint.h>` and `size_t` from
 `<stddef.h>`. On a real firmware build you would link this object
 directly; nothing else is pulled in.
 
-## Section breakdown (x86-64, GCC 13.3)
+#### x86-64 breakdown (GCC 13.3 `-Os`)
 
 ```
 .text.fe_zero                   17
@@ -258,7 +336,7 @@ directly; nothing else is pulled in.
                               3076
 ```
 
-## Optimisation journey (x86-64, GCC 13.3 `-Os`)
+#### C optimisation journey (x86-64, GCC 13.3 `-Os`)
 
 | Step                                            | Size   | Δ      |
 |-------------------------------------------------|--------|--------|
@@ -275,33 +353,19 @@ directly; nothing else is pulled in.
 | Reuse `delta` slot in `pt_dbl`                  | 3102 B | -4 B   |
 | `-ffreestanding` (eliminate `memmove` ref)      | 3076 B | -26 B  |
 
-## Design summary
+### Conventional x86-64 assembly (`tv_ecdsa_amd64.S`)
 
-- **One generic Montgomery multiplier** parameterised by modulus — shared
-  between field-p arithmetic and scalar (mod-n) arithmetic. No duplicate
-  reduction code.
-- **One generic Fermat inverter** — exponent `m-2` is computed from the
-  modulus at runtime (saves 64 bytes of rodata versus storing both
-  `p-2` and `n-2`).
-- **No `memcpy`/`memset`/`memmove`** — all copies are explicit 8-word
-  loops; the compiler is told via `-ffreestanding` not to substitute
-  libc calls.
-- **Point addition handles every special case** (`P=O`, `Q=O`, `P=Q`,
-  `P=-Q`). This is essential: adversary-controlled signature components
-  can force these cases during the scalar-mul loop.
-- **Simple double-and-add**, called twice, instead of Shamir's trick.
-  Smaller code, ~2× slower — the right trade-off for a boot ROM.
+The first hand-written pass, using **64-bit limbs** (4 per 256-bit
+number, vs 8×32-bit in the C version). x86-64's `mulq` gives a free
+64×64→128 product and `adc/sbb` make carry chains trivial. Mostly of
+historical interest now — `tv_ecdsa_bc.S` is strictly better for
+x86-64 — but it's the direct port of the C algorithm and the easiest
+to read.
 
-## Pure x86-64 assembly version
+**Size: 2875 bytes** (text 2643 + rodata 232) — 201 bytes (6.5%)
+smaller than the C version's 3076.
 
-The hand-written assembly (`tv_ecdsa_amd64.S`) uses **64-bit limbs** (4 per
-256-bit number, vs 8×32-bit in the C version). x86-64's `mulq` gives a
-free 64×64→128 product and `adc/sbb` make carry chains trivial.
-
-**Size: 2875 bytes** (text 2643 + rodata 232) — 201 bytes (6.5%) smaller
-than the C version's 3076. All 33 tests pass, clean under ASAN/UBSAN.
-
-### Per-function comparison
+#### Per-function comparison
 
 | Function | ASM | C | Δ | Notes |
 |---|---:|---:|---:|---|
@@ -317,7 +381,7 @@ than the C version's 3076. All 33 tests pass, clean under ASAN/UBSAN.
 | `fe_sub_raw` | 50 | 40 | +10 | unrolled 4 limbs (leaf, worth the speed) |
 | in-place wrappers (×5) | 28 | — | — | `Fsub_i/Fadd_i/Fmul_i/Fsqr_i/Fdbl`: 5–8 bytes each |
 
-### Key assembly size tricks
+#### Key assembly size tricks
 
 1. **64-bit limbs**: every big-int primitive is half the iterations.
    One `mulq` + `adc` chain replaces four 32×32 partial products.
@@ -345,7 +409,7 @@ than the C version's 3076. All 33 tests pass, clean under ASAN/UBSAN.
    happens to be 1 (because `p ≡ -1 mod 2^64`).  Nothing special-cased,
    but `imul reg, 1` still costs only one instruction.
 
-### Assembly optimisation journey
+#### Assembly optimisation journey
 
 | Step | Size | Δ |
 |---|---|---|
@@ -357,18 +421,3 @@ than the C version's 3076. All 33 tests pass, clean under ASAN/UBSAN.
 | Mid-frame base pointers (every slot in disp8) | 2983 B | -47 B |
 | In-place wrappers (`Fmul_i` etc.) | 2873 B | -110 B |
 | pt_mul stack-alignment fix (ABI compliance) | 2875 B | +2 B |
-
-## Correctness
-
-All 33 tests pass (27 vectors + 6 length checks):
-
-- RFC 6979 reference vectors (P-256 + SHA-256, both "sample" and "test")
-- Signature malleability (`s' = n - s` must still verify)
-- All-zero hash; hash numerically > n (must NOT be reduced mod n)
-- 48- and 64-byte hash inputs (truncated to 32 bytes per FIPS 186-5)
-- `r = 0`, `s = 0`, `r ≥ n`, `s ≥ n`, `r = n+1`, `s = 2^256-1`
-- Public-key coordinates `≥ p`; point not on curve; wrong format byte
-- Constructed case where `u1·G + u2·Q = O` (point at infinity) → reject
-- Wrong signature / hash / public key → reject
-
-The test harness also runs cleanly under ASAN+UBSAN.

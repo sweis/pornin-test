@@ -17,7 +17,8 @@
  *   - Jacobian point ops, a = -3 doubling, simple double-and-add.
  *   - All special cases in pt_add are handled (P=O, Q=O, P=Q, P=-Q).
  *
- * Rodata: 8 x 32-byte constants + two 8-byte m0i = 272 bytes.
+ * Rodata: 7 x 32-byte constants + one 8-byte m0i (for n) = 232 bytes.
+ * (m0i for p is 1, so it's loaded as an immediate, not from rodata.)
  * ====================================================================== */
 
 	.intel_syntax noprefix
