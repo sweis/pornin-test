@@ -53,8 +53,8 @@ int tv_ecdsa_p256_verify(const void *sig, size_t sig_len,
 
 # Implementation notes (current state)
 
-**Best result:** `tv_ecdsa_fast.S` — 1427 bytes, ~0.63M cycles on
-Skylake-class Xeon (fast/bc ratio ~0.34). BMI2+MOVBE required. See
+**Best result:** `tv_ecdsa_fast.S` — 1397 bytes, ~0.65M cycles on
+Sapphire Rapids (fast/bc ratio ~0.35). BMI2+MOVBE required. See
 README.md for technique writeups and BENCHMARK.md for cycle attribution.
 
 ## Workflow
@@ -117,6 +117,32 @@ test_ecdsa.c.
   on slot 6 serving as z for both G and Q. Any bytecode change that
   writes slot 6 breaks this silently.
 
+- **rcx=0 after every bcrun_r14 return** (and after fe_iszero,
+  fe_sub_raw, rep movsq/stosq, fe_from_be, cond_sub_n, pt_add_acc).
+  Nine `mov cl,N` sites rely on the high bytes being zero. The chain:
+  every bytecode stream's final op is Fmul/Nmul/Fsub/Fadd/check, all
+  of which end with fe_sub_raw's `dec ecx→0` loop or fe_iszero's
+  `loop→0`; the END-word dispatch (`test;jz`) skips the decoder so
+  its `lea rcx,[r14+oP]` never runs after the last handler. **Adding
+  a bytecode op that leaves rcx nonzero breaks 9 sites silently.**
+
+- **rbp is a true frame pointer from enter to leave in verify and
+  fe_inv_m.** Neither function reads or writes rbp in its body, and
+  every callee either ignores rbp or push/pops it (bc_run, pt_mul).
+  r15 carries verify's slot-2 mid-pointer now. Any change that
+  clobbers rbp between enter and leave breaks the epilogue silently.
+
+- **pt_mul takes &u1 in rbx, not rsi.** verify's rbx already holds
+  slot 13 from the stockpile; pt_mul reads it directly (never
+  pushes/writes rbx). bc_run and pt_add_acc's callees all preserve
+  rbx. Single caller, so no ABI drift concern, but any second caller
+  must set rbx first.
+
+- **.Lf2's `jmp .Ld2` is rel32 (141 B forward).** The body between
+  `1:` and `.Ld2` is right at the edge — shrinking it by ~14 B would
+  let this become rel8 (−3 B). Don't add anything between the
+  inverted `jnc` and `.Ld2` without measuring.
+
 ## Things tried and rejected (don't re-explore)
 
 | Idea | Why it failed |
@@ -126,7 +152,7 @@ test_ecdsa.c.
 | Drop r13 mid-pointer | Each `[r13+N]` → `[r14+384+N]` is disp32 (+3/site × 7). Net +14. |
 | REPEAT bytecode opcode | Handler cost > the 6-8 B of repeated `0x92,0x99`/`0x43,0x11`. |
 | Merge .Lop7/.Lop8 via sense bit | fe_iszero clobbers rcx; discriminator doesn't survive. |
-| `enter`/`leave` for verify frame | rbp conflict with slot-2 pointer. With other callee-saves below rbp, leave needs `lea rsp,[rbp−N]` anyway — no save. |
+| ~~`enter`/`leave` for verify frame~~ | **DONE** (−3 B) by moving slot-2 to r15 so rbp stays a genuine frame pointer. Also applied to fe_inv_m (−3 B). |
 | Length-counted bytecode (vs 0x0000 terminator) | +7 B in bc_run for −6 B of terminators. Net +1. |
 | Build cP at runtime | p has nice structure (all 0x00/0xFF bytes) but limb 3 = `0xffffffff00000001` costs as much to build as store. |
 | fe_cpy inlined | 3 callers × 5-byte call + 9-byte body = 24 B. Inlined: 3 × 8 B = 24 B. Wash. |
@@ -136,7 +162,7 @@ test_ecdsa.c.
 | Embed muladd4 inside fe_mul_m for rel8 calls | **x86-64 has no `call rel8`** — only `call rel32`. The +2 B `jmp` over muladd4 buys nothing. |
 | Slot-9 as &cP for second fe_inv_m | Slot 9 has cP after the block copy but pt_mul's bc_dbl writes slot 9 as scratch — it's garbage by the time the second fe_inv_m needs it. |
 | 32-bit length compares (`cmp esi` vs `cmp rsi`) | −2 B but accepts sig_len = 4GB+64 as valid. Behaviorally harmless (reads 64 bytes, verification fails) but technically violates the API contract. Skipped out of caution. |
-| Inline verify epilogue + drop bc_run's r13 push | bc_run pushes r13 only for epilogue sharing with verify. Inlining verify's epilogue (9 B of pops) costs the same as the shared jmp+add (12 B minus 3 for the dropped jmp = ... it's a wash once you account for both sides). |
+| ~~Inline verify epilogue + drop bc_run's r13 push~~ | **DONE** (−4 B) once verify got its own leave-based epilogue — the .Lepi5 share was already gone, so the r13 push/pop was pure dead weight. |
 | fe_mul_m takes r12/r13/r14 directly (drop movs) | Fmul/Nmul must set r12/r13/r14 **before** the tail-jump, which is before fe_mul_m's `push` — so bc_run's loop invariants (r12=slot_base, r14=.Ljt) are destroyed between handler calls. fe_mul_m's push/pop restores the *clobbered* values, not bc_run's. Segfault on second dispatch. −12B estimate was a mirage. |
 | Drop `neg eax` from fe_sub_raw | (borrow=1,carry=1) is reachable under CIOS (carry=1 ⇒ t≥2^256 ⇒ t_low<m ⇒ borrow=1). With −1/0 instead of 1/0, `sub eax,carry` gives −2≠0 for (1,1); the old 1−1=0 correctly takes jz to skip the copy (r already holds t−m). |
 | Indexed fe_sub_raw (no pointer advance) | Down-count `[rsi+rcx*8-8]` with `loop` processes high limb first — borrows propagate low-to-high, so this computes the wrong result. Up-count needs inc+cmp+jne (7 B > 4 B for lea+dec+jnz). |

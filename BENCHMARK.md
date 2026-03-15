@@ -25,8 +25,14 @@ available but not used — see notes below.
 
 | Implementation | Bytes | Cycles | vs bc.S | Notes |
 |---|---:|---:|---:|---|
-| `tv_ecdsa_fast.S` | 1427 | **~649,000** | −65% | BMI2 `mulx`, MOVBE, Shamir |
-| `tv_ecdsa_bc.S` | 1712 | ~1,832,000 | baseline | portable x86-64 |
+| `tv_ecdsa_fast.S` | 1397 | **~650,000** | −65% | BMI2 `mulx`, MOVBE, Shamir |
+| `tv_ecdsa_bc.S` | 1712 | ~1,850,000 | baseline | portable x86-64 |
+
+Measured on Intel Xeon Platinum 8488C (Sapphire Rapids, Golden Cove).
+Earlier Skylake-class numbers were within ~2% — the `mulx`/`adc` hot
+loop behaves the same on both µarches. FSRM is masked by the
+hypervisor on this host (CPUID leaf 7 EDX[4]=0) so the `rep stosq`
+rejection (+100K cyc measured here, +140K on Skylake) still holds.
 
 Reproduce: `make bench`. bc.S measurements are noisy (observed ±20%
 swing across sessions on the same machine); fast.S is stable to ~0.2%.

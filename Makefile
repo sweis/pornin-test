@@ -2,7 +2,7 @@
 #
 # Per-implementation targets (each has size-X / test-X / wp-X where
 # applicable):
-#   -fast   tv_ecdsa_fast.S   1427 B  BMI2+MOVBE  (best result)
+#   -fast   tv_ecdsa_fast.S   1397 B  BMI2+MOVBE  (best result)
 #   -bc     tv_ecdsa_bc.S     1712 B  portable x86-64
 #   -asm    tv_ecdsa_amd64.S  2875 B  conventional hand-asm
 #   (none)  tv_ecdsa.c        3076 B  portable C, 32-bit limbs

@@ -4,8 +4,8 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx) and MOVBE.
  *
- * 1427 bytes, ~0.63M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~1.88M cycles — so −285 bytes AND −66% cycles.
+ * 1397 bytes, ~0.65M cycles (Sapphire Rapids, ~0.63M Skylake-class).
+ * vs tv_ecdsa_bc.S: 1712 bytes, ~1.85M cycles — −315 B AND −65% cyc.
  *
  * Hot-path changes:
  *
