@@ -788,20 +788,14 @@ tv_ecdsa_p256_verify_asm:
 	 * byte on `cmp BYTE PTR [rdx],4` (−1). */
 
 	cmp	rsi, 64
-	jne	.Lf
+	jne	.Lf2
 	cmp	rcx, 65
-	jne	.Lf
+	jne	.Lf2
 	/* 32 ≤ hv_len ≤ 64: fold both checks into one unsigned range test.
-	 * sub wraps low values to huge; jbe covers both ends.  r9 dead after. */
+	 * sub wraps low values to huge; ja covers both ends.  r9 dead after. */
 	sub	r9, 32
 	cmp	r9, 32
-	jbe	1f
-/* .Lf trampoline: top checks (5 short jumps, up to −104 rel) stay
- * short; the bottom jz+jmp now reach .Lf2/.Ld2 directly as short
- * forward.  14-byte block → 5-byte rel32 jmp; bottom adds it back
- * (+14) but saves rel32 je (−4) + rel32 jmp (−3).  Net −2. */
-.Lf:	jmp	.Lf2
-1:
+	ja	.Lf2
 	/* fe_from_be: stosq×4 advances rdi by 32; rsi index-read only.
 	 * Chain: rdi flows call→call; rsi bumped +32 in place. */
 	mov	rsi, r12
@@ -821,7 +815,7 @@ tv_ecdsa_p256_verify_asm:
 	inc	DWORD PTR [rdi-32]
 
 	cmp	BYTE PTR [rdx], 0x04
-	jne	.Lf
+	jne	.Lf2
 	lea	rsi, [rdx+1]
 	mov	rdi, r14            /* slot 0 */
 	call	fe_from_be
@@ -842,8 +836,19 @@ tv_ecdsa_p256_verify_asm:
 	push	obc_v1
 	pop	rdi
 	call	bcrun_r14
-	jc	.Lf                 /* bc_run's neg ebp left CF = failbit */
-
+	/* bc_v1 fail: fall through into .Lf2.  Every other fail-path
+	 * caller (length checks, 0x04 check, R.z=∞) reaches .Lf2 as
+	 * rel8 from here — the top jne is +98 fwd, jz after pt_mul is
+	 * −89 back.  .Lf2's own jmp to .Ld2 is +126 fwd: exactly at
+	 * the rel8 edge (any byte added between here and .Ld2 breaks
+	 * it).  The happy path falls through call fe_iszero straight
+	 * into .Ld2 — eax from fe_iszero IS the return value.  The
+	 * old 5 B rel32 trampoline + 2 B end-jmp are both gone; only
+	 * this 4 B xor+jmp is added.  −5 B. */
+	jnc	1f
+.Lf2:	xor	eax, eax
+	jmp	.Ld2
+1:
 	/* slot 13 needed five times below — three before bc_v2 (rdi for
 	 * inv-n/decode/cond_sub), two after (Shamir rdi base, pt_mul rsi).
 	 * rbx goes dead right after `mov rsi,rbx` (hash ptr consumed) and
@@ -919,8 +924,7 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_sub_raw
 	pop	rdi
 	call	fe_iszero
-	jmp	.Ld2                /* short: +2 past the xor */
-.Lf2:	xor	eax, eax
+	/* FALLTHROUGH: eax = fe_iszero(x−r) = 1 iff valid.  No jmp. */
 .Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
 	pop	r15
 	pop	r14
