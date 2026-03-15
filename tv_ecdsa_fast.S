@@ -629,8 +629,8 @@ pt_add_acc:
 
 pt_mul:
 	push	rbp
-	push	r15
-	mov	r15, rsi            /* scalar ptr; r15 avoids r13's disp8=0 quirk */
+	push	rbx
+	mov	rbx, rsi            /* scalar ptr; push/pop rbx = 1B each (r15: 2B) */
 
 	/* .Lai inside pt_add_acc is exactly `mov rdi,r14; xor eax;
 	 * push 12; pop rcx; rep stosq; ret` — zero the accumulator.
@@ -643,13 +643,13 @@ pt_mul:
 	xchg	ebp, eax
 .Lpm:	xor	edi, edi            /* obc_dbl = 0 */
 	call	bcrun_r14           /* bcrun_r14 sets rsi = r14 for us */
-	bt	QWORD PTR [r15], rbp    /* 4 bytes; [r13] would be 5 */
+	bt	QWORD PTR [rbx], rbp    /* 4 bytes (REX.W only); rbx has no quirks */
 	jnc	1f
 	call	pt_add_acc
 1:	dec	ebp                 /* −1 byte */
 	jns	.Lpm
 
-	pop	r15
+	pop	rbx
 	pop	rbp
 	ret
 
