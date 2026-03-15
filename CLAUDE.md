@@ -53,9 +53,9 @@ int tv_ecdsa_p256_verify(const void *sig, size_t sig_len,
 
 # Implementation notes (current state)
 
-**Best result:** `tv_ecdsa_fast.S` — 1441 bytes, ~1.20M cycles on
-Skylake-class Xeon. BMI2 required (`mulx`). See README.md for technique
-writeups and BENCHMARK.md for cycle attribution.
+**Best result:** `tv_ecdsa_fast.S` — 1413 bytes, ~0.91M cycles on
+Skylake-class Xeon (fast/bc ratio ~0.48). BMI2+MOVBE required. See
+README.md for technique writeups and BENCHMARK.md for cycle attribution.
 
 ## Workflow
 
@@ -73,7 +73,8 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
   growth headroom** before overflow. cond_sub_n (9 B) + inlined fe_geq
   (+10 B) both sit in the handler block now; adding code between `.Ljt`
   and `.Lop2` costs this budget. The table itself is **8 entries** (op4
-  Fto_mont was absorbed into Fmul).
+  Fto_mont was absorbed into Fmul). cGXM (64 B) now sits right before
+  .Ljt — it doesn't count against this budget.
 
 - **Bytecode stream offsets must fit signed imm8.** All `push obc_X`
   encode as `6a XX` only if `obc_X` ≤ 127. Current max is bc_v1 at
@@ -129,6 +130,8 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
 | Slot-9 as &cP for second fe_inv_m | Slot 9 has cP after the block copy but pt_mul's bc_dbl writes slot 9 as scratch — it's garbage by the time the second fe_inv_m needs it. |
 | 32-bit length compares (`cmp esi` vs `cmp rsi`) | −2 B but accepts sig_len = 4GB+64 as valid. Behaviorally harmless (reads 64 bytes, verification fails) but technically violates the API contract. Skipped out of caution. |
 | Inline verify epilogue + drop bc_run's r13 push | bc_run pushes r13 only for epilogue sharing with verify. Inlining verify's epilogue (9 B of pops) costs the same as the shared jmp+add (12 B minus 3 for the dropped jmp = ... it's a wash once you account for both sides). |
+| fe_mul_m takes r12/r13/r14 directly (drop movs) | Fmul/Nmul must set r12/r13/r14 **before** the tail-jump, which is before fe_mul_m's `push` — so bc_run's loop invariants (r12=slot_base, r14=.Ljt) are destroyed between handler calls. fe_mul_m's push/pop restores the *clobbered* values, not bc_run's. Segfault on second dispatch. −12B estimate was a mirage. |
+| Drop `neg eax` from fe_sub_raw | (borrow=1,carry=1) is reachable under CIOS (carry=1 ⇒ t≥2^256 ⇒ t_low<m ⇒ borrow=1). With −1/0 instead of 1/0, `sub eax,carry` gives −2≠0 for (1,1); the old 1−1=0 correctly takes jz to skip the copy (r already holds t−m). |
 
 ## x86-64 encoding facts that mattered
 
@@ -145,14 +148,21 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
   Forward-ref `lea r,[r+offset]` gets disp32 silently. Hardcode + assert.
 - `xchg eax, r32` is 1 byte (`90+r`). Only `eax` gets this encoding.
   Useful when eax is dead after.
+- `mulx` preserves **all flags** (CF, OF, ZF, everything). This lets
+  you thread a live CF from an `add [mem]` straight through the next
+  `mulx` into an `adc` — no barrier needed. This was the −16 B win
+  in muladd4 (and ~13% cycles from the shorter dependency chain).
 - `and dl, imm8` is 3 bytes (80 e2 XX); `and al, imm8` is 2 bytes
   (24 XX — special encoding). Matters for nibble extraction.
 
 ## Possible next directions
 
 - **ADX dual carry chains in muladd4.** `adcx`/`adox` interleave two
-  carry chains. Could drop the `adc r,0` barriers. Estimate: −15% total
-  cycles, +10–20 B. See BENCHMARK.md.
+  carry chains. **Partly subsumed by the mulx-preserves-flags elision**
+  (which already dropped 4 of the 8 `adc r,0` barriers without ADX).
+  Remaining ADX win is parallelism, not barrier elimination — but
+  `adox` has no mem-dst form, so t would need to go into registers
+  (big restructure). Estimate now: −5% cycles, +20–50 B.
 - **Shamir's trick** (interleave u1·G + u2·Q). Halves doublings, ~25%
   speed. Likely +30–50 B bytecode/handler. The hard part is pt_add_acc's
   special-case handling with two bases. Now that pt_add_acc reads r14

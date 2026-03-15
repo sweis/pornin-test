@@ -2,10 +2,10 @@
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, speed+size optimized.
  *
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
- * shared interpreter).  Requires BMI2 (mulx).
+ * shared interpreter).  Requires BMI2 (mulx) and MOVBE.
  *
- * 1441 bytes, ~1.20M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~2.16M cycles — so −271 bytes AND −44% cycles.
+ * 1413 bytes, ~0.91M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~1.89M cycles — so −299 bytes AND −52% cycles.
  *
  * Hot-path changes:
  *
@@ -16,10 +16,15 @@
  *     new accumulator — no data movement.  Needs a 9-word buffer.
  *     Removes the shift loop entirely: −21 bytes, huge cycle win.
  *
- *   - muladd4 fully unrolled with mulx.  mulx writes its high word
- *     to a chosen register, so the carry chain hops rcx↔rdi with no
- *     mov.  Scalar passed in rdx (mulx's implicit source).  Low-limb
- *     writeback is a single RMW `add [mem],reg`.  85 bytes.
+ *   - muladd4 fully unrolled with mulx.  mulx preserves all flags,
+ *     so each mem-add's CF is threaded straight through the next mulx
+ *     into the following limb's adc — one `adc r,0` barrier per limb
+ *     instead of two.  The hi-reg (rcx↔rdi) never exceeds 2^64-1
+ *     (hi_product ≤ 2^64-2 + one cross-carry), so it cannot wrap; the
+ *     second carry lives in CF.  69 bytes, and shortens the carry
+ *     dependency chain on the hottest loop — the bulk of the ~13%
+ *     cycle win.  Also closes a latent edge case: the old two-adc
+ *     form could wrap hi at exactly 2^64 with both carries set.
  *
  *   - fe_sub_raw/fe_add_raw use lodsq/stosq (auto-increment, 2 bytes
  *     each, flag-preserving) and `dec ecx; jnz` instead of `loop`.
@@ -28,8 +33,9 @@
  *     −15 bytes AND faster.
  *
  *   - fe_cpy is 4×movsq (no `rep` startup overhead on the ~50%-taken
- *     fe_mul_m copy-back path).  Zero-init of t is a dec-loop for
- *     the same reason.
+ *     fe_mul_m copy-back path).  Zero-init of t is `push rax`×9
+ *     after xor — allocates and zeroes the 72-byte buffer in one
+ *     sweep.  11 B vs 18 B for sub + stosq loop.
  *
  * Size-only changes:
  *
@@ -93,6 +99,12 @@
  *     instead of a prologue lea.  −11 combined.
  *   - bc_run decoder uses rax itself as the table index (consume ah
  *     first, then `and eax,0xF`); pt_mul `xchg ebp,eax`.  −2.
+ *   - pt_mul scalar ptr in rbx (1-byte push/pop) not r15 (2-byte).
+ *     bt [rbx],rbp is still 4 B (REX.W needed either way).  −2.
+ *   - movbe in fe_from_be: load+bswap in one (7 B vs 5+3).  −1.
+ *   - cGXM in .text right before .Ljt: [r12-80] (5 B, disp8 but
+ *     r12 forces SIB) replaces 7-B rip-relative.  Handler offsets
+ *     unaffected (cGXM is on the near side of .Ljt).  −2.
  *
  * Security and validation are unchanged from tv_ecdsa_bc.S.
  * ====================================================================== */
