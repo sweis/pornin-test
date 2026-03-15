@@ -3,6 +3,7 @@ test_ecdsa
 test_ecdsa_asm
 test_ecdsa_bc
 test_ecdsa_fast
+test_ecdsa_small
 test_fast
 test_wycheproof
 test_wycheproof_asm
