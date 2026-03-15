@@ -53,9 +53,9 @@ int tv_ecdsa_p256_verify(const void *sig, size_t sig_len,
 
 # Implementation notes (current state)
 
-**Best result:** `tv_ecdsa_fast.S` — 1441 bytes, ~1.20M cycles on
-Skylake-class Xeon. BMI2 required (`mulx`). See README.md for technique
-writeups and BENCHMARK.md for cycle attribution.
+**Best result:** `tv_ecdsa_fast.S` — 1427 bytes, ~0.63M cycles on
+Skylake-class Xeon (fast/bc ratio ~0.34). BMI2+MOVBE required. See
+README.md for technique writeups and BENCHMARK.md for cycle attribution.
 
 ## Workflow
 
@@ -73,7 +73,8 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
   growth headroom** before overflow. cond_sub_n (9 B) + inlined fe_geq
   (+10 B) both sit in the handler block now; adding code between `.Ljt`
   and `.Lop2` costs this budget. The table itself is **8 entries** (op4
-  Fto_mont was absorbed into Fmul).
+  Fto_mont was absorbed into Fmul). cGXM (64 B) now sits right before
+  .Ljt — it doesn't count against this budget.
 
 - **Bytecode stream offsets must fit signed imm8.** All `push obc_X`
   encode as `6a XX` only if `obc_X` ≤ 127. Current max is bc_v1 at
@@ -105,9 +106,15 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
   and relies on it returning eax=0.
 
 - **Slot layout in pt_add_acc:** bc_dbl/bc_add1/bc_add2 use slots 0-11.
-  Slots 12-15 are preserved (verify stashes r,s,sinv,hash there).
-  Slots 16-18 hold u2·Q across pt_mul. Changing bytecode slot usage
-  can trash verify's stashed state.
+  Slots 12-15 are preserved (verify stashes r, u1, u2, `one` there —
+  **slot 15 is read by bc_v3**, not dead after bc_v2). Slots 16-19
+  hold G.xy + Q.xy-backup for the Shamir swap. Frame is 20 slots
+  (648 B). Changing bytecode slot usage can trash verify's state.
+
+- **Slot 6 = Mont(1) is load-bearing for Shamir.** bc_dbl/add1/add2
+  never write slot 6. pt_mul's G-swap copies only slots 4-5, relying
+  on slot 6 serving as z for both G and Q. Any bytecode change that
+  writes slot 6 breaks this silently.
 
 ## Things tried and rejected (don't re-explore)
 
@@ -129,6 +136,10 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
 | Slot-9 as &cP for second fe_inv_m | Slot 9 has cP after the block copy but pt_mul's bc_dbl writes slot 9 as scratch — it's garbage by the time the second fe_inv_m needs it. |
 | 32-bit length compares (`cmp esi` vs `cmp rsi`) | −2 B but accepts sig_len = 4GB+64 as valid. Behaviorally harmless (reads 64 bytes, verification fails) but technically violates the API contract. Skipped out of caution. |
 | Inline verify epilogue + drop bc_run's r13 push | bc_run pushes r13 only for epilogue sharing with verify. Inlining verify's epilogue (9 B of pops) costs the same as the shared jmp+add (12 B minus 3 for the dropped jmp = ... it's a wash once you account for both sides). |
+| fe_mul_m takes r12/r13/r14 directly (drop movs) | Fmul/Nmul must set r12/r13/r14 **before** the tail-jump, which is before fe_mul_m's `push` — so bc_run's loop invariants (r12=slot_base, r14=.Ljt) are destroyed between handler calls. fe_mul_m's push/pop restores the *clobbered* values, not bc_run's. Segfault on second dispatch. −12B estimate was a mirage. |
+| Drop `neg eax` from fe_sub_raw | (borrow=1,carry=1) is reachable under CIOS (carry=1 ⇒ t≥2^256 ⇒ t_low<m ⇒ borrow=1). With −1/0 instead of 1/0, `sub eax,carry` gives −2≠0 for (1,1); the old 1−1=0 correctly takes jz to skip the copy (r already holds t−m). |
+| Indexed fe_sub_raw (no pointer advance) | Down-count `[rsi+rcx*8-8]` with `loop` processes high limb first — borrows propagate low-to-high, so this computes the wrong result. Up-count needs inc+cmp+jne (7 B > 4 B for lea+dec+jnz). |
+| 32-bit length compares (`cmp esi` vs `cmp rsi`) | −2 B but accepts sig_len = 4GB+64 as valid. Behaviorally harmless (reads 64 bytes, verification fails) but technically violates the API contract. Skipped out of caution. |
 
 ## x86-64 encoding facts that mattered
 
@@ -145,19 +156,28 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
   Forward-ref `lea r,[r+offset]` gets disp32 silently. Hardcode + assert.
 - `xchg eax, r32` is 1 byte (`90+r`). Only `eax` gets this encoding.
   Useful when eax is dead after.
+- `mulx` preserves **all flags** (CF, OF, ZF, everything). This lets
+  you thread a live CF from an `add [mem]` straight through the next
+  `mulx` into an `adc` — no barrier needed. This was the −16 B win
+  in muladd4 (and ~13% cycles from the shorter dependency chain).
 - `and dl, imm8` is 3 bytes (80 e2 XX); `and al, imm8` is 2 bytes
   (24 XX — special encoding). Matters for nibble extraction.
 
 ## Possible next directions
 
 - **ADX dual carry chains in muladd4.** `adcx`/`adox` interleave two
-  carry chains. Could drop the `adc r,0` barriers. Estimate: −15% total
-  cycles, +10–20 B. See BENCHMARK.md.
-- **Shamir's trick** (interleave u1·G + u2·Q). Halves doublings, ~25%
-  speed. Likely +30–50 B bytecode/handler. The hard part is pt_add_acc's
-  special-case handling with two bases. Now that pt_add_acc reads r14
-  directly (no frame), a second base point would need to live at a
-  fixed slot — probably slots 7-9, which bc_dbl/add currently use.
+  carry chains. **Partly subsumed by the mulx-preserves-flags elision**
+  (which already dropped 4 of the 8 `adc r,0` barriers without ADX).
+  Remaining ADX win is parallelism, not barrier elimination — but
+  `adox` has no mem-dst form, so t would need to go into registers
+  (big restructure). Estimate now: −5% cycles, +20–50 B.
+- **~~Shamir's trick~~** — DONE at +22 B, ~30% cycles. Key insight:
+  slot 6 (z=Mont(1)) is never written by bc_dbl/add, so swapping just
+  X,Y (8 qw) between G and Q in slot 4-5 is enough — no second bytecode
+  stream. Gotcha found during dev: **slot 15 is NOT dead after bc_v2**
+  — bc_v3 reads it (as `one`) for the final from-Montgomery conversion.
+  G/Q-backup must go in slots 16-19; frame grew by one slot (0 B, still
+  imm32).
 - **Remaining bytecode compression.** bc_dbl has `0x92,0x99`×4 (Fadd
   doubling, 8 B) and bc_v1 has `0x43,0x11`×3 (6 B). If a REPEAT-style
   encoding could ever be made cheap enough (~6 B handler), it's ~6-8 B
@@ -179,12 +199,12 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
 
 ## Bigger restructures under evaluation
 
-**Note (post-1441B):** the r14-invariant pass found −70 B of
-structural wins WITHOUT any of these big restructures. The estimates
-below predate that — the actual verify body that extended-bytecode
-would replace is now ~50 B smaller. On the other hand, handler
-headroom dropped from 25 B to 11 B, so the jump-table overflow
-problem arrives sooner. Re-measure before committing to any of these.
+**Note (post-1427B / post-Shamir):** the r14-invariant pass found
+−70 B; Shamir ate another ~30 B of verify's middle (the stash/
+restore block). The estimates below for bitwalker-merge and derive-
+constants predate these — re-measure. Handler headroom is ~11 B
+(Fadd at 244/255). **Extended bytecode has been re-measured below
+and is now −3..−8 B, not −40..−60 B.**
 
 These each need a dedicated session. Byte accounting below is from
 actual disasm measurements, not estimates.
@@ -287,79 +307,91 @@ bytecode — it's only used by `.Lop4` (Fto_mont), which is called
 3 times in bc_v1. If Fto_mont read R²_p from a SLOT instead of .text,
 and that slot were built... this is the thread to pull.
 
-### Extended bytecode — verify as bytecode
+### Extended bytecode — INV opcode (post-Shamir re-measurement)
 
-**This is the big one.** Currently verify is 355 B of hand-rolled arg
-marshalling; ~150 B of it is mov/lea/call sequences that would be 2 B
-each as bytecode ops.
+**Revised estimate at 1427 B: −3 to −8 B.** Shamir ate most of the
+replaceable middle; only the two fe_inv_m calls (41 B combined)
+remain as clean bytecode candidates. Everything else has external
+pointers (sig/pub/hash/cGXM/cN) that nibbles can't encode.
 
-What would be new opcodes:
-- **INV** (r, a, mod_selector) → `fe_inv_m`. 2 invocations.
-- **PTMUL** (scalar_slot) → `pt_mul(r12, scalar)`. 2 invocations.
-- **CONDSUB** (slot) → `cond_sub_n`. 2 invocations.
-- **CPY3** (dst, src) → 12-qword copy. 3 invocations.
-- **PTADD** () → `pt_add_acc(r12)`. 1 invocation.
-- **RAWSUB** (dst, s1, s2) → `fe_sub_raw` (no mod fixup, for final
-  r-compare). 1 invocation.
+**Disasm-measured verify segments (1427 B build):**
 
-What stays native (~170 B):
-- Prologue/epilogue/reg-stash: ~40 B
-- Length checks + .Lf trampoline: ~31 B
-- `fe_from_be` × 5: ~30 B — external pointers, can't be slot indices
-- `cN/cP/cBM` block copy + `build_one`: ~25 B — source is .text
-- `cGXM` load: ~15 B — .rodata pointer
-- bc_run call glue (3-4 sites): ~30 B
+| Segment | Bytes | |
+|---|---:|---|
+| prologue + length checks | 58 | native (branches, stack) |
+| decode sig/pub, build_one, block-copy | 72 | native (external ptrs, rip-rel) |
+| bc_v1 dispatch | 10 | already bytecode |
+| **fe_inv_m mod-n** | **22** | **→ INV_N** |
+| hash decode + cond_sub_n | 15 | native (rbx=hash ptr; pops tied to inv pushes) |
+| bc_v2 dispatch | 8 | already bytecode |
+| Shamir setup (G→16-17, Q→18-19) | 28 | native (cGXM is rip-rel) |
+| pt_mul + fe_iszero | 19 | native (too small to amortize handler) |
+| **fe_inv_m mod-p** | **19** | **→ INV_P** |
+| bc_v3 dispatch | 8 | already bytecode |
+| cond_sub + fe_sub_raw + epilogue | 47 | native (push rbx×4 trick, shared epi) |
 
-Bytecode streams: bc_verify_mid (~8 ops), bc_verify_tail (~5 ops)
-inlining existing bc_v2/bc_v3 content = ~40 B total.
+**One unified INV handler (19 B) — the clever bit:**
 
-Handler cost: 6 handlers × ~10 B ≈ **60 B**.
+s2 nibble = **slot index of the modulus**. Verify's block-copy
+already puts cN in slot 8 and cP in slot 9 — so `s2=8` means mod-n,
+`s2=9` means mod-p. The decoder computes rdx = &slot[s2] for free
+(it does this for Fmul's b-pointer). Only m0i needs discrimination.
 
-**Jump table overflow is the structural blocker.** Current table is
-9 × u8, Fadd at offset 234/255. Adding 6 handlers ≈ 60 B to the handler
-block puts Fadd at ~294 — overflows. Options:
-- **u16 table:** 9 existing + 6 new = 15 × 2 = 30 B table vs current
-  9 B. +21 B. Dispatch is `movzx eax, WORD PTR [r14+rcx*2]` — same 5 B.
-- **Trampolines:** 5-B `jmp rel32` for the 2-3 handlers that overflow.
-  +10-15 B. Cheaper than u16.
-- **Move constants out of handler reach:** cR2P (32 B) sits between
-  .Ljt and the handlers. If cR2P were built or moved, handler offsets
-  drop by 32 → Fadd at ~202, room for ~50 B of new handlers. Dovetails
-  with the derive-constants idea.
+```asm
+INV: ; rdi,rsi = dst,src slot addrs.  rdx = &modulus (s2 slot).
+     ; rcx = &cP (decoder's preload, at .Ljt+oP).  al still holds byte 1.
+  mov  rcx, [rcx-40]   ; 4B: cN_M0I at oP-40 = .Ljt+8
+  test al, 0x10        ; 3B: s2 bit 0 (8=1000 vs 9=1001)
+  jz   1f              ; 2B: s2=8 → mod-n, keep cN_M0I
+  mov  ecx, 1          ; 5B: s2=9 → m0i_p = 1
+1:jmp  fe_inv_m        ; 5B: tail call (fe_inv_m preserves r12-r15,rbx,rbp)
+```
 
-**Slot-16+ is the other blocker.** The u2·Q stash lives at slots 16-18
-(outside nibble range). For CPY3 to address them, either:
-- 3-byte bytecode (5-bit slot indices). Costs ~10 B in decoder + 1 B
-  per existing op × ~72 ops = massive.
-- Re-layout slots so u2·Q fits in 0-15. pt_mul clobbers 0-11 via
-  bc_dbl/bc_add; only 12-15 survive. Slot 14 is free after first
-  pt_mul (it held u2, now consumed), but that's 1 slot, need 3.
-- Keep the stash native (~20 B). Cheap; this is what the estimate
-  above assumes.
+Bytecode encoding (op nibble 8 or wherever the table slot lands):
+- INV_N = `0x88, 0x0d` (s2=8, dst=0, s1=13)
+- INV_P = `0x98, 0x32` (s2=9, dst=3, s1=2)
 
-**SKIP_IF_ZERO isn't worth it.** Handlers can't modify bc_run's rbx
-(they're CALLed). A return-skip-count protocol costs +6 B in bc_run
-plus +2 B per handler (to clear al) × 15 handlers = +36 B, to save
-~4 B at two branch sites. Split verify into 2-3 streams with native
-`jc`/`jz` glue between them instead — that's the ~30 B of "bc_run
-call glue" above.
+Prepend to bc_v2 and bc_v3 respectively. No new dispatch calls; 2 B
+each in existing streams. bc_v1 shifts 118 → 122 < 127. ✓
 
-**Net estimate: −40 to −60 B** (revised from a naive −190). The delta
-from the optimistic estimate is: jump table overflow (~+15 B), keeping
-fe_from_be/cGXM/stash native (~+80 B not saved), no SKIP opcode.
-bc_run IS reentrant (pt_mul already nests it), so PTADD/PTMUL handlers
-calling back into bc_run is fine.
+**Jump table overflow — rel8 trampoline (+2 B):**
 
-**pt_add_acc (89 B) is a worse candidate than verify.** Its branching
-is native and its leaf bodies are small (12 B zero-out, 12 B copy).
-Converting each to a 1-op bytecode stream costs 8 B call overhead
-per site — net loss for bodies this small. Would need the branching
-ITSELF in bytecode (SKIP_IF_ZERO), which we just ruled out.
+Fadd at **244**/255. Handler (19 B) + table entry (1 B) before Fadd
+→ 264. Overflows. Fix: 2-B `jmp rel8` trampoline right before Fadd
+(offset ~243), handler body AFTER Fadd. Table entry → trampoline →
+jmp +~23 → handler. Fadd shifts +2 → 246 < 255. ✓
 
-**Verdict: highest-potential idea, highest effort.** Recommend
-attacking jointly with derive-constants: moving cR2P out of the
-handler block solves BOTH the overflow and gives −32 B of data. A
-realistic combined target is **−60 to −80 B total**, getting to
-~1430 B. Start with the handler skeletons (no overflow mitigation —
-just see if the new ops work), then solve overflow once the set is
-known.
+Ripple edits (0 B cost, easy to miss):
+- `oP_early` hardcode 48 → 50. The `.error` assert will catch it.
+- `[r12-80]` for cGXM (verify + Shamir setup, 2 sites) → `[r12-82]`.
+  grep for `r12-80` before committing.
+
+**Stockpile unwind cost (+6 B) — can't dodge:**
+
+Current `push rsi×2` in the inv-n block feeds `pop rdi×2` for
+fe_from_be(hash) and cond_sub_n. With INV in bc_v2, pushes vanish.
+Reordering hash-decode before bc_v2 (safe — no dependency on slot 0)
+costs the same +6 B: pops(2) → leas(8). The stockpile was a real win
+and losing it costs exactly what it was worth.
+
+**Final accounting:**
+
+```
+  handler 19 + trampoline 2 + table 1 + bc 4 + unwind 6  =  32 B cost
+  inv-n native 22 + inv-p native 19                       =  41 B save
+  NET: −9 B  (optimistic; realistic −3 to −8 after slippage)
+```
+
+**Implementation order if attempting:**
+1. Scaffold with 5-B rel32 trampoline (not 2-B rel8) — proves the
+   fe_inv_m-from-bytecode path works end-to-end. Expect −6 B.
+2. Confirm bc_run's `lea rcx,[r14+oP]` is live at handler entry
+   (disasm check — it's before the table jump).
+3. Reorder hash-decode before bc_v2 (isolate the unwind cost).
+4. Shrink trampoline rel32→rel8 once placement is stable. −3 B more.
+
+**Don't bother with CONDSUB/PTMUL/CPY3 as follow-ons.** Each saves
+only 3-7 B against its own handler cost, and they don't share
+infrastructure with INV (no modulus discrimination). PTMUL would
+nest bc_run inside bc_run (fine — pt_mul already does this) but the
+call is 9 B native, handler ~8 B, bytecode 2 B. Net −1 B at best.
