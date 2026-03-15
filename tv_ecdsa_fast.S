@@ -703,9 +703,10 @@ tv_ecdsa_p256_verify_asm:
 	jne	.Lf
 	cmp	rcx, 65
 	jne	.Lf
+	/* 32 ≤ hv_len ≤ 64: fold both checks into one unsigned range test.
+	 * sub wraps low values to huge; jbe covers both ends.  r9 dead after. */
+	sub	r9, 32
 	cmp	r9, 32
-	jb	.Lf
-	cmp	r9, 64
 	jbe	1f
 /* .Lf trampoline: top checks (5 short jumps, up to −104 rel) stay
  * short; the bottom jz+jmp now reach .Lf2/.Ld2 directly as short
