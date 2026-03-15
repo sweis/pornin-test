@@ -569,15 +569,21 @@ bc_run:
  * so Q is in place for it without a preceding restore.  After the
  * G-branch restores Q, the next iteration's u2 check finds Q in place.
  *
- * Placed after bc_run so the epilogue jmp to .Lepi2 stays rel8 — the
- * extra push r12/r13 are popped inline before the jmp. */
+ * Caller passes &u1 IN RBX (not rsi).  verify's rbx already holds
+ * slot 13 from the earlier stockpile, so the old `mov rsi,rbx` in
+ * verify + `push rbx; mov rbx,rsi` here was a round trip that
+ * rebuilt the same value.  rbx is callee-saved everywhere pt_mul
+ * reaches (bc_run pushes it; pt_add_acc's callees do too), so
+ * pt_mul neither pushes nor writes it.  Verify doesn't read rbx
+ * after pt_mul returns (next use is `lea rbx,[r14+96]`).  −7 B.
+ *
+ * Epilogue is now inline (pop rbp; ret) — no more .Lepi2 share
+ * since there's no rbx to pop.  Same 6 B either way. */
 pt_mul:
 	push	rbp
-	push	rbx
 	push	r12
 	push	r13
 	lea	r12, [r15+64]       /* &slot4 — r15 = verify's &slot2 here (disp8) */
-	mov	rbx, rsi            /* rbx = &u1; u2 at [rbx+32] */
 	lea	r13, [rbx+96]       /* &slot16 (= slot13+96).  G at [r13], Q-backup at [r13+64]. */
 
 	call	.Lai
@@ -612,7 +618,8 @@ pt_mul:
 
 	pop	r13
 	pop	r12
-	jmp	.Lepi2              /* shared pop rbx;pop rbp;ret */
+	pop	rbp
+	ret
 
 /* G.x, G.y in Montgomery form.  Placed right before .Ljt so verify
  * can address it as [r12-80] (r12=&cN, cN=.Ljt+16, cGXM=.Ljt-64).
@@ -878,7 +885,7 @@ tv_ecdsa_p256_verify_asm:
 	mov	cl, 8
 	rep	movsq               /* Q.xy → slot 18-19 */
 
-	mov	rsi, rbx            /* &u1 (slot 13); u2 at +32 */
+	/* rbx = &slot13 already (stockpile) — pt_mul reads it directly. */
 	call	pt_mul              /* acc = u1·G + u2·Q */
 
 	mov	rdi, r15
