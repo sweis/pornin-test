@@ -206,34 +206,36 @@ fe_sub_raw:
 	ret
 
 /* muladd4(t=r9, x=rdx, y=rsi).  t[0..3] += x*y, carry into t[4..5].
- * Fully unrolled.  Uses mulx (BMI2) — high word written directly to
- * a chosen register, so the high-word carry chain hops rcx↔rdi
- * with no mov in between.  Scalar passed in rdx (mulx's implicit
- * source) — callers changed to load there directly. */
+ * Fully unrolled.  mulx (BMI2) preserves all flags, so the mem-add
+ * carry is threaded through each mulx directly into the next limb's
+ * adc — one `adc r,0` barrier per limb instead of two.  The high-reg
+ * (rcx↔rdi) never exceeds 2^64-1 (hi_product ≤ 2^64-2, plus at most
+ * one cross-carry), so `adc hi,0` cannot itself overflow; the second
+ * carry lives in CF until the next adc consumes it.
+ *
+ * Previously the second `adc hi,0` (after each mem-add) could wrap
+ * hi at exactly 2^64 if hi_product = 2^64-2 and both carries set.
+ * Cosmically rare — not hit by the test suite — but gone now. */
 muladd4:
 	mulx	rcx, rax, [rsi]
 	add	r8, rax             /* t[0] in reg — no store-forward stall */
-	adc	rcx, 0
 
-	mulx	rdi, rax, [rsi+8]
-	add	rax, rcx
+	mulx	rdi, rax, [rsi+8]   /* flags preserved: CF = carry from t[0] */
+	adc	rax, rcx            /* lo1 + hi0 + CF_t0 */
 	adc	rdi, 0
 	add	[r9+8], rax
-	adc	rdi, 0
 
-	mulx	rcx, rax, [rsi+16]
-	add	rax, rdi
+	mulx	rcx, rax, [rsi+16]  /* CF = mem-carry from t[1] */
+	adc	rax, rdi
 	adc	rcx, 0
 	add	[r9+16], rax
-	adc	rcx, 0
 
-	mulx	rdi, rax, [rsi+24]
-	add	rax, rcx
+	mulx	rdi, rax, [rsi+24]  /* CF = mem-carry from t[2] */
+	adc	rax, rcx
 	adc	rdi, 0
 	add	[r9+24], rax
-	adc	rdi, 0
 
-	add	[r9+32], rdi
+	adc	[r9+32], rdi        /* CF = mem-carry from t[3] */
 	adc	QWORD PTR [r9+40], 0
 	ret
 
