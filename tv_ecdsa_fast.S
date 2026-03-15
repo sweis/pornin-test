@@ -570,7 +570,7 @@ pt_mul:
 	push	rbx
 	push	r12
 	push	r13
-	lea	r12, [rbp+64]       /* &slot4 — rbp still = verify's &slot2 here (disp8) */
+	lea	r12, [r15+64]       /* &slot4 — r15 = verify's &slot2 here (disp8) */
 	mov	rbx, rsi            /* rbx = &u1; u2 at [rbx+32] */
 	lea	r13, [rbx+96]       /* &slot16 (= slot13+96).  G at [r13], Q-backup at [r13+64]. */
 
@@ -739,15 +739,29 @@ Fadd:	push	rdi
 	.type	tv_ecdsa_p256_verify_asm, @function
 
 tv_ecdsa_p256_verify_asm:
-	push	rbp
+	/* enter 648,0 = push rbp; mov rbp,rsp; sub rsp,648 in 4 B
+	 * (vs 1+7=8 B).  r15 takes over as the slot-2 mid-pointer so
+	 * rbp stays a true frame pointer end-to-end → leave works at
+	 * exit.  Every callee either leaves rbp alone (fe_inv_m,
+	 * fe_mul_m, fe_from_be, cond_sub_n) or push/pops it (bc_run,
+	 * pt_mul).  r15 is preserved by the same set — fe_mul_m and
+	 * fe_inv_m push it; bc_run's handlers reach fe_mul_m only via
+	 * tail-jump so r15 round-trips.  pt_mul reads r15 once at
+	 * entry (for &slot4) and never writes it.
+	 *
+	 * rbp→r15 swap is size-neutral at every access (both need
+	 * REX in their [reg+disp8] / mov-to-rdi forms anyway).
+	 * Net: prologue −2, epilogue −1 (leave+pops vs add+jmp
+	 * .Lepi5).  enter is microcoded (~12 cyc) but runs once. */
 	push	rbx
 	push	r12
 	push	r13
 	push	r14
-	sub	rsp, 648
+	push	r15
+	enter	648, 0
 
 	/* r14 = rsp for the whole of verify (every callee saves r14).
-	 * r14 as base avoids rsp's SIB byte on the r13 lea.  rbp is
+	 * r14 as base avoids rsp's SIB byte on the r13 lea.  r15 is
 	 * set later from fe_from_be's flowed-out rdi (= r14+64 after
 	 * decoding pub.x/y). */
 	mov	r14, rsp
@@ -799,7 +813,7 @@ tv_ecdsa_p256_verify_asm:
 	mov	rdi, r14            /* slot 0 */
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi flowed to r14+64 */
-	mov	rbp, rdi            /* = slot 2; cheaper than lea from r14 */
+	mov	r15, rdi            /* = slot 2; cheaper than lea from r14 */
 	lea	r12, [rip+cN]
 
 	lea	rdi, [r13-128]       /* slot 8 via r13: disp8 */
@@ -854,21 +868,21 @@ tv_ecdsa_p256_verify_asm:
 	lea	rsi, [r12-80]       /* cGXM */
 	mov	cl, 8
 	rep	movsq               /* G.xy → slot 16-17; rdi now &slot18, rcx=0 */
-	lea	rsi, [rbp+64]       /* slot 4 = Q.xy */
+	lea	rsi, [r15+64]       /* slot 4 = Q.xy */
 	mov	cl, 8
 	rep	movsq               /* Q.xy → slot 18-19 */
 
 	mov	rsi, rbx            /* &u1 (slot 13); u2 at +32 */
 	call	pt_mul              /* acc = u1·G + u2·Q */
 
-	mov	rdi, rbp
+	mov	rdi, r15
 	call	fe_iszero           /* ZF ⇔ R1.z == 0 (R at ∞) */
 	jz	.Lf2
 
 	lea	rbx, [r14+96]
 
 	mov	rdi, rbx
-	mov	rsi, rbp
+	mov	rsi, r15
 	lea	rdx, [r12+32]
 	mov	cl, 1               /* rcx=0 from fe_iszero just above.  −1 B. */
 	call	fe_inv_m
@@ -894,7 +908,12 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_iszero
 	jmp	.Ld2                /* short: +2 past the xor */
 .Lf2:	xor	eax, eax
-.Ld2:	add	rsp, 648
-	jmp	.Lepi5
+.Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
+	pop	r15
+	pop	r14
+	pop	r13
+	pop	r12
+	pop	rbx
+	ret
 
 	.section .note.GNU-stack,"",@progbits
