@@ -4,8 +4,8 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx) and MOVBE.
  *
- * 1411 bytes, ~0.90M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~1.88M cycles — so −301 bytes AND −52% cycles.
+ * 1406 bytes, ~0.90M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~1.88M cycles — so −306 bytes AND −52% cycles.
  *
  * Hot-path changes:
  *
@@ -107,6 +107,8 @@
  *     unaffected (cGXM is on the near side of .Ljt).  −2.
  *   - hv_len range check (32..64) merged: sub r9,32 wraps low
  *     values to huge, so cmp;jbe catches both ends.  −2.
+ *   - pt_add_acc moved right before bcrun_r14: the add2 path falls
+ *     through (no jmp), the dbl path's jmp is rel8.  −5.
  *
  * Security and validation are unchanged from tv_ecdsa_bc.S.
  * ====================================================================== */
@@ -389,6 +391,64 @@ fe_from_be:
 	loop	1b
 	ret
 
+.macro	cpy3
+	push	12
+	pop	rcx
+	rep	movsq
+.endm
+
+/* ----------------------------------------------------------------------
+ * pt_add_acc and pt_mul take the slot base in r14 (caller-provided).
+ * Every caller already has r14 = slot base: verify sets it once at
+ * entry and never clobbers it; bc_run (called from inside both of
+ * these) pushes/pops r14.  So the old push-r14/mov-r14/pop-r14 frame
+ * in pt_add_acc was reconstructing a value that was never lost, and
+ * pt_mul's rbx = rdi copy was rbx = r14 by another name.
+ *
+ * With the frame gone, pt_add_acc's epilogue is just `ret`.  Two of
+ * the three paths that ended in `jmp .Laa` become plain `ret` (−1 B
+ * each), and the third — a call then fallthrough — becomes a tail
+ * jump (−1 B).  pt_mul drops its rbx push/mov/pop (−5 B) and the
+ * `mov rdi,rbx` arg to pt_add_acc (−3 B).  verify drops three
+ * `mov rdi,r14` preambles (−9 B).  Net −24 B.
+ *
+ * Placed right before bcrun_r14 so the add2 path falls straight through
+ * into bcrun_r14 (no jmp at all), and the dbl-path's jmp is rel8.  −5 B.
+ * The `call bcrun_r14` mid-body is still rel32 (no short call on x86-64).
+ * -------------------------------------------------------------------- */
+pt_add_acc:
+	lea	rdi, [r14+64]
+	call	fe_iszero           /* ZF ⇔ acc.z == 0 */
+	jnz	1f
+	/* fe_iszero preserved rdi = r14+64; compute rsi from it (disp8). */
+	lea	rsi, [rdi+64]       /* r14+128 */
+	mov	rdi, r14
+	cpy3
+	ret
+1:	push	obc_add1
+	pop	rdi
+	call	bcrun_r14
+	lea	rdi, [r14+96]
+	call	fe_iszero           /* ZF ⇔ H == 0 */
+	jnz	3f
+	/* fe_iszero preserved rdi = r14+96.  sub imm8 −128 = +128. */
+	sub	rdi, -128           /* r14+224 */
+	call	fe_iszero           /* ZF ⇔ Rr == 0 */
+	jnz	.Lai
+	/* Tail-share: both this path and 3: end in `jmp bcrun_r14`.
+	 * Short-jmp past .Lai to the shared tail-jump. */
+	xor	edi, edi            /* obc_dbl = 0 */
+	jmp	bcrun_r14           /* rel8 forward — pt_add_acc sits right before bcrun_r14 */
+.Lai:	mov	rdi, r14
+	xor	eax, eax
+	push	12
+	pop	rcx
+	rep	stosq
+	ret
+3:	push	obc_add2
+	pop	rdi
+	/* FALLTHROUGH to bcrun_r14 */
+
 /* ======================================================================
  * BYTECODE INTERPRETER
  * ====================================================================== */
@@ -591,61 +651,6 @@ Fadd:	push	rdi
 	pop	rsi
 	pop	rdi
 	jmp	.Lop3
-
-.macro	cpy3
-	push	12
-	pop	rcx
-	rep	movsq
-.endm
-
-
-/* ----------------------------------------------------------------------
- * pt_add_acc and pt_mul take the slot base in r14 (caller-provided).
- * Every caller already has r14 = slot base: verify sets it once at
- * entry and never clobbers it; bc_run (called from inside both of
- * these) pushes/pops r14.  So the old push-r14/mov-r14/pop-r14 frame
- * in pt_add_acc was reconstructing a value that was never lost, and
- * pt_mul's rbx = rdi copy was rbx = r14 by another name.
- *
- * With the frame gone, pt_add_acc's epilogue is just `ret`.  Two of
- * the three paths that ended in `jmp .Laa` become plain `ret` (−1 B
- * each), and the third — a call then fallthrough — becomes a tail
- * jump (−1 B).  pt_mul drops its rbx push/mov/pop (−5 B) and the
- * `mov rdi,rbx` arg to pt_add_acc (−3 B).  verify drops three
- * `mov rdi,r14` preambles (−9 B).  Net −24 B.
- * -------------------------------------------------------------------- */
-pt_add_acc:
-	lea	rdi, [r14+64]
-	call	fe_iszero           /* ZF ⇔ acc.z == 0 */
-	jnz	1f
-	/* fe_iszero preserved rdi = r14+64; compute rsi from it (disp8). */
-	lea	rsi, [rdi+64]       /* r14+128 */
-	mov	rdi, r14
-	cpy3
-	ret
-1:	push	obc_add1
-	pop	rdi
-	call	bcrun_r14
-	lea	rdi, [r14+96]
-	call	fe_iszero           /* ZF ⇔ H == 0 */
-	jnz	3f
-	/* fe_iszero preserved rdi = r14+96.  sub imm8 −128 = +128. */
-	sub	rdi, -128           /* r14+224 */
-	call	fe_iszero           /* ZF ⇔ Rr == 0 */
-	jnz	.Lai
-	/* Tail-share: both this path and 3: end in `jmp bcrun_r14`.
-	 * Short-jmp past .Lai to the shared tail-jump. */
-	xor	edi, edi            /* obc_dbl = 0 */
-	jmp	.Lcall
-.Lai:	mov	rdi, r14
-	xor	eax, eax
-	push	12
-	pop	rcx
-	rep	stosq
-	ret
-3:	push	obc_add2
-	pop	rdi
-.Lcall:	jmp	bcrun_r14
 
 pt_mul:
 	push	rbp
