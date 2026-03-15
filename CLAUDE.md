@@ -53,8 +53,8 @@ int tv_ecdsa_p256_verify(const void *sig, size_t sig_len,
 
 # Implementation notes (current state)
 
-**Best result:** `tv_ecdsa_fast.S` — 1405 bytes, ~0.90M cycles on
-Skylake-class Xeon (fast/bc ratio ~0.48). BMI2+MOVBE required. See
+**Best result:** `tv_ecdsa_fast.S` — 1427 bytes, ~0.63M cycles on
+Skylake-class Xeon (fast/bc ratio ~0.34). BMI2+MOVBE required. See
 README.md for technique writeups and BENCHMARK.md for cycle attribution.
 
 ## Workflow
@@ -165,11 +165,13 @@ commit. ASAN/UBSAN via the C harness in test_ecdsa.c.
   Remaining ADX win is parallelism, not barrier elimination — but
   `adox` has no mem-dst form, so t would need to go into registers
   (big restructure). Estimate now: −5% cycles, +20–50 B.
-- **Shamir's trick** (interleave u1·G + u2·Q). Halves doublings, ~25%
-  speed. Likely +30–50 B bytecode/handler. The hard part is pt_add_acc's
-  special-case handling with two bases. Now that pt_add_acc reads r14
-  directly (no frame), a second base point would need to live at a
-  fixed slot — probably slots 7-9, which bc_dbl/add currently use.
+- **~~Shamir's trick~~** — DONE at +22 B, ~30% cycles. Key insight:
+  slot 6 (z=Mont(1)) is never written by bc_dbl/add, so swapping just
+  X,Y (8 qw) between G and Q in slot 4-5 is enough — no second bytecode
+  stream. Gotcha found during dev: **slot 15 is NOT dead after bc_v2**
+  — bc_v3 reads it (as `one`) for the final from-Montgomery conversion.
+  G/Q-backup must go in slots 16-19; frame grew by one slot (0 B, still
+  imm32).
 - **Remaining bytecode compression.** bc_dbl has `0x92,0x99`×4 (Fadd
   doubling, 8 B) and bc_v1 has `0x43,0x11`×3 (6 B). If a REPEAT-style
   encoding could ever be made cheap enough (~6 B handler), it's ~6-8 B

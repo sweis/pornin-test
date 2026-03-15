@@ -4,10 +4,19 @@
  * Same architecture as tv_ecdsa_bc.S (2-byte bytecode, 16-slot buffer,
  * shared interpreter).  Requires BMI2 (mulx) and MOVBE.
  *
- * 1405 bytes, ~0.90M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
- * 1712 bytes, ~1.88M cycles — so −307 bytes AND −52% cycles.
+ * 1427 bytes, ~0.63M cycles (Skylake-class).  vs tv_ecdsa_bc.S:
+ * 1712 bytes, ~1.88M cycles — so −285 bytes AND −66% cycles.
  *
  * Hot-path changes:
+ *
+ *   - Shamir's trick: one 256-bit walk for u1·G + u2·Q instead of two
+ *     independent pt_muls — halves the doublings (256 vs 512).  Per
+ *     iteration: double; if u2 bit, add Q (already in slot 4-5); if
+ *     u1 bit, swap G.xy into slot 4-5, add, restore Q.xy.  Both G and
+ *     Q have z = Mont(1), and slot 6 is NEVER written by bc_dbl/add,
+ *     so the 8-qword X,Y swap is enough — z serves both.  ~30% cycles.
+ *     Costs +22 B: larger pt_mul body, but verify's stash/restore/
+ *     second-pt_mul/pt_add_acc block (61 B) is gone.
  *
  *   - Advancing-pointer CIOS in fe_mul_m: instead of shifting the
  *     6-word accumulator down one limb every outer iteration (20 memory
@@ -531,31 +540,68 @@ bc_run:
 	pop	rbp
 	ret
 
-/* pt_mul placed here so its epilogue is a rel8 backward jmp into
- * .Lepi2 (bc_run's pop rbx;pop rbp;ret).  2 B jmp vs 3 B inline.
- * Every other reference is a call (always 5 B, layout-agnostic). */
+/* pt_mul: Shamir's simultaneous double-and-add.  Computes u1·G + u2·Q
+ * into the accumulator (slots 0-2) in a single 256-bit walk — halves
+ * the doublings vs running two independent pt_muls (256 vs 512).
+ *
+ * Caller contract (verify sets this up just before the call):
+ *   rsi    → &u1 (slot 13); u2 is at [rsi+32] (slot 14)
+ *   slot 4-6: Q in Jacobian Montgomery form (z = Mont(1) in slot 6)
+ *   slot 16-17: G.x, G.y in Montgomery form
+ *   slot 18-19: backup of Q.x, Q.y (for restore after each G-add)
+ *   slot 15 holds `one` throughout — bc_v3 reads it after pt_mul.
+ *
+ * The z-coordinate trick: bc_add1/2 read slot 6 for the addend's z, and
+ * slot 6 is NEVER written by bc_dbl/add1/add2.  Both G and Q have z =
+ * Mont(1), so swapping only X,Y (8 qwords) suffices — slot 6 serves both.
+ *
+ * Per iteration: double; if u2 bit set, add (Q is already in 4-5); if
+ * u1 bit set, swap G into 4-5, add, restore Q to 4-5.  u2 checked first
+ * so Q is in place for it without a preceding restore.  After the
+ * G-branch restores Q, the next iteration's u2 check finds Q in place.
+ *
+ * Placed after bc_run so the epilogue jmp to .Lepi2 stays rel8 — the
+ * extra push r12/r13 are popped inline before the jmp. */
 pt_mul:
 	push	rbp
 	push	rbx
-	mov	rbx, rsi            /* scalar ptr; push/pop rbx = 1B each (r15: 2B) */
+	push	r12
+	push	r13
+	lea	r12, [rbp+64]       /* &slot4 — rbp still = verify's &slot2 here (disp8) */
+	mov	rbx, rsi            /* rbx = &u1; u2 at [rbx+32] */
+	lea	r13, [rbx+96]       /* &slot16 (= slot13+96).  G at [r13], Q-backup at [r13+64]. */
 
-	/* .Lai inside pt_add_acc is exactly `mov rdi,r14; xor eax;
-	 * push 12; pop rcx; rep stosq; ret` — zero the accumulator.
-	 * Call it.  Returns with eax=0, which the dec al below needs. */
 	call	.Lai
-
-	/* eax=0 after rep stosq; dec al wraps low byte to 0xff, high
-	 * bits stay 0.  xchg with eax is 1 byte; eax dead after. */
 	dec	al
 	xchg	ebp, eax
-.Lpm:	xor	edi, edi            /* obc_dbl = 0 */
-	call	bcrun_r14           /* bcrun_r14 sets rsi = r14 for us */
-	bt	QWORD PTR [rbx], rbp    /* 4 bytes (REX.W only); rbx has no quirks */
-	jnc	1f
+.Lpm:	xor	edi, edi
+	call	bcrun_r14           /* double */
+
+	bt	[rbx+32], rbp       /* u2 bit */
+	jnc	2f
+	call	pt_add_acc          /* Q already in slot 4-5 */
+2:
+	bt	[rbx], rbp          /* u1 bit */
+	jnc	3f
+	mov	rdi, r12            /* &slot4 */
+	push	rdi                 /* stash for restore after pt_add_acc clobbers rdi */
+	mov	rsi, r13            /* &slot16 = G */
+	push	8
+	pop	rcx
+	rep	movsq               /* G.xy → slot 4-5.  rsi now = r13+64 = &slot18. */
+	push	rsi                 /* stash &Q-backup — it's where rsi landed */
 	call	pt_add_acc
-1:	dec	ebp                 /* −1 byte */
+	pop	rsi                 /* &slot18 = Q backup */
+	pop	rdi                 /* &slot4 */
+	push	8
+	pop	rcx
+	rep	movsq               /* Q.xy → slot 4-5 (restore) */
+3:
+	dec	ebp
 	jns	.Lpm
 
+	pop	r13
+	pop	r12
 	jmp	.Lepi2              /* shared pop rbx;pop rbp;ret */
 
 /* G.x, G.y in Montgomery form.  Placed right before .Ljt so verify
@@ -694,7 +740,7 @@ tv_ecdsa_p256_verify_asm:
 	push	r12
 	push	r13
 	push	r14
-	sub	rsp, 616
+	sub	rsp, 648
 
 	/* r14 = rsp for the whole of verify (every callee saves r14).
 	 * r14 as base avoids rsp's SIB byte on the r13 lea.  rbp is
@@ -781,8 +827,6 @@ tv_ecdsa_p256_verify_asm:
 	mov	rsi, rbx
 	pop	rdi
 	call	fe_from_be
-	/* fe_from_be's 4×stosq left rdi = r13+64. */
-	lea	rbx, [rdi+64]
 	pop	rdi
 	call	cond_sub_n
 
@@ -790,25 +834,22 @@ tv_ecdsa_p256_verify_asm:
 	pop	rdi
 	call	bcrun_r14
 
-	lea	rsi, [r13+64]
-	call	pt_mul
-	mov	rdi, rbx
-	mov	rsi, r14
-	cpy3
-
-	lea	rdi, [rbp+64]        /* slot 4 via rbp: disp8 */
-	push	rdi                 /* save for cpy3 after pt_mul */
-	lea	rsi, [r12-80]        /* cGXM: r12=&cN=.Ljt+16, cGXM=.Ljt-64 */
+	/* Shamir setup: G.xy → slot 16-17, Q.xy backup → slot 18-19.
+	 * slot 6 = Mont(1) is never written by bc_dbl/add — it serves as
+	 * z for BOTH G and Q, so only X,Y (8 qwords) need swapping.
+	 * slot 15 must stay untouched (bc_v3 reads it as `one`). */
+	lea	rdi, [r13+128]      /* slot 16 (r13=&slot12; 128>127 → disp32) */
+	lea	rsi, [r12-80]       /* cGXM */
 	push	8
 	pop	rcx
-	rep	movsq
-	lea	rsi, [r13+32]
-	call	pt_mul
+	rep	movsq               /* G.xy → slot 16-17; rdi now &slot18 */
+	lea	rsi, [rbp+64]       /* slot 4 = Q.xy */
+	push	8
+	pop	rcx
+	rep	movsq               /* Q.xy → slot 18-19 */
 
-	pop	rdi                  /* was lea rdi,[rbp+64] */
-	mov	rsi, rbx
-	cpy3
-	call	pt_add_acc
+	lea	rsi, [r13+32]       /* &u1 (slot 13); u2 at +32 */
+	call	pt_mul              /* acc = u1·G + u2·Q */
 
 	mov	rdi, rbp
 	call	fe_iszero           /* ZF ⇔ R1.z == 0 (R at ∞) */
@@ -844,7 +885,7 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_iszero
 	jmp	.Ld2                /* short: +2 past the xor */
 .Lf2:	xor	eax, eax
-.Ld2:	add	rsp, 616
+.Ld2:	add	rsp, 648
 	jmp	.Lepi5
 
 	.section .note.GNU-stack,"",@progbits
