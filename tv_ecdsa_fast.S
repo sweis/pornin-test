@@ -817,11 +817,17 @@ tv_ecdsa_p256_verify_asm:
 	call	bcrun_r14
 	jc	.Lf                 /* bc_run's neg ebp left CF = failbit */
 
-	/* [r13+32] needed three times across the next three calls;
-	 * compute once, stockpile on stack.  Two 4-byte leas → 2 pushes
-	 * + 2 pops.  2×8=16 preserves call alignment. */
+	/* slot 13 needed five times below — three before bc_v2 (rdi for
+	 * inv-n/decode/cond_sub), two after (Shamir rdi base, pt_mul rsi).
+	 * rbx goes dead right after `mov rsi,rbx` (hash ptr consumed) and
+	 * stays dead until the `lea rbx,[r14+96]` before inv-p.  Stockpile
+	 * a third copy and pop it into rbx; then slot 16 is [rbx+96] disp8
+	 * (vs [r13+128] disp32: −3 B) and pt_mul's rsi is a mov (−1 B).
+	 * 3 pushes = 24 B on stack, but no callee here uses SSE — alignment
+	 * is cosmetic (the push rbx×4 block later does the same 24-B skew). */
 	mov	rdi, r14
 	lea	rsi, [r13+32]
+	push	rsi
 	push	rsi
 	push	rsi
 	mov	rdx, r12
@@ -833,6 +839,7 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_from_be
 	pop	rdi
 	call	cond_sub_n
+	pop	rbx                 /* rbx = &slot13; dead window until inv-p */
 
 	push	obc_v2
 	pop	rdi
@@ -843,7 +850,7 @@ tv_ecdsa_p256_verify_asm:
 	 * z for BOTH G and Q, so only X,Y (8 qwords) need swapping.
 	 * slot 15 must stay untouched (bc_v3 reads it as `one`).
 	 * rcx=0: bc_v2 ends in Nmul → fe_mul_m → fe_sub_raw dec-to-0. */
-	lea	rdi, [r13+128]      /* slot 16 (r13=&slot12; 128>127 → disp32) */
+	lea	rdi, [rbx+96]       /* slot 16 = slot 13 + 96: disp8 now */
 	lea	rsi, [r12-80]       /* cGXM */
 	mov	cl, 8
 	rep	movsq               /* G.xy → slot 16-17; rdi now &slot18, rcx=0 */
@@ -851,7 +858,7 @@ tv_ecdsa_p256_verify_asm:
 	mov	cl, 8
 	rep	movsq               /* Q.xy → slot 18-19 */
 
-	lea	rsi, [r13+32]       /* &u1 (slot 13); u2 at +32 */
+	mov	rsi, rbx            /* &u1 (slot 13); u2 at +32 */
 	call	pt_mul              /* acc = u1·G + u2·Q */
 
 	mov	rdi, rbp
