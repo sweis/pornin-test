@@ -402,9 +402,11 @@ fe_from_be:
 	loop	1b
 	ret
 
+/* cpy3: 12-qword copy.  Precondition rcx=0 (high bytes) — every caller
+ * has rcx=0 from a prior fe_iszero/rep/fe_sub_raw.  mov cl,N = 2 B vs
+ * push N;pop rcx = 3 B.  −1 B per site. */
 .macro	cpy3
-	push	12
-	pop	rcx
+	mov	cl, 12
 	rep	movsq
 .endm
 
@@ -452,8 +454,9 @@ pt_add_acc:
 	jmp	bcrun_r14           /* rel8 forward — pt_add_acc sits right before bcrun_r14 */
 .Lai:	mov	rdi, r14
 	xor	eax, eax
-	push	12
-	pop	rcx
+	/* rcx=0 on both paths here: fe_iszero's loop (pt_add_acc) and
+	 * verify's rep movsq → pt_mul prologue (the `call .Lai`). */
+	mov	cl, 12
 	rep	stosq
 	ret
 3:	push	obc_add2
@@ -586,15 +589,16 @@ pt_mul:
 	mov	rdi, r12            /* &slot4 */
 	push	rdi                 /* stash for restore after pt_add_acc clobbers rdi */
 	mov	rsi, r13            /* &slot16 = G */
-	push	8
-	pop	rcx
+	/* rcx=0: bc_dbl (via bcrun_r14 above) ends in Fsub which leaves
+	 * rcx=0 (fe_sub_raw's dec-to-0 loop); pt_add_acc (u2 branch)
+	 * exits via bc_add2/dbl (same) or rep (rcx→0).  −1 B each. */
+	mov	cl, 8
 	rep	movsq               /* G.xy → slot 4-5.  rsi now = r13+64 = &slot18. */
 	push	rsi                 /* stash &Q-backup — it's where rsi landed */
 	call	pt_add_acc
 	pop	rsi                 /* &slot18 = Q backup */
 	pop	rdi                 /* &slot4 */
-	push	8
-	pop	rcx
+	mov	cl, 8               /* rcx=0: pt_add_acc exit paths all zero rcx */
 	rep	movsq               /* Q.xy → slot 4-5 (restore) */
 3:
 	dec	ebp
@@ -782,9 +786,9 @@ tv_ecdsa_p256_verify_asm:
 	 * Zero 8 qwords = slots 14 and 15 (slot 14 is garbage until
 	 * bc_v2 writes it, slot 15 becomes `one`), then set slot15's
 	 * low limb.  Dropping the `lea rdi,[r13+96]`: −4 B.  rdx (pub
-	 * ptr) is still live; rep stosq doesn't touch it. */
-	push	8
-	pop	rcx
+	 * ptr) is still live; rep stosq doesn't touch it.
+	 * rcx=0 from fe_from_be's loop above.  −1 B. */
+	mov	cl, 8
 	xor	eax, eax
 	rep	stosq
 	inc	DWORD PTR [rdi-32]
@@ -803,9 +807,9 @@ tv_ecdsa_p256_verify_asm:
 	/* 16-qword copy: cN→slot8, cP→slot9, cBM→slot10, cR2P→slot11.
 	 * Slot 11 is never read during bc_v1 (only written later by
 	 * bc_dbl), so the R² living there lets the to-Montgomery ops
-	 * be plain Fmul with s2=0xb — no Fto_mont handler. */
-	push	16
-	pop	rcx
+	 * be plain Fmul with s2=0xb — no Fto_mont handler.
+	 * rcx=0 from fe_from_be_next above (loop counts to 0).  −1 B. */
+	mov	cl, 16
 	rep	movsq
 
 	push	obc_v1
@@ -837,15 +841,14 @@ tv_ecdsa_p256_verify_asm:
 	/* Shamir setup: G.xy → slot 16-17, Q.xy backup → slot 18-19.
 	 * slot 6 = Mont(1) is never written by bc_dbl/add — it serves as
 	 * z for BOTH G and Q, so only X,Y (8 qwords) need swapping.
-	 * slot 15 must stay untouched (bc_v3 reads it as `one`). */
+	 * slot 15 must stay untouched (bc_v3 reads it as `one`).
+	 * rcx=0: bc_v2 ends in Nmul → fe_mul_m → fe_sub_raw dec-to-0. */
 	lea	rdi, [r13+128]      /* slot 16 (r13=&slot12; 128>127 → disp32) */
 	lea	rsi, [r12-80]       /* cGXM */
-	push	8
-	pop	rcx
-	rep	movsq               /* G.xy → slot 16-17; rdi now &slot18 */
+	mov	cl, 8
+	rep	movsq               /* G.xy → slot 16-17; rdi now &slot18, rcx=0 */
 	lea	rsi, [rbp+64]       /* slot 4 = Q.xy */
-	push	8
-	pop	rcx
+	mov	cl, 8
 	rep	movsq               /* Q.xy → slot 18-19 */
 
 	lea	rsi, [r13+32]       /* &u1 (slot 13); u2 at +32 */
@@ -860,8 +863,7 @@ tv_ecdsa_p256_verify_asm:
 	mov	rdi, rbx
 	mov	rsi, rbp
 	lea	rdx, [r12+32]
-	push	1
-	pop	rcx
+	mov	cl, 1               /* rcx=0 from fe_iszero just above.  −1 B. */
 	call	fe_inv_m
 
 	push	obc_v3
