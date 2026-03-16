@@ -69,10 +69,16 @@ FAST = [
     (1252, 7460, None),
     (1238, 7460, None),   # mul8 inline
     (1216, 7460, None),
-    (1195, 3990, "PROJECTIVE CHECK\n1195B, 2.16"),  # 4000/1855*1850
-    (1193, 3990, None),
-    (1184, 3990, None),
-    (1177, 3990, None),  # labeled via CLAUDE star instead
+    # --- CORRECTED: prior 3990 was mismeasured. Re-benched on this
+    # machine: 04934b5 (1195B) = 6.18M raw, bc.S = 1.851M → ratio 3.34.
+    # The projective-check speedup was real (7460→6180) but half what
+    # the chart claimed.  All points 1195→1154 re-benched to ~6.2-6.3M.
+    (1195, 6180, "PROJECTIVE CHECK\n1195B, 3.34"),  # 6180/1851*1850
+    (1193, 6200, None),
+    (1184, 6200, None),
+    (1177, 6290, None),
+    (1160, 6300, "bc_v2 merged\n1160B"),           # 6310/1851*1850
+    (1154, 6300, None),  # labeled via CLAUDE star
 ]
 
 def pareto(pts):
@@ -84,10 +90,10 @@ def pareto(pts):
     front.sort(key=lambda i: pts[i][0])
     return front
 
-# External reference implementation.  Smaller than anything of ours,
-# but ~5.5× our cycles — defines the far-left corner of the frontier.
+# External reference.  Faster than us (1.95 vs 3.4) but we are now
+# SMALLER (1154 < 1156).  Neither dominates — both are Pareto.
 THOMAS = (1156, 3600, "Thomas\n1156B, 1.95")
-CLAUDE = (1177, 3990, "Claude\n1177B, 2.16")  # our best — on the frontier
+CLAUDE = (1154, 6300, "Claude\n1154B, 3.41")  # past Thomas on size
 TARGET = 1024
 
 # Frontier is computed over OUR points + Thomas: nothing of ours is
@@ -135,13 +141,13 @@ ax.annotate(f'Thomas\n{tb}B, ratio {tc/1850:.2f}',
             bbox=dict(boxstyle='round,pad=0.4', fc='#d4f4dd',
                       ec='#2e8b57', lw=1))
 
-# Claude marker — our best, also on the frontier (21B over Thomas
-# but ~10% faster; neither dominates).
+# Claude marker — our best.  2 B SMALLER than Thomas now; Thomas
+# is still faster (1.95 vs 3.41).  Both Pareto-optimal.
 cb, cc, _ = CLAUDE
 ax.scatter([cb], [cc], c='#e07000', s=250, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
            label=f'Claude ({cb}B, {cc/1000:.1f}M cyc)')
-ax.annotate(f'Claude\n{cb}B, ratio {cc/1850:.2f}',
+ax.annotate(f'Claude\n{cb}B, ratio {cc/1850:.2f}\n(past Thomas on size)',
             (cb, cc), textcoords="offset points", xytext=(14, 10),
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.4', fc='#ffe4c4',
@@ -164,6 +170,8 @@ LABEL_OFFSETS = {
     "pre-Sham": (10, -20),
     "Shamir":   (12, -8),
     "rcx-chain":(-145, -8),
+    "PROJECTIVE":(10, -22),
+    "bc_v2":    (-80, -8),
 }
 for b, c, lab in FAST:
     if lab:
