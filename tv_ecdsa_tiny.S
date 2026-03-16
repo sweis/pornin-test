@@ -735,51 +735,53 @@ Fadd:	push	rdi
  * fe_mul_m now uses r10 internally for b, so r10 is not free here.
  * Push/pop rbx costs +2 bytes, but `mov ebx,imm` and `dec ebx` are
  * each 1 byte shorter than their r10d equivalents — net zero. */
+/* fe_inv_m WITHOUT EXPONENT BUFFER.  n and n−2 differ only in
+ * bits 1-4 (low byte: 0x51 vs 0x4F — a four-bit borrow cascade;
+ * no borrow into byte 1).  So: bt directly on cN in .text
+ * (read-only, r14+oN) and special-case ebx<5.  ebx∈{0,1,2,3}
+ * forces mul (n-2 bits 0-3 = 1111; n bit 0 is also 1 so the
+ * force is redundant-but-correct there).  ebx==4 forces skip
+ * (n bit4=1 but n-2 bit4=0).  ebx≥5: n and n-2 agree, bt on
+ * cN is exact.
+ *
+ * No enter/leave, no exponent copy, no sub [rsp],2.  dst in
+ * r8 (survives .Lfm), src on stack at [rsp].  rdi/rsi are
+ * still live at entry (push rsi doesn't clobber rsi).  −19 B. */
 fe_inv_m:
-	/* dst in r8 — fe_mul_m no longer touches it (m went on the
-	 * stack).  r8 is caller-saved so no push/pop; survives both
-	 * .Lfm calls.  src stays on stack at [rbp+8].  −2 B: mov vs
-	 * push (+2), 2× reg-read vs mem-read (−2), one less discard
-	 * pop (−1), src disp drops 16→8 (0 B, both disp8). */
 	push	rbx
-	push	rsi                 /* src → [rbp+8] */
+	push	rsi                 /* src → [rsp] for the loop */
 	mov	r8, rdi             /* dst — survives fe_mul_m */
-	enter	32, 0
 
-	push	rsp                 /* 2B vs 3B; push rsp = pre-decrement value */
-	pop	rdi
-	lea	rsi, [r14+oN_early] /* cN (.text, via bc_run's r14=.Ljt) */
+	/* rdi,rsi still hold dst,src.  rcx = &cP (decoder preload),
+	 * not 0, so push/pop not mov cl. */
 	push	4
 	pop	rcx
-	rep	movsq               /* exponent ← m; rcx=0 after */
-	/* Both moduli have low limb ≫ 2 → no borrow into limb 1. */
-	sub	DWORD PTR [rsp], 2
-
-	mov	rdi, r8             /* dst */
-	mov	rsi, [rbp+8]        /* src */
-	mov	cl, 4               /* rcx=0 from rep above */
-	rep	movsq               /* r ← a */
+	rep	movsq               /* dst ← src.  rcx=0 after. */
 
 	xor	ebx, ebx
 	mov	bl, 254
 .Le:	mov	rdi, r8
-	push	rdi                 /* stash for reuse after .Lfm clobbers */
+	push	rdi                 /* stash across .Lfm (balances stack too) */
 	push	rdi
 	push	rdi
 	pop	rdx
 	pop	rsi
 	call	.Lfm
-	pop	rdi                 /* restore dest — before bt so [rsp]=exp */
-	bt	DWORD PTR [rsp], ebx
+	pop	rdi
+	/* Bits 0-4 special: n=…10001, n-2=…01111 in the low nibble+1.
+	 * jb catches 0-3 (force mul), je catches 4 (force skip). */
+	cmp	ebx, 4
+	jb	.Lmul
+	je	.Lnx
+	bt	DWORD PTR [r14+oN_early], ebx   /* cN in .text, disp8 */
 	jnc	.Lnx
-	push	rdi
+.Lmul:	push	rdi
 	pop	rsi
-	mov	rdx, [rbp+8]        /* src */
+	mov	rdx, [rsp]          /* src; rsp stable between iterations */
 	call	.Lfm
 .Lnx:	dec	ebx
 	jns	.Le
 
-	leave
 	pop	rcx                 /* discard src */
 	pop	rbx
 	ret
