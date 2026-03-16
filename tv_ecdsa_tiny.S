@@ -37,8 +37,8 @@
  *   encoding: byte1 = (s2<<4)|op, byte2 = (dst<<4)|s1.  9 handlers
  *   in a u8 jump table right before the constants — &cP and &cN
  *   are disp8-reachable from r14 (= &.Ljt).  .Lop8 (fe_inv_m, the
- *   biggest handler) lands at offset 255/255 — zero headroom, but
- *   it fits.  Three streams: bc_rcb (88B), bc_v3 (16B), bc_v1 (60B).
+ *   biggest handler) lands at offset 252/255 — 3 B headroom since
+ *   Fmul's jmp went rel8.  Streams: bc_rcb (88B), bc_v3 (16B), bc_v1 (60B).
  *
  * KEY INVARIANTS
  *
@@ -52,8 +52,8 @@
  *
  *   cGX→cGY→cN→cP contiguous after .Ljt — verify's single 16-qword
  *   rep movsq lands G in slots 2-3, cN in 4, cP in 5.  bc_v1's
- *   check ops read cN/cP first, THEN the copy ops overwrite 4,5
- *   with Q.  Order matters.
+ *   check ops read cN/cP first, THEN the staging ops overwrite 4-7
+ *   with 1,Qx,Qy,1 for the Shamir backup.  Order matters.
  *
  *   rcx=0 is a precondition for most `mov cl,N` sites.  Every
  *   caller gets rcx=0 from a prior loop-to-zero (rep, .Lop3's
@@ -139,8 +139,8 @@ bc_rcb:
 
 /* bc_v3: PROJECTIVE CHECK — homogeneous coords (x=X/Z, not X/Z²).
  * Valid iff X/Z mod n == r ⇔ X ≡ r·Z (mod p) OR X ≡ (r+n)·Z.
- * diff2 = diff1 − n·Z via MULCN+Fsub.  slot7 scratch (RCB's t0,
- * dead after pt_mul).  7 ops — one less than Jacobian (no Z²). */
+ * diff2 = diff1 − n·Z via MULCN+Fsub.  slot7 scratch (was RCB's
+ * addend Z, dead after pt_mul).  7 ops — one less than Jacobian. */
 bc_v3:
 	.byte 0x06,0x20            /* checkzero slot2 (Z): ∞ → fail   */
 	.byte 0x20,0x7c            /* slot7  = r·Z  (r=12, Z=2)       */
@@ -270,8 +270,8 @@ fe_iszero:
 
 /* oN hardcode: gas won't pick disp8 for forward-ref oN at the bt
  * in fe_inv_m.  Assert below.  fe_mul_m moved to AFTER the handler
- * block — Fmul's jmp is now rel8 (forward ~125 B).  fe_inv_m
- * reaches it via Nmul → Fmul fallthrough → rel8 jmp. */
+ * block — Fmul's jmp is rel8 (forward 115 B; 12 B headroom).
+ * fe_inv_m reaches it via Nmul → Fmul fallthrough → rel8 jmp. */
 .equ	oN_early, 73
 
 /* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
@@ -432,8 +432,8 @@ bc_run:
 /* .Ljt + constants.  cGX→cGY→cN→cP contiguous in that order:
  * verify copies all four to slots 2-5 in one 16-qword rep movsq
  * (G → 2,3; cN → 4; cP → 5).  bc_v1's range/zero checks read
- * cN/cP from 4,5 first, then its Q-copy ops overwrite 4,5 —
- * safe because checks always run before the copy.
+ * cN/cP from 4,5 first, then its staging ops overwrite 4-7 with
+ * 1,Qx,Qy,1 — safe because checks run before staging.
  *
  * cGX/cGY between .Ljt and handlers push handler offsets up by
  * 64 B — .Lop8 (fe_inv_m) is the furthest. */
@@ -442,10 +442,9 @@ bc_run:
 	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt
 	.byte	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only (op 7) */
 	.byte	.Lop9-.Ljt  /* MULCN (op 8) */
-/* op6 = check (s2 bit0: 0=checkzero, 1=checknonzero).  op7
- * (checknonzero) absorbed — s2 encodes sense.  −1 table, −1
- * handler vs separate ops; frees 2B headroom so fe_sub_raw
- * can inline in .Lop3 (puts .Lop8 at exactly 255). */
+/* op6 = check (s2 bit0: 0=checkzero, 1=checknonzero).  The old
+ * separate checknonzero op was absorbed — s2 encodes sense.  The
+ * table entry and handler it freed let fe_sub_raw inline in .Lop3. */
 
 cGX:	.quad 0xf4a13945d898c296, 0x77037d812deb33a0
 	.quad 0xf8bce6e563a440f2, 0x6b17d1f2e12c4247
@@ -491,9 +490,8 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 .Lor:	or	bpl, al
 	ret
 /* MULCN: Fmul with b = &cN (.text) instead of a slot.  bc_v3
- * uses this for n·z²; diff2 = diff1 − n·z² (mod p) via Fsub
- * is equivalent to diff1 + (p−n)·z² via Fadd but needs no p−n.
- * rcx = &cP untouched (mod-p).  rel8 to Fmul. */
+ * uses this for n·Z; diff2 = diff1 − n·Z (mod p).  rcx = &cP
+ * untouched (mod-p).  rel8 to Fmul. */
 .Lop9:
 MULCN:	lea	rdx, [r14+oN]
 	jmp	Fmul
@@ -532,10 +530,8 @@ Fadd:	push	rdi
 	pop	rsi
 	pop	rdi
 	/* FALLTHROUGH */
-/* fe_sub_raw inlined here — sole remaining caller.  The op6/7
- * merge freed exactly 14 B of handler-block headroom (.Lop8
- * 241+14 = 255, fits u8).  −20 B (standalone gone) +19 (body)
- * −5 (call) = −6 B.  Plus −2 B from the merge = −8 B chain. */
+/* fe_sub_raw inlined here — sole remaining caller.  The old op6/7
+ * merge freed the handler-block headroom for this. */
 .Lop3:	push	rcx
 	push	rdi
 	xor	ecx, ecx
@@ -561,8 +557,9 @@ Fadd:	push	rdi
 	jnz	2b
 1:	ret
 
-/* .Lop8 = fe_inv_m.  Placed here so its offset from .Ljt fits u8.
- * Called only from bc_v1 (op 8), mod-n only — mod-p inversion was
+/* .Lop8 = fe_inv_m.  Placed here so its offset from .Ljt fits u8
+ * (currently 252/255).  Called only from bc_v1 (op 7; the label
+ * name is historical).  Mod-n only — mod-p inversion was
  * eliminated by the projective final check. */
 .Lop8:
 /* fe_inv_m: r = a^(n-2) mod n (Fermat).  NO EXPONENT BUFFER, NO
@@ -617,9 +614,9 @@ fe_inv_m:
 /* fe_mul_m(r=rdi, a=rsi, b=rdx, m=rcx).  r = a·b mod m.  32-bit limbs.
  *
  * PLACED AFTER THE HANDLER BLOCK so Fmul's jmp is rel8 (forward
- * ~125 B instead of backward ~515 B).  fe_inv_m → Nmul → Fmul
- * fallthrough → rel8 jmp → here.  call .Lop3 at the tail is
- * backward rel32 (unchanged).
+ * 115 B; 12 B before rel8 overflows — watch if Fadd/.Lop3/fe_inv_m
+ * grow).  fe_inv_m → Nmul → Fmul fallthrough → rel8 jmp → here.
+ * call .Lop3 at the tail is backward rel32 (unchanged).
  *
  * THE TRICK: both P-256 moduli have top dword 0xFFFFFFFF AND
  * 2^256 − m < 2^224.  At 32-bit granularity (and only there), the
@@ -743,10 +740,8 @@ tv_ecdsa_p256_verify_asm:
 	push	rbx
 	push	r14
 	enter	712, 0              /* 22 slots: 3-slot backups for RCB */
-	/* r12 not pushed: after MULCN dropped the p−n compute, verify's
-	 * only use of &cN was the block-copy source.  Direct rip-rel to
-	 * cGX (7B) replaces lea r12(7B) + lea rsi,[r12-64](5B).  pt_mul
-	 * push/pops its own r12 (slot4) — independent.  −9 B. */
+	/* r12 not pushed: verify doesn't use it.  bc_run push/pops r12
+	 * as its own slot base — independent. */
 
 	/* r14 = slot base for the whole of verify.  r13 not used
 	 * anywhere. */
@@ -807,12 +802,12 @@ tv_ecdsa_p256_verify_asm:
 	jne	.Lf2
 	mov	rdi, r14            /* slot 0 */
 	call	fe_from_be
-	call	fe_from_be_next     /* rsi+=32; rdi flowed to r14+64 = slot2 */
+	call	fe_from_be_next     /* rsi+=32; Qy → slot1.  rdi exits at slot2. */
 
 	/* ONE 16-qword copy: cGX,cGY,cN,cP → slots 2,3,4,5.  G → 2,3
 	 * (survives to Shamir — bc_v1 never writes them).  cN,cP → 4,5
-	 * (bc_v1's check ops read them first, then Q-copy overwrites).
-	 * rdi already at slot 2 from pub decode.  rcx=0. */
+	 * (bc_v1's check ops read them first, then staging overwrites
+	 * 4-7 with 1,Qx,Qy,1).  rdi already at slot 2.  rcx=0. */
 	lea	rsi, [rip+cGX]
 	mov	cl, 16
 	rep	movsq               /* rdi → slot 6, rcx → 0 */
@@ -821,9 +816,7 @@ tv_ecdsa_p256_verify_asm:
 	pop	rdi
 	call	bcrun_r14
 	/* bc_v1 fail: fall through into .Lf2.  Every other fail
-	 * (length checks, 0x04 check) reaches .Lf2 as rel8 from
-	 * here.  .Lf2's own jmp to .Ld2 is near the rel8 edge —
-	 * a byte or two of growth between here and .Ld2 blows it. */
+	 * (length checks, 0x04 check) reaches .Lf2 as rel8. */
 	jnc	1f
 .Lf2:	xor	eax, eax
 	jmp	.Ld2
@@ -843,8 +836,8 @@ tv_ecdsa_p256_verify_asm:
 	mov	cl, 24
 	rep	movsq               /* slots 2-7 → 16-21.  rcx → 0. */
 
-	/* rbx = &slot13 (stockpile) — pt_mul reads u1/u2 from it. */
-	/* pt_mul tail-jumps into bc_v3 dispatch — returns HERE with
+	/* rbx = &slot16 (stockpile) — pt_mul reads u1/u2 at [rbx−96/−64].
+	 * pt_mul tail-jumps into bc_v3 dispatch — returns HERE with
 	 * CF set by bc_run's neg ebp.  See pt_mul epilogue. */
 	call	pt_mul              /* acc = u1·G + u2·Q, then bc_v3 check */
 	sbb	eax, eax            /* CF=1 → eax=−1; CF=0 → eax=0 */
