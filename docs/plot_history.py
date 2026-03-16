@@ -123,7 +123,7 @@ ax.annotate(f'{CLAUDE_FAST[0]}B, ratio {CLAUDE_FAST[1]/1850:.2f}\ndominates Thom
 # 1024 B target line — we're PAST it.
 ax.axvline(TARGET, color='#2e8b57', linestyle='--', linewidth=1.8,
            alpha=0.7, zorder=1)
-ax.annotate(f'{TARGET}B target\n← past', (TARGET, 350),
+ax.annotate(f'{TARGET}B target\n← past', (TARGET, 500),
             textcoords="offset points", xytext=(6, 0), fontsize=10,
             color='#2e8b57', fontweight='bold')
 
@@ -151,8 +151,8 @@ ax.set_title('ECDSA/P-256 verify — size vs speed (lower-left is better)',
 ax.legend(loc='upper left', framealpha=0.95, fontsize=9)
 ax.grid(True, alpha=0.2)
 ax.set_axisbelow(True)
-ax.set_xlim(1000, 2050)
-ax.set_ylim(200, 8000)
+ax.set_xlim(960, 2060)
+ax.set_ylim(0, 9000)
 
 plt.tight_layout()
 plt.savefig('docs/progress.png', dpi=100, bbox_inches='tight')
