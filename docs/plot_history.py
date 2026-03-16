@@ -58,15 +58,20 @@ TRAIL = [
     (1000, 3490, None),
     (980,  7975, None),
     (999,  3530, None),
-    (979,  7975, "addend slot shift\n979B — size corner"),
+    (979,  7975, None),
+    # --- fe_inv_m: no seed copy, no r8 (−10B) ---
+    #   bc_v1 sets dst=1; loop starts at bit 255 instead of 254.
+    #   fe_mul_m doesn't preserve rdi → bracket both calls instead.
+    (989,  3530, None),
+    (969,  8030, "fe_inv_m redesign\n969B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B).
-# Post-979B: Thomas v4 stays Pareto (996/4100 is between our two
-# points on the frontier) but no longer holds either corner.
+# Post-969B: our 989B DOMINATES Thomas v4 (smaller AND faster).
+# Thomas is fully off the frontier now.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100)]
 THOMAS    = (996, 4100)
-CLAUDE    = (979, 7975)     # size corner — 17 B under Thomas v4
+CLAUDE    = (969, 8030)     # size corner — 27 B under Thomas v4
 TARGET    = 1024
 
 def pareto(pts):
@@ -147,6 +152,7 @@ LABEL_OFFSETS = {
     "bt-on-cN":   (-90, -6),
     "RCB":        (12, -10),
     "addend":     (12, 12),
+    "fe_inv_m":   (12, 8),
 }
 for b, c, lab in TRAIL:
     if lab:
