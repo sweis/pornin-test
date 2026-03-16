@@ -45,12 +45,15 @@ TRAIL = [
     (1099, 2407, None),
     # --- op6/7 merge + fe_sub_raw inline chain (−8B). .Lop8=255/255 ---
     (1071, 6186, None),   # SMALL_MUL8
-    (1091, 2407, None),   # default — star
+    (1091, 2407, None),
+    # --- RCB COMPLETE ADDITION — one formula, no 3-way branch (−59B) ---
+    (1012, 9800, "RCB\n1012B — UNDER 1024"),  # SMALL_MUL8 size floor
+    (1032, 4200, None),   # default — CLAUDE star
 ]
 
 THOMAS_V1 = (1156, 3600)
 THOMAS    = (1046, 3990)
-CLAUDE    = (1091, 2407)
+CLAUDE    = (1012, 9800)
 TARGET    = 1024
 
 def pareto(pts):
