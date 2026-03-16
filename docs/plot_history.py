@@ -68,7 +68,9 @@ FAST = [
     (1255, 7460, None),
     (1252, 7460, None),
     (1238, 7460, None),   # mul8 inline
-    (1216, 7460, "r9/r10 args + all-stack inv\n1216B, 4.03"),
+    (1216, 7460, None),
+    (1195, 3990, "PROJECTIVE CHECK\n1195B, 2.16"),  # 4000/1855*1850
+    (1193, 3990, None),
 ]
 
 def pareto(pts):
