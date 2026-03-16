@@ -47,16 +47,22 @@ TRAIL = [
     (1071, 6186, None),   # SMALL_MUL8
     (1091, 2407, None),
     # --- RCB COMPLETE ADDITION — one formula, no 3-way branch (−59B) ---
-    (1012, 7950, None),   # SMALL_MUL8 — labeled via CLAUDE star
-    (1032, 3645, None),   # default — CLAUDE star
+    (1012, 7950, None),
+    (1032, 3645, None),
+    # --- Addend slot shift: Shamir setup → one rep movsq (−16B) ---
+    #   bc_v1 stages slots 2-7 = Gx,Gy,1,Qx,Qy,1.  RCB addend moves
+    #   4,5,6 → 5,6,7 (pure nibble cycle, 0 B).  985 B retakes size
+    #   corner from Thomas v4 (996 B) by 11 B.
+    (1005, 3475, None),
+    (985,  7960, "addend slot shift\n985B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B).
-# v3 and v4 BOTH dominate our 1012B (smaller AND faster).
-# Our 1032B stays Pareto (faster than any Thomas point).
+# Post-985B: Thomas v4 stays Pareto (996/4100 is between our two
+# points on the frontier) but no longer holds either corner.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100)]
-THOMAS    = (996, 4100)     # size corner now
-CLAUDE    = (1032, 3645)    # our best Pareto point — speed at this size
+THOMAS    = (996, 4100)
+CLAUDE    = (985, 7960)     # size corner — back in our hands
 TARGET    = 1024
 
 def pareto(pts):
@@ -102,7 +108,7 @@ ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.5, zorder=4,
         label='Thomas')
 ax.scatter(ttx, tty, c='#2e8b57', s=90, marker='o',
            edgecolors='#1a5235', linewidths=1.2, zorder=5)
-ax.annotate(f'Thomas\n{THOMAS[0]}B — size corner', THOMAS,
+ax.annotate(f'Thomas v4\n{THOMAS[0]}B', THOMAS,
             textcoords="offset points", xytext=(-14, 14), fontsize=10,
             fontweight='bold', ha='right',
             bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',
@@ -111,17 +117,17 @@ ax.annotate(f'{THOMAS_TRACK[2][0]}B', THOMAS_TRACK[2],
             textcoords="offset points", xytext=(8, -14), fontsize=8,
             color='#2e8b57')
 
-# Claude star — our best Pareto point.  Faster than any Thomas point.
+# Claude star — size corner, 11 B under Thomas v4.
 ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=280, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
            label=f'Claude {CLAUDE[0]}B')
-ax.annotate(f'Claude\n{CLAUDE[0]}B, ratio {CLAUDE[1]/1850:.2f}',
+ax.annotate(f'Claude\n{CLAUDE[0]}B — size corner',
             CLAUDE, textcoords="offset points", xytext=(14, -22),
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.35', fc='#ffe4c4',
                       ec='#e07000', lw=1))
 
-# 1024 B target line — Thomas is past it now; we're at 1012 (dominated).
+# 1024 B target line — both Thomas and Claude now past it.
 ax.axvline(TARGET, color='#888', linestyle='--', linewidth=1.5,
            alpha=0.7, zorder=1)
 ax.annotate(f'{TARGET}B', (TARGET, 500),
@@ -136,6 +142,7 @@ LABEL_OFFSETS = {
     "projective": (-8, 16),
     "bt-on-cN":   (-90, -6),
     "RCB":        (12, -10),
+    "addend":     (12, 12),
 }
 for b, c, lab in TRAIL:
     if lab:

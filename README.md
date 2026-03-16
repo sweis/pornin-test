@@ -20,22 +20,23 @@ make size      test      wp          # portable C reference
 
 | Implementation | text+rodata | Cycles | Requires | Notes |
 |---|---:|---:|---|---|
-| **`tv_ecdsa_tiny.S`** (default) | **1108 B** | **~2.4M** | MOVBE | 64-bit schoolbook |
-| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **1088 B** | ~6.3M | MOVBE | 32-bit schoolbook, size floor |
+| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **985 B** | ~8.0M | MOVBE | 32-bit schoolbook, size floor |
+| **`tv_ecdsa_tiny.S`** (default) | **1005 B** | **~3.5M** | MOVBE | 64-bit schoolbook |
 | `tv_ecdsa_fast.S` | 1397 B | ~0.65M | BMI2+MOVBE | Montgomery+mulx, predecessor |
 | `tv_ecdsa_bc.S` | 1712 B | ~1.85M | — | first bytecode version |
 | `tv_ecdsa.c` (Cortex-M4) | 2082 B | — | — | realistic boot-ROM target |
 | `tv_ecdsa.c` (x86-64, gcc `-Os`) | 3076 B | — | — | portable C reference |
 
-**One source, two Pareto-optimal builds.** The default (1108 B) uses
+**One source, two Pareto-optimal builds.** The default (1005 B) uses
 64-bit schoolbook for the 512-bit product; `-DSMALL_MUL8` swaps in a
 32-bit schoolbook (−20 B) that uses `loop`+`scasd` in the hot loop —
-both microcoded, ~950K iterations/verify, ~3M extra cycles. Same reduce
+both microcoded, ~950K iterations/verify, ~4M extra cycles. Same reduce
 step either way.
 
-**vs Thomas** (external competing implementation): 1046 B / ~4.0M
-cycles. Holds the size corner by 42 B; default tiny dominates on speed
-by ~1.7×. Full frontier chart at [`docs/progress.png`](docs/progress.png).
+**vs Thomas** (external competing implementation): v4 at 996 B / ~4.1M
+cycles. We hold the size corner by 11 B (985 B); Thomas holds the
+middle of the frontier (his 996 B and 1004 B points sit between our
+two builds). Full frontier at [`docs/progress.png`](docs/progress.png).
 
 ## Correctness
 
@@ -74,7 +75,7 @@ What changed from fast.S to drop ~290 bytes:
 - **Shamir's trick inherited from fast.S.** Slot 6 = z = 1 serves both
   G and Q; only X,Y swap.
 
-### Journey (1397 → 1108)
+### Journey (1397 → 985)
 
 | ~Size | Key step |
 |---|---|
@@ -87,8 +88,9 @@ What changed from fast.S to drop ~290 bytes:
 | 1160 | merge bc_v2→bc_v1, single dispatch (−17) |
 | 1124 | cGX adjacent to cN/cP, one 16-qw block copy (−12) |
 | 1105 | **`bt` on cN directly** — no exponent buffer (−19) |
-| 1088 | size floor (`loop`+`scasd` in mul8 inner loop) |
-| 1108 | 64-bit schoolbook as default (+20 B, halves cycles) |
+| 1071 | op6/7 merge → fe_sub_raw inlines; .Lop8 at 255/255 |
+| 1012 | **RCB complete addition** — 3-way branch → one formula (−59) |
+| 985 | **addend slot shift** — Shamir setup → one rep movsq (−16) |
 
 ## Earlier implementations
 
