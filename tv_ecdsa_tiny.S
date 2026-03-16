@@ -151,6 +151,7 @@ bc_v2:
 	.byte 0x04,0xdd, 0x04,0xec, 0x00,0x00
 
 bc_v3:
+	.byte 0x08,0x32            /* INV_P: slot3 = slot2^(-1) mod cP(.text) */
 	.byte 0x31,0x33, 0x00,0x33, 0x00,0x00
 
 bc_add1:
@@ -196,7 +197,9 @@ bc_v1:
 	.byte 0x11,0x71            /* slot7  = Qy²           (SQR) */
 	.byte 0xa3,0x77            /* slot7 -= B             (Fsub)*/
 	.byte 0xb3,0x77            /* slot7 -= slot11        (Fsub)*/
-	.byte 0x07,0x70, 0x00,0x00 /* check slot7 nonzero (dst=7!) */
+	.byte 0x07,0x70            /* check slot7 nonzero (dst=7!) */
+	.byte 0x89,0x0d            /* INV_SLOT: slot0 = slot13^-1 mod slot8(cN) */
+	.byte 0x00,0x00
 
 .equ obc_dbl,  0
 .equ obc_v2,   bc_v2   - bc_dbl
@@ -561,7 +564,7 @@ bc_run:
 	 * +4 here, −4 in Fmul, −2 in Fadd.  Fadd now preserves it across
 	 * its own fe_sub_raw.  oP is a forward reference here, so gas
 	 * picks disp32 — hardcode and assert. */
-.equ	oP_early, 40        /* .Ljt(8) + cN(32) — cN_M0I gone */
+.equ	oP_early, 42        /* .Ljt(10) + cN(32) — 10-entry table */
 	lea	rcx, [r14+oP_early]
 	call	rax
 	jmp	.Lbc
@@ -664,6 +667,7 @@ cGY:	.quad 0xcbb6406837bf51f5, 0x2bce33576b315ece
 .Ljt:
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
 	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
+	.byte	.Lop8-.Ljt, .Lop9-.Ljt  /* 8=INV_P, 9=INV_SLOT */
 
 cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
 	.quad 0xffffffffffffffff, 0xffffffff00000000
@@ -675,8 +679,8 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 .if oP - oP_early
 .error "oP moved — update oP_early in bc_run"
 .endif
-.if (cN - cGX) - 72
-.error "cGX-cN offset changed — update lea rsi,[r12-72] in verify"
+.if (cN - cGX) - 74
+.error "cGX-cN offset changed — update lea rsi,[r12-74] in verify"
 .endif
 
 /* fe_geq inlined (sole caller after cond_sub_n was rewritten as a
@@ -697,6 +701,13 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 	xor	al, 1
 .Lor:	or	bpl, al
 	ret
+/* INV: fe_inv_m(rdi=dst, rsi=src, rdx=m).  Decoder set rdi,rsi
+ * from dst,s1.  For mod-p (op 8), use rcx = &cP (decoder preload
+ * — survives pt_mul, unlike slot 9).  For mod-n (op 9), rdx is
+ * already slot[s2]; bc_v1 runs before pt_mul so slot 8=cN is live.
+ * fe_inv_m pushes r12,r13,r14,rbx + enter (rbp) — bc_run safe. */
+.Lop8:	mov	rdx, rcx            /* &cP from decoder */
+.Lop9:	jmp	fe_inv_m
 /* No m0i → Nmul is just a rcx override, Fmul is just the jmp.
  * Decoder preloaded rcx = &cP; Nmul overwrites to &cN then falls
  * through.  −10 B (push 1;pop r8 + mov r8,[rcx-8] + jmp .Lmj). */
@@ -842,7 +853,7 @@ tv_ecdsa_p256_verify_asm:
 	/* G → slots 2,3 (rdi already there).  Normal form now (no
 	 * Montgomery).  bc_v1 derives B from it and never writes
 	 * slot 2 or 3 so G survives to the Shamir setup.  rcx=0. */
-	lea	rsi, [r12-72]       /* cGX (cN_M0I gone → −8 offset) */
+	lea	rsi, [r12-74]       /* cGX (10-entry table → cN shifted +2) */
 	mov	cl, 8
 	rep	movsq               /* rdi → slot 4, rcx → 0 */
 
@@ -869,21 +880,13 @@ tv_ecdsa_p256_verify_asm:
 .Lf2:	xor	eax, eax
 	jmp	.Ld2
 1:
-	/* slot 13 needed five times below — three before bc_v2 (rdi for
-	 * inv-n/decode/cond_sub), two after (Shamir rdi base, pt_mul rsi).
-	 * rbx goes dead right after `mov rsi,rbx` (hash ptr consumed) and
-	 * stays dead until the `lea rbx,[r14+96]` before inv-p.  Stockpile
-	 * a third copy and pop it into rbx; then slot 16 is [rbx+96] disp8
-	 * (vs [r13+128] disp32: −3 B) and pt_mul's rsi is a mov (−1 B).
-	 * 3 pushes = 24 B on stack, but no callee here uses SSE — alignment
-	 * is cosmetic (the push rbx×4 block later does the same 24-B skew). */
-	mov	rdi, r14
+	/* inv-n already done by bc_v1's last op (INV slot0 = slot13^−1
+	 * mod slot8=cN).  Stockpile slot 13 for hash decode / cond_sub /
+	 * Shamir rbx.  rbx (hash ptr) goes dead after `mov rsi,rbx`. */
 	lea	rsi, [r13+32]
 	push	rsi
 	push	rsi
 	push	rsi
-	mov	rdx, r12            /* &cN; no m0i needed */
-	call	fe_inv_m
 
 	mov	rsi, rbx
 	pop	rdi
@@ -914,12 +917,9 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_iszero           /* ZF ⇔ R1.z == 0 (R at ∞) */
 	jz	.Lf2
 
+	/* inv-p is bc_v3's first op (INV slot3 = slot2^−1 mod slot9=cP).
+	 * rbx = slot 3 still needed for the push×4 final-check block. */
 	lea	rbx, [r14+96]
-
-	mov	rdi, rbx
-	mov	rsi, r15
-	lea	rdx, [r12+32]       /* &cP; no m0i needed */
-	call	fe_inv_m
 
 	push	obc_v3
 	pop	rdi
