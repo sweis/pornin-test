@@ -71,7 +71,8 @@ FAST = [
     (1216, 7460, None),
     (1195, 3990, "PROJECTIVE CHECK\n1195B, 2.16"),  # 4000/1855*1850
     (1193, 3990, None),
-    (1184, 3990, "CF natural + no r13\n1184B, 2.16"),
+    (1184, 3990, None),
+    (1177, 3990, ".Lop8=fe_inv_m\n1177B, 2.16"),
 ]
 
 def pareto(pts):
