@@ -158,7 +158,9 @@ bc_v3:
  * the Shamir copy.  No Fadd anywhere — Fadd clobbers slot 3 (Gy). */
 bc_v1:
 	/* Range/zero checks.  cN/cP in slots 4,5 (block-copied). */
-	.byte 0x06,0xc0, 0x05,0xc4, 0x06,0xd0, 0x05,0xd4
+	/* checkzero-s DROPPED: s=0 → INV gives 0 → u1=u2=0 → ladder
+	 * never adds → R=∞ → bc_v3's checkzero(Z) catches it.  −2 B. */
+	.byte 0x06,0xc0, 0x05,0xc4,            0x05,0xd4
 	.byte 0x05,0x05, 0x05,0x15
 	.byte 0xf0,0x40            /* slot4 = Qx·1 = Qx  (copy)    */
 	.byte 0xf0,0x51            /* slot5 = Qy·1 = Qy  (copy)    */
