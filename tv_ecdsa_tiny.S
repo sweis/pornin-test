@@ -145,10 +145,10 @@ bc_dbl:
 	.byte 0xa1,0x0a, 0xb3,0x00, 0x03,0x88, 0x80,0x8a, 0x91,0x99
 	.byte 0x92,0x99, 0x92,0x99, 0x92,0x99, 0x93,0x18, 0x00,0x00
 
-/* bc_v2/v3: from-Mont ops (Fmul/Nmul by slot15=1) are no-ops in
- * plain arithmetic.  −4 B + −2 B. */
-bc_v2:
-	.byte 0x04,0xdd, 0x04,0xec, 0x00,0x00
+/* bc_v2 MERGED into bc_v1 — hash decode now writes e to slot 14
+ * (not 13), so s in 13 survives to INV and bc_v1 can flow straight
+ * into the two Nmuls.  One dispatch, one terminator, one stream.
+ * See bc_v1 tail for the appended ops.  −17 B. */
 
 /* bc_v3: PROJECTIVE CHECK — no mod-p inversion.  Valid iff
  * x mod n == r ⇔ X ≡ r·Z² (mod p) OR X ≡ (r+n)·Z² (mod p).  p is
@@ -214,10 +214,13 @@ bc_v1:
 	.byte 0xb3,0x77            /* slot7 -= slot11        (Fsub)*/
 	.byte 0x07,0x70            /* check slot7 nonzero (dst=7!) */
 	.byte 0x88,0x0d            /* INV: slot0 = slot13^-1 mod slot8(cN) */
+	/* bc_v2 appended: hash is in slot14, s⁻¹ in slot0, r in slot12.
+	 * Checks may have failed — harmless, ebp already tainted. */
+	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
+	.byte 0x04,0xec            /* slot14 = slot12·slot0 = r·s⁻¹ = u2 */
 	.byte 0x00,0x00
 
 .equ obc_dbl,  0
-.equ obc_v2,   bc_v2   - bc_dbl
 .equ obc_v3,   bc_v3   - bc_dbl
 .equ obc_add1, bc_add1 - bc_dbl
 .equ obc_add2, bc_add2 - bc_dbl
@@ -817,16 +820,25 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi already r13+32 */
 
-	/* build_one: rdi flowed out of the above at r13+64 (slot 14).
-	 * Zero 8 qwords = slots 14 and 15 (slot 14 is garbage until
-	 * bc_v2 writes it, slot 15 becomes `one`), then set slot15's
-	 * low limb.  Dropping the `lea rdi,[r13+96]`: −4 B.  rdx (pub
-	 * ptr) is still live; rep stosq doesn't touch it.
-	 * rcx=0 from fe_from_be's loop above.  −1 B. */
-	mov	cl, 8
+	/* HASH DECODE here — rdi = slot 14 from sig-decode flowthrough.
+	 * Slot 13 (s) untouched so bc_v1 can check it AND invert it;
+	 * e goes to 14 where the appended Nmul reads it.  fe_from_be
+	 * touches only rsi/rdi/rcx/rax — rdx (pub) and rbx both
+	 * survive to the pub check below.  rcx=0 on entry (fe_from_be
+	 * loop exit).  rdi → slot 15 for build_one. */
+	mov	rsi, rbx
+	call	fe_from_be
+
+	/* build_one: rdi = slot 15.  Only 4 qwords (slot 14 already
+	 * holds hash).  rcx=0 from fe_from_be. */
+	mov	cl, 4
 	xor	eax, eax
 	rep	stosq
 	inc	DWORD PTR [rdi-32]
+	/* rdi = slot 16; rbx stockpiled here for the whole of verify
+	 * (bc_run pushes/pops rbx, nothing else between here and
+	 * pt_mul writes it).  All Shamir/p−n leas are rbx-disp8. */
+	lea	rbx, [rdi-96]       /* slot 13 */
 
 	cmp	BYTE PTR [rdx], 0x04
 	jne	.Lf2
@@ -867,29 +879,18 @@ tv_ecdsa_p256_verify_asm:
 .Lf2:	xor	eax, eax
 	jmp	.Ld2
 1:
-	/* inv-n done by bc_v1's last op.  Hash decode goes to slot 13
-	 * (was s, now e).  NO cond_sub: e might be ≥ n but bc_v2's
-	 * Nmul computes e·s⁻¹ mod n regardless — (a·b) mod n is right
-	 * for any a < 2^256.  Stockpile slot 13 for decode + Shamir rbx. */
-	lea	rsi, [r14+13*32]    /* slot 13 (disp32; r13 gone) */
-	push	rsi
-	push	rsi
-
-	mov	rsi, rbx
-	pop	rdi
-	call	fe_from_be
-	pop	rbx                 /* rbx = &slot13; dead window until inv-p */
-
-	push	obc_v2
-	pop	rdi
-	call	bcrun_r14
+	/* bc_v1 now also ran the two Nmuls (u1,u2 in 13,14).  Hash
+	 * decode was done pre-bc_v1 into slot 14.  rbx = &slot13
+	 * from the early stockpile — bc_run pushed/popped it.
+	 * NO cond_sub: e might be ≥ n but Nmul computes e·s⁻¹ mod n
+	 * regardless — (a·b) mod n is right for any a < 2^256. */
 
 	/* Shamir setup: G.xy → 16-17, Q.xy backup → 18-19.  slots
 	 * 2,3,4,5 are already G.x,G.y,Q.x,Q.y (Montgomery) — G was
 	 * loaded pre-bc_v1, Q was to-Mont'd by bc_v1, and nothing
 	 * since (inv_m/hash/cond_sub/bc_v2) has touched any of them.
 	 * Slots 16-19 are contiguous too.  One 16-qword copy.  −9 B.
-	 * rcx=0: bc_v2 ends in Nmul → fe_mul_m → fe_sub_raw dec-to-0. */
+	 * rcx=0: bc_v1's last op is Nmul → fe_mul_m → fe_sub_raw dec-to-0. */
 	lea	rdi, [rbx+96]       /* slot 16 = slot 13 + 96: disp8 */
 	mov	rsi, r15            /* slot 2 */
 	mov	cl, 16
