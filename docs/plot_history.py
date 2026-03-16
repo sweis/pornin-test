@@ -72,7 +72,7 @@ FAST = [
     (1195, 3990, "PROJECTIVE CHECK\n1195B, 2.16"),  # 4000/1855*1850
     (1193, 3990, None),
     (1184, 3990, None),
-    (1177, 3990, ".Lop8=fe_inv_m\n1177B, 2.16"),
+    (1177, 3990, None),  # labeled via CLAUDE star instead
 ]
 
 def pareto(pts):
@@ -87,6 +87,7 @@ def pareto(pts):
 # External reference implementation.  Smaller than anything of ours,
 # but ~5.5× our cycles — defines the far-left corner of the frontier.
 THOMAS = (1156, 3600, "Thomas\n1156B, 1.95")
+CLAUDE = (1177, 3990, "Claude\n1177B, 2.16")  # our best — on the frontier
 TARGET = 1024
 
 # Frontier is computed over OUR points + Thomas: nothing of ours is
@@ -133,6 +134,18 @@ ax.annotate(f'Thomas\n{tb}B, ratio {tc/1850:.2f}',
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.4', fc='#d4f4dd',
                       ec='#2e8b57', lw=1))
+
+# Claude marker — our best, also on the frontier (21B over Thomas
+# but ~10% faster; neither dominates).
+cb, cc, _ = CLAUDE
+ax.scatter([cb], [cc], c='#e07000', s=250, marker='*',
+           edgecolors='#8a4500', linewidths=1.5, zorder=6,
+           label=f'Claude ({cb}B, {cc/1000:.1f}M cyc)')
+ax.annotate(f'Claude\n{cb}B, ratio {cc/1850:.2f}',
+            (cb, cc), textcoords="offset points", xytext=(14, 10),
+            fontsize=10, fontweight='bold',
+            bbox=dict(boxstyle='round,pad=0.4', fc='#ffe4c4',
+                      ec='#e07000', lw=1))
 
 # 1024 B size target — vertical marker line.
 ax.axvline(TARGET, color='#2e8b57', linestyle='--', linewidth=1.5,
