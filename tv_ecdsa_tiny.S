@@ -779,17 +779,15 @@ tv_ecdsa_p256_verify_asm:
 	 * .Lepi5).  enter is microcoded (~12 cyc) but runs once. */
 	push	rbx
 	push	r12
-	push	r13
 	push	r14
 	push	r15
 	enter	648, 0
 
-	/* r14 = rsp for the whole of verify (every callee saves r14).
-	 * r14 as base avoids rsp's SIB byte on the r13 lea.  r15 is
-	 * set later from fe_from_be's flowed-out rdi (= r14+64 after
-	 * decoding pub.x/y). */
+	/* r14 = rsp for the whole of verify.  r13 no longer used
+	 * (final check is projective — no `mov rdx,r13` for r).
+	 * Drop push/pop r13 and the lea; disp32 at the 2 use sites
+	 * is +7 B but −11 B from push+pop+lea.  −4 B net. */
 	mov	r14, rsp
-	lea	r13, [r14+12*32]
 
 	mov	r12, rdi
 	mov	rbx, r8
@@ -810,7 +808,7 @@ tv_ecdsa_p256_verify_asm:
 	/* fe_from_be: stosq×4 advances rdi by 32; rsi index-read only.
 	 * Chain: rdi flows call→call; rsi bumped +32 in place. */
 	mov	rsi, r12
-	mov	rdi, r13
+	lea	rdi, [r14+12*32]    /* slot 12 (disp32; r13 gone) */
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi already r13+32 */
 
@@ -868,7 +866,7 @@ tv_ecdsa_p256_verify_asm:
 	 * (was s, now e).  NO cond_sub: e might be ≥ n but bc_v2's
 	 * Nmul computes e·s⁻¹ mod n regardless — (a·b) mod n is right
 	 * for any a < 2^256.  Stockpile slot 13 for decode + Shamir rbx. */
-	lea	rsi, [r13+32]
+	lea	rsi, [r14+13*32]    /* slot 13 (disp32; r13 gone) */
 	push	rsi
 	push	rsi
 
@@ -915,7 +913,6 @@ tv_ecdsa_p256_verify_asm:
 .Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
 	pop	r15
 	pop	r14
-	pop	r13
 	pop	r12
 	pop	rbx
 	ret
