@@ -169,9 +169,15 @@ bc_v3:
 	.byte 0x07,0x30            /* check slot3 nonzero → fail      */
 	.byte 0x00,0x00
 
+/* Tail checkzero on slot3 (= H): bc_run returns CF=1 iff H==0.
+ * pt_add_acc branches on CF directly — drops the native
+ * lea+call+jnz H-test (11 B) for a 2-B jnc + this 2-B op.
+ * bc_add1 has no Fadd (ops 0,1,3 only), so slot3 survives as
+ * written by the penultimate Fsub.  obc_v1 shifts 118→120. */
 bc_add1:
 	.byte 0x21,0xa2, 0x61,0xb6, 0xb0,0x80, 0xa0,0x34, 0x60,0x91
 	.byte 0xb0,0x99, 0x20,0x75, 0xa0,0x77, 0x83,0x33, 0x93,0x77
+	.byte 0x06,0x30            /* checkzero slot3 (H) → CF on return */
 	.byte 0x00,0x00
 
 bc_add2:
@@ -429,11 +435,13 @@ pt_add_acc:
 1:	push	obc_add1
 	pop	rdi
 	call	bcrun_r14
-	lea	rdi, [r14+96]
-	call	fe_iszero           /* ZF ⇔ H == 0 */
-	jnz	3f
-	/* fe_iszero preserved rdi = r14+96.  sub imm8 −128 = +128. */
-	sub	rdi, -128           /* r14+224 */
+	/* bc_add1's tail checkzero(slot3=H) sets CF iff H==0.
+	 * After bcrun_r14 rdi is clobbered — can't chain the old
+	 * sub-imm8 trick.  But r12 = slot4 (pt_mul's, preserved
+	 * through bc_run) → slot7 = r12+96, disp8.  r12 needs SIB
+	 * (same low bits as rsp) so 5 B vs 7 B disp32 from r14. */
+	jnc	3f                  /* H ≠ 0 → bc_add2 */
+	lea	rdi, [r12+96]       /* slot 7 = Rr (slot4+96) */
 	call	fe_iszero           /* ZF ⇔ Rr == 0 */
 	jnz	.Lai
 	/* Tail-share: both this path and 3: end in `jmp bcrun_r14`.
