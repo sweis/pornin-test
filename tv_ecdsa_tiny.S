@@ -150,9 +150,24 @@ bc_dbl:
 bc_v2:
 	.byte 0x04,0xdd, 0x04,0xec, 0x00,0x00
 
+/* bc_v3: PROJECTIVE CHECK — no mod-p inversion.  Valid iff
+ * x mod n == r ⇔ X ≡ r·Z² (mod p) OR X ≡ (r+n)·Z² (mod p).  p is
+ * prime → (diff1·diff2 ≡ 0) ⇔ (either ≡ 0).  diff2 = diff1 − n·Z²
+ * and n·Z² ≡ −(p−n)·Z² (mod p) so diff2 = diff1 + (p−n)·Z².
+ * slot 11 = p−n (native compute post-pt_mul, rbx-64 disp8).
+ * slot 7 holds z² (survives Fadd's slot-3 scratch).  First op:
+ * R.z==0 (∞) → fail.  Fadd at op 6 has dst=scratch=slot 3 — the
+ * write overlays the scratch, works (read-before-write per limb). */
 bc_v3:
-	.byte 0x08,0x32            /* INV_P: slot3 = slot2^(-1) mod cP(.text) */
-	.byte 0x31,0x33, 0x00,0x33, 0x00,0x00
+	.byte 0x06,0x20            /* checkzero slot2 (R.z): ∞ → fail */
+	.byte 0x21,0x72            /* slot7  = z²                     */
+	.byte 0x70,0xac            /* slot10 = r·z²  (r=slot12)       */
+	.byte 0xa3,0xa0            /* slot10 = X − r·z²       = diff1 */
+	.byte 0x70,0x3b            /* slot3  = (p−n)·z²  (p−n=slot11) */
+	.byte 0x32,0x3a            /* slot3  = diff1 + (p−n)z² = diff2*/
+	.byte 0x30,0x3a            /* slot3  = diff1·diff2            */
+	.byte 0x07,0x30            /* check slot3 nonzero → fail      */
+	.byte 0x00,0x00
 
 bc_add1:
 	.byte 0x21,0xa2, 0x61,0xb6, 0xb0,0x80, 0xa0,0x34, 0x60,0x91
@@ -198,7 +213,7 @@ bc_v1:
 	.byte 0xa3,0x77            /* slot7 -= B             (Fsub)*/
 	.byte 0xb3,0x77            /* slot7 -= slot11        (Fsub)*/
 	.byte 0x07,0x70            /* check slot7 nonzero (dst=7!) */
-	.byte 0x89,0x0d            /* INV_SLOT: slot0 = slot13^-1 mod slot8(cN) */
+	.byte 0x88,0x0d            /* INV: slot0 = slot13^-1 mod slot8(cN) */
 	.byte 0x00,0x00
 
 .equ obc_dbl,  0
@@ -545,7 +560,7 @@ bc_run:
 	 * +4 here, −4 in Fmul, −2 in Fadd.  Fadd now preserves it across
 	 * its own fe_sub_raw.  oP is a forward reference here, so gas
 	 * picks disp32 — hardcode and assert. */
-.equ	oP_early, 42        /* .Ljt(10) + cN(32) — 10-entry table */
+.equ	oP_early, 41        /* .Ljt(9) + cN(32) — 9-entry table */
 	lea	rcx, [r14+oP_early]
 	call	rax
 	jmp	.Lbc
@@ -648,7 +663,7 @@ cGY:	.quad 0xcbb6406837bf51f5, 0x2bce33576b315ece
 .Ljt:
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
 	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
-	.byte	.Lop8-.Ljt, .Lop9-.Ljt  /* 8=INV_P, 9=INV_SLOT */
+	.byte	.Lop8-.Ljt  /* INV (slot-based, only mod-n now) */
 
 cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
 	.quad 0xffffffffffffffff, 0xffffffff00000000
@@ -660,8 +675,8 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 .if oP - oP_early
 .error "oP moved — update oP_early in bc_run"
 .endif
-.if (cN - cGX) - 74
-.error "cGX-cN offset changed — update lea rsi,[r12-74] in verify"
+.if (cN - cGX) - 73
+.error "cGX-cN offset changed — update lea rsi,[r12-73] in verify"
 .endif
 
 /* fe_geq inlined (sole caller after cond_sub_n was rewritten as a
@@ -682,13 +697,10 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 	xor	al, 1
 .Lor:	or	bpl, al
 	ret
-/* INV: fe_inv_m(rdi=dst, rsi=src, rdx=m).  Decoder set rdi,rsi
- * from dst,s1.  For mod-p (op 8), use rcx = &cP (decoder preload
- * — survives pt_mul, unlike slot 9).  For mod-n (op 9), rdx is
- * already slot[s2]; bc_v1 runs before pt_mul so slot 8=cN is live.
- * fe_inv_m pushes r12,r13,r14,rbx + enter (rbp) — bc_run safe. */
-.Lop8:	mov	rdx, rcx            /* &cP from decoder */
-.Lop9:	jmp	fe_inv_m
+/* INV (mod-n only — mod-p inversion eliminated by projective
+ * check).  rdx = slot[s2] from decoder; bc_v1 runs before pt_mul
+ * so slot 8=cN is live.  fe_inv_m preserves bc_run's state. */
+.Lop8:	jmp	fe_inv_m
 /* No m0i → Nmul is just a rcx override, Fmul is just the jmp.
  * Decoder preloaded rcx = &cP; Nmul overwrites to &cN then falls
  * through.  −10 B (push 1;pop r8 + mov r8,[rcx-8] + jmp .Lmj). */
@@ -820,7 +832,7 @@ tv_ecdsa_p256_verify_asm:
 	/* G → slots 2,3 (rdi already there).  Normal form now (no
 	 * Montgomery).  bc_v1 derives B from it and never writes
 	 * slot 2 or 3 so G survives to the Shamir setup.  rcx=0. */
-	lea	rsi, [r12-74]       /* cGX (10-entry table → cN shifted +2) */
+	lea	rsi, [r12-73]       /* cGX (9-entry table) */
 	mov	cl, 8
 	rep	movsq               /* rdi → slot 4, rcx → 0 */
 
@@ -878,38 +890,23 @@ tv_ecdsa_p256_verify_asm:
 	/* rbx = &slot13 already (stockpile) — pt_mul reads it directly. */
 	call	pt_mul              /* acc = u1·G + u2·Q */
 
-	mov	rdi, r15
-	call	fe_iszero           /* ZF ⇔ R1.z == 0 (R at ∞) */
-	jz	.Lf2
+	/* p−n into slot 11 natively (no survivor slot through pt_mul —
+	 * 4,5,6 are Q/1, 7 is add1→add2 handoff).  rbx = slot 13 from
+	 * stockpile; slot 11 = rbx−64 disp8.  cP = r12+32, cN = r12. */
+	lea	rdi, [rbx-64]       /* slot 11 */
+	lea	rsi, [r12+32]       /* &cP */
+	mov	rdx, r12            /* &cN */
+	call	fe_sub_raw          /* slot11 = p − n */
 
-	/* inv-p is bc_v3's first op (INV slot3 = slot2^−1 mod slot9=cP).
-	 * rbx = slot 3 still needed for the push×4 final-check block. */
-	lea	rbx, [r14+96]
-
+	/* bc_v3: projective check — NO mod-p inversion.  ∞-check,
+	 * diff1·diff2 ≡ 0 (mod p) ⇔ valid (p prime → field).  Drops
+	 * native ∞-check (10 B), lea rbx (4 B), 35 B final block.
+	 * Adds 20 B p−n compute + 4 B CF→eax.  Net ~−25 B. */
 	push	obc_v3
 	pop	rdi
 	call	bcrun_r14
-
-	/* rbx loaded into rdi three times across three calls; stockpile
-	 * on stack (push rbx = 1 byte) and pop as needed.  4+4 = 8 bytes
-	 * vs 4×mov (12).  Callees are all leaf — no stack align concern. */
-	push	rbx
-	push	rbx
-	push	rbx
-	push	rbx
-	pop	rdi
-	mov	rcx, r12
-	push	rdi
-	pop	rsi                 /* 2 B vs mov rsi,rdi 3 B */
-	mov	rdx, r12
-	call	.Lop3               /* cond-sub mod n */
-	pop	rsi
-	pop	rdi
-	mov	rdx, r13
-	call	fe_sub_raw
-	pop	rdi
-	call	fe_iszero
-	/* FALLTHROUGH: eax = fe_iszero(x−r) = 1 iff valid.  No jmp. */
+	sbb	eax, eax            /* CF=1 → eax=−1; CF=0 → eax=0 */
+	inc	eax                 /* −1→0 (fail), 0→1 (valid) */
 .Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
 	pop	r15
 	pop	r14
