@@ -248,6 +248,10 @@ fe_iszero:
  * lodsq/stosq preserve all flags; `dec` preserves CF (sets ZF only).
  * `xor ecx,ecx` doubles as the CF-clear.  Pointers advance as a side
  * effect — callers must not assume they're preserved. */
+/* fe_sub_raw: dst = a − b.  CF on return = final borrow (last sbb;
+ * lea/dec/jnz all preserve CF).  Sole CF consumer is .Lop3's jnc —
+ * the old `sbb eax;neg` tail just rebuilt the same CF.  eax never
+ * read by any caller (Fadd: p>s2, verify p−n: p>n, both ignore). */
 fe_sub_raw:
 	xor	ecx, ecx
 	mov	cl, 4
@@ -257,8 +261,6 @@ fe_sub_raw:
 	lea	rdx, [rdx+8]
 	dec	ecx
 	jnz	1b
-	sbb	eax, eax
-	neg	eax
 	ret
 
 /* mul8 OP: dst[0..8] OP= ebx·src[0..7], 32-bit limbs.  INLINED at
@@ -732,7 +734,9 @@ Fmul:	jmp	fe_mul_m
 	pop	rdx
 	jnc	1f
 	mov	rsi, rdi
-	xor	ecx, ecx
+	/* rcx=0 from fe_sub_raw's dec-to-0; only CF needs clearing
+	 * (we're on the borrow path, CF=1).  clc = 1 B vs xor 2 B. */
+	clc
 	mov	cl, 4
 2:	lodsq
 	adc	rax, [rdx]
