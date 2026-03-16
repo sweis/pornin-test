@@ -78,7 +78,11 @@ FAST = [
     (1184, 6200, None),
     (1177, 6290, None),
     (1160, 6300, "bc_v2 merged\n1160B"),           # 6310/1851*1850
-    (1154, 6300, None),  # labeled via CLAUDE star
+    (1154, 6300, None),
+    (1149, 6300, None),   # movzx+stack-m
+    (1146, 6300, None),   # bt32+r8
+    (1140, 6300, None),   # H-check bytecode
+    (1136, 6300, None),   # push/pop — labeled via CLAUDE star
 ]
 
 def pareto(pts):
@@ -93,7 +97,7 @@ def pareto(pts):
 # External reference.  Faster than us (1.95 vs 3.4) but we are now
 # SMALLER (1154 < 1156).  Neither dominates — both are Pareto.
 THOMAS = (1156, 3600, "Thomas\n1156B, 1.95")
-CLAUDE = (1154, 6300, "Claude\n1154B, 3.41")  # past Thomas on size
+CLAUDE = (1136, 6300, "Claude\n1136B, 3.41")  # 20B past Thomas
 TARGET = 1024
 
 # Frontier is computed over OUR points + Thomas: nothing of ours is
