@@ -59,19 +59,21 @@ TRAIL = [
     (980,  7975, None),
     (999,  3530, None),
     (979,  7975, None),
-    # --- fe_inv_m: no seed copy, no r8 (−10B) ---
+    # --- fe_inv_m: no seed copy, no r8 (−10B).  Then .Lfm = Nmul (−5B) ---
     #   bc_v1 sets dst=1; loop starts at bit 255 instead of 254.
     #   fe_mul_m doesn't preserve rdi → bracket both calls instead.
     (989,  3530, None),
-    (969,  8030, "fe_inv_m redesign\n969B — size corner"),
+    (969,  8030, None),
+    (984,  3540, None),
+    (964,  8115, "fe_inv_m redesign\n964B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B).
-# Post-969B: our 989B DOMINATES Thomas v4 (smaller AND faster).
+# Post-964B: our 984B DOMINATES Thomas v4 (smaller AND faster).
 # Thomas is fully off the frontier now.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100)]
 THOMAS    = (996, 4100)
-CLAUDE    = (969, 8030)     # size corner — 27 B under Thomas v4
+CLAUDE    = (964, 8115)     # size corner — 32 B under Thomas v4
 TARGET    = 1024
 
 def pareto(pts):
