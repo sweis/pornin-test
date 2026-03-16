@@ -94,48 +94,45 @@
 	.section .rodata
 	.p2align 3
 
-bc_dbl:
-	.byte 0x21,0xb2, 0x11,0x91, 0xb3,0x80, 0xb2,0xa0, 0xa0,0xa8
-	.byte 0xa2,0x8a, 0xa2,0xa8, 0x22,0x81, 0x81,0x88, 0x93,0x88
-	.byte 0xb3,0x28, 0x90,0xb0, 0xb2,0x8b, 0x82,0x88, 0x82,0xb8
-	.byte 0xa1,0x0a, 0xb3,0x00, 0x03,0x88, 0x80,0x8a, 0x91,0x99
-	.byte 0x92,0x99, 0x92,0x99, 0x92,0x99, 0x93,0x18, 0x00,0x00
+/* bc_rcb: Renes-Costello-Batina complete addition, a=−3 (their
+ * Alg. 7).  Handles P+Q, 2P, P+(−P)=∞, ∞+Q=Q uniformly — NO
+ * special-case branching in pt_add_acc.  Coords are HOMOGENEOUS
+ * PROJECTIVE (x=X/Z, y=Y/Z), NOT Jacobian.  ∞ = (0:Y:0) for any
+ * Y≠0; .Lai produces (0:1:0).
+ *
+ * Inputs:  P in slots 0,1,2.  Q in slots 4,5,6.  b in slot 10.
+ * Output:  P+Q in slots 0,1,2.  Slots 4,5,6 PRESERVED (read-only).
+ * Scratch: 3 (transient — lives only between its Fadd-write and
+ *           next Fmul/Fsub-read), 7,8,9,11,15 (permanent).
+ *
+ * Slot 3 is Fadd's scratch too — but the three t5-uses here all
+ * write via Fadd (dst=scratch overlays OK) and read via Fmul/Fsub
+ * (no clobber).  Verified by Python simulation.  43 ops, 88 B. */
+bc_rcb:
+	.byte 0x40,0x70, 0x50,0x81, 0x60,0x92, 0x12,0xb0, 0x52,0xf4
+	.byte 0xf0,0xbb, 0x82,0xf7, 0xf3,0xbb, 0x22,0xf1, 0x62,0x35
+	.byte 0x30,0xff, 0x92,0x38, 0x33,0xff, 0x62,0x14, 0x22,0x30
+	.byte 0x10,0x03, 0x92,0x17, 0x13,0x10, 0xa0,0x29, 0x23,0x01
+	.byte 0x02,0x20, 0x22,0x00, 0x03,0x28, 0x02,0x08, 0xa0,0x11
+	.byte 0x92,0x89, 0x92,0x98, 0x93,0x11, 0x73,0x11, 0x12,0x81
+	.byte 0x12,0x18, 0x72,0x87, 0x72,0x78, 0x93,0x77, 0x10,0x8f
+	.byte 0x10,0x97, 0x20,0x10, 0x92,0x11, 0x00,0x0b, 0x83,0x00
+	.byte 0x20,0x2f, 0x70,0x8b, 0x82,0x22
+	.byte 0x00,0x00
 
-/* bc_v2 merged into bc_v1: hash decode writes e to slot 14, so s
- * in slot 13 survives to INV; the two Nmuls append to bc_v1's tail.
- * One dispatch, one terminator. */
-
-/* bc_v3: PROJECTIVE CHECK — no mod-p inversion.  Valid iff
- * x mod n == r ⇔ X ≡ r·Z² (mod p) OR X ≡ (r+n)·Z² (mod p).
- * p is prime → (diff1·diff2 ≡ 0) ⇔ (either ≡ 0).  diff2 =
- * diff1 − n·Z² via MULCN (b=cN in .text) + Fsub; equivalent to
- * diff1 + (p−n)·Z² via Fadd but needs no p−n constant.
- * First op: R.z==0 (∞) → fail. */
+/* bc_v3: PROJECTIVE CHECK — homogeneous coords (x=X/Z, not X/Z²).
+ * Valid iff X/Z mod n == r ⇔ X ≡ r·Z (mod p) OR X ≡ (r+n)·Z.
+ * diff2 = diff1 − n·Z via MULCN+Fsub.  slot7 scratch (RCB's t0,
+ * dead after pt_mul).  7 ops — one less than Jacobian (no Z²). */
 bc_v3:
-	.byte 0x06,0x20            /* checkzero slot2 (R.z): ∞ → fail */
-	.byte 0x21,0x72            /* slot7  = z²                     */
-	.byte 0x70,0xac            /* slot10 = r·z²  (r=slot12)       */
-	.byte 0xa3,0xa0            /* slot10 = X − r·z²       = diff1 */
-	.byte 0x08,0x37            /* slot3  = n·z²  (MULCN=op8 now)  */
-	.byte 0x33,0x3a            /* slot3  = diff1 − n·z² = diff2 (Fsub)*/
-	.byte 0x30,0x3a            /* slot3  = diff1·diff2            */
+	.byte 0x06,0x20            /* checkzero slot2 (Z): ∞ → fail   */
+	.byte 0x20,0x7c            /* slot7  = r·Z  (r=12, Z=2)       */
+	.byte 0x73,0x70            /* slot7  = X − r·Z        = diff1 */
+	.byte 0x08,0x32            /* slot3  = n·Z  (MULCN, s1=Z)     */
+	.byte 0x33,0x37            /* slot3  = diff1 − n·Z    = diff2 */
+	.byte 0x70,0x33            /* slot3  = diff1·diff2            */
 	.byte 0x16,0x30            /* check slot3 nonzero (op6 s2=1)  */
 	.byte 0x00,0x00
-
-/* Tail checkzero on slot3 (= H): bc_run returns CF=1 iff H==0.
- * pt_add_acc branches on CF directly (jnc).  bc_add1 has no Fadd
- * (ops 0,1,3 only), so slot3 survives as the penultimate Fsub
- * wrote it — Fadd would clobber slot 3 as scratch. */
-bc_add1:
-	.byte 0x21,0xa2, 0x61,0xb6, 0xb0,0x80, 0xa0,0x34, 0x60,0x91
-	.byte 0xb0,0x99, 0x20,0x75, 0xa0,0x77, 0x83,0x33, 0x93,0x77
-	.byte 0x06,0x30            /* checkzero slot3 (H) → CF on return */
-	.byte 0x00,0x00
-
-bc_add2:
-	.byte 0x60,0xa2, 0x30,0x2a, 0x31,0xa3, 0xa0,0xb3, 0xa0,0x88
-	.byte 0xb0,0x99, 0x71,0x07, 0xb3,0x00, 0x82,0x38, 0x33,0x00
-	.byte 0x03,0x38, 0x30,0x37, 0x93,0x13, 0x00,0x00
 
 /* bc_v1: range checks + curve check + s⁻¹ + u1,u2.
  *
@@ -143,9 +140,10 @@ bc_add2:
  * (block-copied, read by the checks, then overwritten by Q-copy).
  *
  * Slots 4,5 get Qx,Qy via Fmul(x, slot15=1) = x — a 2-B copy.
- * Slot 6 = 1 via 1·1 (pt_add_acc reads it as addend's z).
+ * Slot 6 = 1 via 1·1 (addend's Z for RCB).
  *
- * Curve constant B is derived from G (B = Gy² − Gx³ + 3·Gx).
+ * Curve constant b is derived from G (b = Gy² − Gx³ + 3·Gx).
+ * slot 10 holds b THROUGHOUT pt_mul — RCB reads it, never writes.
  * Curve check uses slots 7,11 as scratch so 0,1,4,5 survive for
  * the Shamir copy.  No Fadd anywhere — Fadd clobbers slot 3 (Gy). */
 bc_v1:
@@ -154,38 +152,35 @@ bc_v1:
 	.byte 0x05,0x05, 0x05,0x15
 	.byte 0xf0,0x40            /* slot4 = Qx·1 = Qx  (copy)    */
 	.byte 0xf0,0x51            /* slot5 = Qy·1 = Qy  (copy)    */
-	.byte 0xf0,0x6f            /* slot6 = 1·1 = 1    (z-coord) */
-	/* B-derive: G in 2,3 (normal form).  slot10 = B. */
+	.byte 0xf0,0x6f            /* slot6 = 1·1 = 1    (addend Z)*/
+	/* b-derive: G in 2,3.  slot10 = b (survives pt_mul — RCB
+	 * reads slot 10 for the b multiplications, never writes). */
 	.byte 0x21,0xa2            /* slot10 = Gx²           (SQR) */
 	.byte 0x20,0xaa            /* slot10 = Gx³           (Fmul)*/
 	.byte 0x23,0xaa            /* slot10 -= Gx           (Fsub)*/
 	.byte 0x23,0xaa            /* slot10 -= Gx           (Fsub)*/
 	.byte 0x23,0xaa            /* slot10 -= Gx (=Gx³−3Gx)      */
 	.byte 0x31,0x73            /* slot7  = Gy²           (SQR) */
-	.byte 0xa3,0xa7            /* slot10 = Gy²−slot10 = B(Fsub)*/
+	.byte 0xa3,0xa7            /* slot10 = Gy²−slot10 = b(Fsub)*/
 	/* Curve check: scratch in 7,11 so Q(0,1,4,5) and G(2,3)
-	 * survive.  slot7 = Qy²−B−(Qx³−3Qx); nonzero ⇔ off-curve. */
+	 * survive.  slot7 = Qy²−b−(Qx³−3Qx); nonzero ⇔ off-curve. */
 	.byte 0x01,0xb0            /* slot11 = Qx²           (SQR) */
 	.byte 0x00,0xbb            /* slot11 = Qx³           (Fmul)*/
 	.byte 0x03,0xbb            /* slot11 -= Qx           (Fsub)*/
 	.byte 0x03,0xbb            /* slot11 -= Qx           (Fsub)*/
 	.byte 0x03,0xbb            /* slot11 -= Qx (=Qx³−3Qx)      */
 	.byte 0x11,0x71            /* slot7  = Qy²           (SQR) */
-	.byte 0xa3,0x77            /* slot7 -= B             (Fsub)*/
+	.byte 0xa3,0x77            /* slot7 -= b             (Fsub)*/
 	.byte 0xb3,0x77            /* slot7 -= slot11        (Fsub)*/
 	.byte 0x16,0x70            /* check slot7 nonzero (op6 s2=1)  */
-	.byte 0x07,0x0d            /* INV (op7 now): slot0 = s⁻¹ mod n*/
-	/* bc_v2 appended: hash is in slot14, s⁻¹ in slot0, r in slot12.
-	 * Checks may have failed — harmless, ebp already tainted. */
+	.byte 0x07,0x0d            /* INV (op7): slot0 = s⁻¹ mod n    */
 	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
 	.byte 0x04,0xec            /* slot14 = slot12·slot0 = r·s⁻¹ = u2 */
 	.byte 0x00,0x00
 
-.equ obc_dbl,  0
-.equ obc_v3,   bc_v3   - bc_dbl
-.equ obc_add1, bc_add1 - bc_dbl
-.equ obc_add2, bc_add2 - bc_dbl
-.equ obc_v1,   bc_v1   - bc_dbl
+.equ obc_rcb,  0
+.equ obc_v3,   bc_v3  - bc_rcb
+.equ obc_v1,   bc_v1  - bc_rcb
 
 /* ---------------------------------------------------------------------- */
 	.text
@@ -383,36 +378,17 @@ fe_from_be:
  * dbl path's jmp is rel8.  x86-64 has no short call — the mid-body
  * `call bcrun_r14` is still rel32.
  * -------------------------------------------------------------------- */
-pt_add_acc:
-	lea	rdi, [r14+64]
-	call	fe_iszero           /* ZF ⇔ acc.z == 0 */
-	jnz	1f
-	/* fe_iszero preserved rdi = r14+64; compute rsi from it (disp8). */
-	lea	rsi, [rdi+64]       /* r14+128 */
-	mov	rdi, r14
-	cpy3
-	ret
-1:	push	obc_add1
-	pop	rdi
-	call	bcrun_r14
-	/* bc_add1's tail checkzero(slot3=H) → CF=1 iff H==0.
-	 * r12 = &slot4 (pt_mul's, survives bc_run) → slot7 at
-	 * r12+96, disp8.  r12 needs SIB but still beats disp32. */
-	jnc	3f                  /* H ≠ 0 → bc_add2 */
-	lea	rdi, [r12+96]       /* slot 7 = Rr (slot4+96) */
-	call	fe_iszero           /* ZF ⇔ Rr == 0 */
-	jnz	.Lai
-	xor	edi, edi            /* obc_dbl = 0 */
-	jmp	bcrun_r14           /* rel8 — bcrun_r14 is just below */
-.Lai:	mov	rdi, r14
-	xor	eax, eax
-	/* rcx=0 on both paths here: fe_iszero's loop (pt_add_acc) and
-	 * verify's rep movsq → pt_mul prologue (the `call .Lai`). */
+/* RCB complete addition handles P+Q, 2P, P−P=∞, ∞+Q uniformly.
+ * pt_mul's helper copies src → addend slots (4-6), then dispatches
+ * bc_rcb.  Doubling = self-add (src=r14=acc); Q/G adds use 3-slot
+ * backups (X,Y,Z=1).  rsi set by caller; rcx=0 on entry (every
+ * path: rep movsq above or bc_run epilogue's neg+pops).  rel8 to
+ * bcrun_r14 just below. */
+.Lcadd:
+	lea	rdi, [r15+64]       /* addend = slot4 */
 	mov	cl, 12
-	rep	stosq
-	ret
-3:	push	obc_add2
-	pop	rdi
+	rep	movsq
+	xor	edi, edi            /* obc_rcb = 0 */
 	/* FALLTHROUGH to bcrun_r14 */
 
 /* ======================================================================
@@ -424,7 +400,7 @@ pt_add_acc:
 bcrun_r14:
 	mov	rsi, r14
 bcrun_off:
-	lea	rax, [rip+bc_dbl]
+	lea	rax, [rip+bc_rcb]
 	add	rdi, rax
 	/* FALLTHROUGH */
 bc_run:
@@ -513,45 +489,39 @@ bc_run:
  * rbx is callee-saved everywhere pt_mul reaches (bc_run pushes it;
  * pt_add_acc's callees do too), so pt_mul neither pushes nor writes
  * it — verify's &slot13 survives end-to-end. */
+/* pt_mul: Shamir via RCB-ONLY.  Doubling = self-add (acc→addend,
+ * RCB).  Q/G adds use 3-slot backups (X,Y,Z=1) — RCB reads addend
+ * Z from slot6 and NEVER writes slots 4-6.  r12 not needed.
+ *
+ * Caller (verify): rbx=&slot13 (u1; u2 at +32).  r14=slot base.
+ * r15=slot2.  G-backup at slots 16-18, Q-backup at 19-21.
+ * slot10 = b (RCB reads, never writes).  rcx=0 on entry. */
 pt_mul:
 	push	rbp
-	push	r12
-	lea	r12, [r15+64]       /* &slot4 — r15 = &slot2 (disp8) */
-
-	call	.Lai
-	dec	al
-	xchg	ebp, eax
-.Lpm:	xor	edi, edi
-	call	bcrun_r14           /* double */
-
-	/* bt [mem],reg indexes an unbounded bit array regardless of
-	 * operand size — 32 vs 64-bit only affects the signed range
-	 * of the reg.  ebp ∈ [0,255] fits comfortably.  Dropping
-	 * REX.W: −1 B × 2. */
-	bt	DWORD PTR [rbx+32], ebp   /* u2 bit */
+	/* Init acc = ∞ = (0:1:0).  RCB needs Y≠0 for ∞+Q=Q. */
+	mov	rdi, r14
+	xor	eax, eax
+	mov	cl, 12
+	rep	stosq               /* slots 0-2 = 0 */
+	inc	DWORD PTR [r14+32]  /* slot1 = 1 */
+	dec	al                  /* al was 0, now 255 */
+	xchg	ebp, eax            /* ebp = 255 */
+.Lpm:
+	/* Doubling: copy acc (0-2) → addend (4-6), self-add. */
+	mov	rsi, r14
+	call	.Lcadd
+	/* u2 bit: copy Q-backup (slots 19-21) → addend, add. */
+	bt	DWORD PTR [rbx+32], ebp
 	jnc	2f
-	call	pt_add_acc          /* Q already in slot 4-5 */
-2:
-	bt	DWORD PTR [rbx], ebp      /* u1 bit */
+	lea	rsi, [rbx+192]      /* slot19 = slot13+192.  disp32. */
+	call	.Lcadd
+2:	/* u1 bit: copy G-backup (slots 16-18) → addend, add. */
+	bt	DWORD PTR [rbx], ebp
 	jnc	3f
-	mov	rdi, r12            /* &slot4 */
-	push	rdi                 /* stash for restore after pt_add_acc clobbers rdi */
-	lea	rsi, [rbx+96]       /* &slot16 = G (rbx = &slot13) */
-	/* rcx=0: bc_dbl ends in Fsub → fe_sub_raw dec-to-0; pt_add_acc
-	 * (u2 branch) exits via bc_add2/dbl (same) or rep (rcx→0). */
-	mov	cl, 8
-	rep	movsq               /* G.xy → slot 4-5.  rsi landed at &slot18. */
-	push	rsi                 /* stash &Q-backup — it's where rsi landed */
-	call	pt_add_acc
-	pop	rsi                 /* &slot18 = Q backup */
-	pop	rdi                 /* &slot4 */
-	mov	cl, 8               /* rcx=0: pt_add_acc exit paths all zero rcx */
-	rep	movsq               /* Q.xy → slot 4-5 (restore) */
-3:
-	dec	ebp
+	lea	rsi, [rbx+96]       /* slot16 = slot13+96.  disp8. */
+	call	.Lcadd
+3:	dec	ebp
 	jns	.Lpm
-
-	pop	r12
 	pop	rbp
 	ret
 
@@ -759,7 +729,7 @@ tv_ecdsa_p256_verify_asm:
 	push	rbx
 	push	r14
 	push	r15
-	enter	648, 0
+	enter	712, 0              /* 22 slots: 3-slot backups for RCB */
 	/* r12 not pushed: after MULCN dropped the p−n compute, verify's
 	 * only use of &cN was the block-copy source.  Direct rip-rel to
 	 * cGX (7B) replaces lea r12(7B) + lea rsi,[r12-64](5B).  pt_mul
@@ -841,15 +811,20 @@ tv_ecdsa_p256_verify_asm:
 	 * NO cond_sub of the hash: e might be ≥ n but Nmul computes
 	 * e·s⁻¹ mod n correctly for any a < 2^256. */
 
-	/* Shamir setup: slots 2-5 → slots 16-19 (G.xy + Q.xy backup).
-	 * Slots 2,3 hold G (block-copied pre-bc_v1, never written by
-	 * bc_v1); slots 4,5 hold Q (bc_v1's Fmul(x,1) copy ops).  One
-	 * 16-qword rep movsq.  rbx = &slot13 from the stockpile.
-	 * rcx=0: bc_v1's last op is Nmul → fe_mul_m → .Lop3 exit. */
-	lea	rdi, [rbx+96]       /* slot 16 = slot 13 + 96: disp8 */
+	/* Shamir setup: 3-slot backups for RCB (X,Y,Z=1 each).
+	 * G at slots 16-18, Q at 19-21.  G.xy in slots 2,3 (block
+	 * copy), Q.xyz in slots 4,5,6 (bc_v1 copies + slot6=1).
+	 * G's Z borrowed from slot6.  rcx=0 from bc_v1's last Nmul. */
+	lea	rdi, [rbx+96]       /* slot 16 */
 	mov	rsi, r15            /* slot 2 */
-	mov	cl, 16
-	rep	movsq               /* slots 2-5 → 16-19 in one go */
+	mov	cl, 8
+	rep	movsq               /* G.xy → 16,17.  rdi=slot18, rsi=slot4. */
+	lea	rsi, [rsi+64]       /* slot6 (slot4+64) */
+	mov	cl, 4
+	rep	movsq               /* slot6 → slot18 (G.z=1).  rdi=slot19. */
+	lea	rsi, [r15+64]       /* slot4 */
+	mov	cl, 12
+	rep	movsq               /* Q.xyz (4,5,6) → 19,20,21. */
 
 	/* rbx = &slot13 (stockpile) — pt_mul reads u1/u2 from it. */
 	call	pt_mul              /* acc (slots 0-2) = u1·G + u2·Q */
