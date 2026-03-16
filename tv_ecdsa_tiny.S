@@ -1,7 +1,7 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 980 B default build; 960 B with -DSMALL_MUL8 (~2× cycles).
+ * 977 B default build; 957 B with -DSMALL_MUL8 (~2× cycles).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -269,119 +269,10 @@ fe_iszero:
 .endm
 
 /* oN hardcode: gas won't pick disp8 for forward-ref oN at the bt
- * in fe_inv_m.  Assert below.  .Lfm deleted — fe_inv_m calls Nmul
- * directly (same lea + tail-jump to fe_mul_m; Nmul is a backward
- * ref so gas picks disp8 for ITS lea). */
+ * in fe_inv_m.  Assert below.  fe_mul_m moved to AFTER the handler
+ * block — Fmul's jmp is now rel8 (forward ~125 B).  fe_inv_m
+ * reaches it via Nmul → Fmul fallthrough → rel8 jmp. */
 .equ	oN_early, 73
-/* fe_mul_m(r=rdi, a=rsi, b=rdx, m=rcx).  r = a·b mod m.  32-bit limbs.
- *
- * THE TRICK: both P-256 moduli have top dword 0xFFFFFFFF AND
- * 2^256 − m < 2^224.  At 32-bit granularity (and only there), the
- * reduce step is trivial:  q = t[j+8];  t[j..j+8] += q·(2^256−m).
- * Since q < 2^32 and neg_m < 2^224, q·neg_m < 2^256 — adding to a
- * <2^256 window gives <2^257, so new t[j+8] ∈ {0,1}.  ≤2 inner
- * iters per position, never negative.  Slide j from 8 to 0.
- *
- * One mul-accumulate serves both schoolbook AND reduce (add vs sub). */
-fe_mul_m:
-	push	rbx                 /* mul8 reads ebx */
-	push	rbp                 /* mul8 clobbers ebp */
-	/* b,a in r9,r10 (caller-saved, mul8 doesn't touch).  r12-r15
-	 * not touched — no push/pop.  fe_inv_m's r8,r14 survive. */
-
-	mov	r9, rdx             /* b */
-	mov	r10, rsi            /* a */
-	/* m on stack under dest: push is 1 B, tail pops it straight
-	 * into rcx for the cond-sub.  Reduce loop reads at [rsp+88]. */
-	push	rcx                 /* m → [rsp+80] after zero-loop */
-	push	rdi                 /* dest → [rsp+72] */
-
-	/* Frame: just t[0..17] = 72 B.  Push-zero 9 qwords. */
-	xor	eax, eax
-	push	9
-	pop	rcx
-2:	push	rax
-#ifdef SMALL_MUL8
-	loop	2b
-#else
-	dec	ecx                 /* +2 B; 9 iter × ~6K calls = ~0.3M cyc */
-	jnz	2b
-#endif
-	/* rsp → t[0].  rcx=0. */
-
-	/* 64-BIT SCHOOLBOOK (default): 4×4 qword muls.  Same 512-bit
-	 * product as 32-bit; reduce stays 32-bit regardless (q=t[top]
-	 * trick needs top DWORD = -1, top qword isn't).  REX on every
-	 * op grows the body but 16 iterations vs 64 wins net. */
-	push	-32
-	pop	r11
-#ifdef SMALL_MUL8
-.Lm:	mov	ebx, [r10+r11+32]   /* a[i], dword */
-	lea	rdi, [rsp+r11+32]   /* &t[i] */
-	mov	rsi, r9             /* b */
-	mul8	add                 /* t[i..i+8] += a[i]·b */
-	add	r11, 4
-	jnz	.Lm
-#else
-.Lm:	mov	rbx, [r10+r11+32]   /* a[i], qword (same 5 B — REX.W|XB) */
-	lea	rdi, [rsp+r11+32]   /* &t[i] */
-	mov	rsi, r9             /* b */
-	mov	cl, 4
-	xor	ebp, ebp            /* 32-bit op zero-extends rbp */
-7:	lodsq
-	mul	rbx
-	add	rax, rbp
-	adc	rdx, 0
-	add	[rdi], rax
-	adc	rdx, 0
-	mov	rbp, rdx
-	lea	rdi, [rdi+8]
-	dec	ecx
-	jnz	7b
-	add	[rdi], rbp
-	add	r11, 8
-	jnz	.Lm
-#endif
-
-	/* REDUCE.  rdi flowed out of the schoolbook loop at rsp+60
-	 * (SMALL_MUL8: last iter lea=rsp+28, mul8 +32) or rsp+56
-	 * (default: lea=rsp+24, 4×lea+8=+32).  Want rsp+32 = &t[8].
-	 * sub is 4 B vs 5 B for a fresh lea [rsp+32]. */
-#ifdef SMALL_MUL8
-	sub	rdi, 28
-#else
-	sub	rdi, 24
-#endif
-.Lr:	mov	ebx, [rdi+32]       /* q = t[j+8] — NOT cleared */
-	test	ebx, ebx
-	jz	4f
-	push	rdi
-	mov	rsi, [rsp+88]       /* m (72 t + 8 dest + 8 pushrdi) */
-	mul8	sub                 /* t[j..j+8] -= q·m; rdi += 32 */
-	pop	rdi
-	jmp	.Lr
-4:	sub	rdi, 4
-	cmp	rdi, rsp
-	jae	.Lr
-	/* t[0..7] < 2^256, possibly ≥ m.  t[8] = 0. */
-
-	/* Final cond-sub via .Lop3.  rsi = &t BEFORE releasing the
-	 * frame (reads are safe: .Lop3's pushes land at t[14..17],
-	 * past the result in t[0..7]).  dest/m pop from under t.
-	 * `push rsp` captures pre-decrement value; pop balances. */
-	push	rsp
-	pop	rsi
-	add	rsp, 72
-	pop	rdi                 /* dest */
-	pop	rcx                 /* m */
-	push	rcx
-	pop	rdx
-	call	.Lop3
-
-	pop	rbp
-	pop	rbx
-	ret
-
 
 /* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
  * 32 first, for chained decode (rdi already advanced by the prior
@@ -720,6 +611,120 @@ fe_inv_m:
 .Lnx:	dec	ebx
 	jns	.Le
 	pop	rcx                 /* discard src */
+	pop	rbx
+	ret
+
+/* fe_mul_m(r=rdi, a=rsi, b=rdx, m=rcx).  r = a·b mod m.  32-bit limbs.
+ *
+ * PLACED AFTER THE HANDLER BLOCK so Fmul's jmp is rel8 (forward
+ * ~125 B instead of backward ~515 B).  fe_inv_m → Nmul → Fmul
+ * fallthrough → rel8 jmp → here.  call .Lop3 at the tail is
+ * backward rel32 (unchanged).
+ *
+ * THE TRICK: both P-256 moduli have top dword 0xFFFFFFFF AND
+ * 2^256 − m < 2^224.  At 32-bit granularity (and only there), the
+ * reduce step is trivial:  q = t[j+8];  t[j..j+8] += q·(2^256−m).
+ * Since q < 2^32 and neg_m < 2^224, q·neg_m < 2^256 — adding to a
+ * <2^256 window gives <2^257, so new t[j+8] ∈ {0,1}.  ≤2 inner
+ * iters per position, never negative.  Slide j from 8 to 0.
+ *
+ * One mul-accumulate serves both schoolbook AND reduce (add vs sub). */
+fe_mul_m:
+	push	rbx                 /* mul8 reads ebx */
+	push	rbp                 /* mul8 clobbers ebp */
+	/* b,a in r9,r10 (caller-saved, mul8 doesn't touch).  r12-r15
+	 * not touched — no push/pop.  fe_inv_m's rbx,r14 survive. */
+
+	mov	r9, rdx             /* b */
+	mov	r10, rsi            /* a */
+	/* m on stack under dest: push is 1 B, tail pops it straight
+	 * into rcx for the cond-sub.  Reduce loop reads at [rsp+88]. */
+	push	rcx                 /* m → [rsp+80] after zero-loop */
+	push	rdi                 /* dest → [rsp+72] */
+
+	/* Frame: just t[0..17] = 72 B.  Push-zero 9 qwords. */
+	xor	eax, eax
+	push	9
+	pop	rcx
+2:	push	rax
+#ifdef SMALL_MUL8
+	loop	2b
+#else
+	dec	ecx                 /* +2 B; 9 iter × ~6K calls = ~0.3M cyc */
+	jnz	2b
+#endif
+	/* rsp → t[0].  rcx=0. */
+
+	/* 64-BIT SCHOOLBOOK (default): 4×4 qword muls.  Same 512-bit
+	 * product as 32-bit; reduce stays 32-bit regardless (q=t[top]
+	 * trick needs top DWORD = -1, top qword isn't).  REX on every
+	 * op grows the body but 16 iterations vs 64 wins net. */
+	push	-32
+	pop	r11
+#ifdef SMALL_MUL8
+.Lm:	mov	ebx, [r10+r11+32]   /* a[i], dword */
+	lea	rdi, [rsp+r11+32]   /* &t[i] */
+	mov	rsi, r9             /* b */
+	mul8	add                 /* t[i..i+8] += a[i]·b */
+	add	r11, 4
+	jnz	.Lm
+#else
+.Lm:	mov	rbx, [r10+r11+32]   /* a[i], qword (same 5 B — REX.W|XB) */
+	lea	rdi, [rsp+r11+32]   /* &t[i] */
+	mov	rsi, r9             /* b */
+	mov	cl, 4
+	xor	ebp, ebp            /* 32-bit op zero-extends rbp */
+7:	lodsq
+	mul	rbx
+	add	rax, rbp
+	adc	rdx, 0
+	add	[rdi], rax
+	adc	rdx, 0
+	mov	rbp, rdx
+	lea	rdi, [rdi+8]
+	dec	ecx
+	jnz	7b
+	add	[rdi], rbp
+	add	r11, 8
+	jnz	.Lm
+#endif
+
+	/* REDUCE.  rdi flowed out of the schoolbook loop at rsp+60
+	 * (SMALL_MUL8: last iter lea=rsp+28, mul8 +32) or rsp+56
+	 * (default: lea=rsp+24, 4×lea+8=+32).  Want rsp+32 = &t[8].
+	 * sub is 4 B vs 5 B for a fresh lea [rsp+32]. */
+#ifdef SMALL_MUL8
+	sub	rdi, 28
+#else
+	sub	rdi, 24
+#endif
+.Lr:	mov	ebx, [rdi+32]       /* q = t[j+8] — NOT cleared */
+	test	ebx, ebx
+	jz	4f
+	push	rdi
+	mov	rsi, [rsp+88]       /* m (72 t + 8 dest + 8 pushrdi) */
+	mul8	sub                 /* t[j..j+8] -= q·m; rdi += 32 */
+	pop	rdi
+	jmp	.Lr
+4:	sub	rdi, 4
+	cmp	rdi, rsp
+	jae	.Lr
+	/* t[0..7] < 2^256, possibly ≥ m.  t[8] = 0. */
+
+	/* Final cond-sub via .Lop3.  rsi = &t BEFORE releasing the
+	 * frame (reads are safe: .Lop3's pushes land at t[14..17],
+	 * past the result in t[0..7]).  dest/m pop from under t.
+	 * `push rsp` captures pre-decrement value; pop balances. */
+	push	rsp
+	pop	rsi
+	add	rsp, 72
+	pop	rdi                 /* dest */
+	pop	rcx                 /* m */
+	push	rcx
+	pop	rdx
+	call	.Lop3
+
+	pop	rbp
 	pop	rbx
 	ret
 
