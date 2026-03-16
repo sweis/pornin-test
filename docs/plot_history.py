@@ -177,10 +177,20 @@ ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
 ax.set_title('ECDSA/P-256 verify — size vs speed (lower-left is better)',
              fontsize=13)
 ax.legend(loc='upper right', framealpha=0.95, fontsize=9)
-ax.grid(True, alpha=0.2)
+ax.grid(True, alpha=0.2, which='both')
 ax.set_axisbelow(True)
+# Log-y: cycles span 629K → 8470K (~13:1).  Log compresses the tiny.S
+# speed-for-size grind (6.2M → 8.5M) into a visible band instead of
+# a wall at the top, and separates the fast.S cluster (650K-1000K)
+# from the bc.S baseline (1850K).  Size stays linear — only 2:1 range.
+ax.set_yscale('log')
 ax.set_xlim(940, 2060)
-ax.set_ylim(0, 9000)
+ax.set_ylim(500, 10000)
+# Clean up the log axis: major ticks at nice values, no scientific notation.
+from matplotlib.ticker import ScalarFormatter, LogLocator
+ax.yaxis.set_major_locator(LogLocator(base=10, subs=[1, 2, 5]))
+ax.yaxis.set_major_formatter(ScalarFormatter())
+ax.yaxis.set_minor_formatter(lambda x, pos: '')
 
 plt.tight_layout()
 plt.savefig('docs/progress.png', dpi=100, bbox_inches='tight')
