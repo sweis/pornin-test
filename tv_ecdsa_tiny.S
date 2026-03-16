@@ -892,20 +892,16 @@ tv_ecdsa_p256_verify_asm:
 	pop	rdi
 	call	bcrun_r14
 
-	/* Shamir setup: G.xy → slot 16-17, Q.xy backup → slot 18-19.
-	 * slot 6 = Mont(1) is never written by bc_dbl/add — it serves as
-	 * z for BOTH G and Q, so only X,Y (8 qwords) need swapping.
-	 * slot 15 must stay untouched (bc_v3 reads it as `one`).
-	 * rcx=0: bc_v2 ends in Nmul → fe_mul_m → fe_sub_raw dec-to-0.
-	 * G source is slot 2 (=r15) — it was loaded pre-bc_v1 and
-	 * nothing since has touched slots 2,3.  −2 B vs [r12-80]. */
-	lea	rdi, [rbx+96]       /* slot 16 = slot 13 + 96: disp8 now */
-	mov	rsi, r15            /* slot 2 = G (loaded before bc_v1) */
-	mov	cl, 8
-	rep	movsq               /* G.xy → slot 16-17; rdi now &slot18, rcx=0 */
-	lea	rsi, [r15+64]       /* slot 4 = Q.xy */
-	mov	cl, 8
-	rep	movsq               /* Q.xy → slot 18-19 */
+	/* Shamir setup: G.xy → 16-17, Q.xy backup → 18-19.  slots
+	 * 2,3,4,5 are already G.x,G.y,Q.x,Q.y (Montgomery) — G was
+	 * loaded pre-bc_v1, Q was to-Mont'd by bc_v1, and nothing
+	 * since (inv_m/hash/cond_sub/bc_v2) has touched any of them.
+	 * Slots 16-19 are contiguous too.  One 16-qword copy.  −9 B.
+	 * rcx=0: bc_v2 ends in Nmul → fe_mul_m → fe_sub_raw dec-to-0. */
+	lea	rdi, [rbx+96]       /* slot 16 = slot 13 + 96: disp8 */
+	mov	rsi, r15            /* slot 2 */
+	mov	cl, 16
+	rep	movsq               /* slots 2-5 → 16-19 in one go */
 
 	/* rbx = &slot13 already (stockpile) — pt_mul reads it directly. */
 	call	pt_mul              /* acc = u1·G + u2·Q */
