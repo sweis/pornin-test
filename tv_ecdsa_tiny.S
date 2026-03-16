@@ -1,7 +1,8 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 977 B default build; 957 B with -DSMALL_MUL8 (~2× cycles).
+ * 978 B default build; 960 B with -DSMALL_MUL8 (~2× cycles).
+ * (957/977 B available by re-looping push-zero — costs ~3%/2% cycles.)
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -639,17 +640,18 @@ fe_mul_m:
 	push	rcx                 /* m → [rsp+80] after zero-loop */
 	push	rdi                 /* dest → [rsp+72] */
 
-	/* Frame: just t[0..17] = 72 B.  Push-zero 9 qwords. */
-	xor	eax, eax
-	push	9
-	pop	rcx
-2:	push	rax
-#ifdef SMALL_MUL8
-	loop	2b
-#else
-	dec	ecx                 /* +2 B; 9 iter × ~6K calls = ~0.3M cyc */
-	jnz	2b
-#endif
+	/* Frame: t[0..17] = 72 B zeroed.  Unrolled push — the old
+	 * loop (`loop` in SMALL_MUL8, dec+jnz in default) cost ~65/~12
+	 * cyc per call × ~7.5K calls ≈ 490K / 90K cycles just in
+	 * overhead.  9 bare pushes ≈ 9 cycles.  +3 B SMALL_MUL8 / +1 B
+	 * default; kills an #ifdef.  push rcx (not rax) — the xor
+	 * zeroes rcx for mul8's `mov cl,N` (which reads full rcx via
+	 * loop/dec), AND pushes zeros, AND eax=0 was never needed past
+	 * the pushes (lodsd overwrites).  Three jobs, one xor. */
+	xor	ecx, ecx
+	.rept 9
+	push	rcx
+	.endr
 	/* rsp → t[0].  rcx=0. */
 
 	/* 64-BIT SCHOOLBOOK (default): 4×4 qword muls.  Same 512-bit
