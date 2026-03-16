@@ -267,8 +267,8 @@ fe_sub_raw:
 	\op	[rdi], ebp
 .endm
 
-/* .Lfm falls through; fe_inv_m's modulus at [rbp+8]. */
-.Lfm:	mov	rcx, [rbp+8]
+/* .Lfm falls through; fe_inv_m's modulus at [rbp+24]. */
+.Lfm:	mov	rcx, [rbp+24]
 	/* FALLTHROUGH */
 /* fe_mul_m(r=rdi, a=rsi, b=rdx, m=rcx).  r = a·b mod m.  32-bit limbs.
  *
@@ -353,59 +353,55 @@ fe_mul_m:
  * Push/pop rbx costs +2 bytes, but `mov ebx,imm` and `dec ebx` are
  * each 1 byte shorter than their r10d equivalents — net zero. */
 fe_inv_m:
-	push	r12
-	push	r13
+	/* All args on stack — fe_mul_m preserves r12-r15 now so no
+	 * callee-save reg is needed for dest/src/m.  Just push rbx
+	 * (loop counter) + args.  rbp from enter is the stable base;
+	 * [rbp+8]=dest, [rbp+16]=src, [rbp+24]=m.  −7 B: drop push
+	 * r12,r13 (−4) + pops (−4) + movs (−6); add push rdi,rsi
+	 * (+2), pops (+2), [rbp+N] loads vs reg (+3).  */
 	push	rbx
-	/* modulus on stack (pushed before enter → at [rbp+8] after).
-	 * fe_mul_m no longer touches r14 so we don't need it as a
-	 * callee-save home; −3 B (drop push/pop r14 + mov r14,rdx,
-	 * but +1 B each for [rbp+8] loads ×2 + 1 B push rdx + 1 B pop). */
-	push	rdx                 /* m — lands at [rbp+8] post-enter */
+	push	rdx                 /* m   → [rbp+24] */
+	push	rsi                 /* src → [rbp+16] */
+	push	rdi                 /* dst → [rbp+8]  */
 	enter	32, 0
 
-	mov	r12, rdi
-	mov	r13, rsi
-
 	mov	rdi, rsp
-	mov	rsi, [rbp+8]        /* m */
+	mov	rsi, [rbp+24]       /* m */
 	push	4
 	pop	rcx
 	rep	movsq               /* exponent ← m; rcx=0 after */
 	/* Both moduli have low limb ≫ 2 → no borrow into limb 1. */
 	sub	DWORD PTR [rsp], 2
 
-	mov	rdi, r12
-	mov	rsi, r13
+	mov	rdi, [rbp+8]        /* dst */
+	mov	rsi, [rbp+16]       /* src */
 	mov	cl, 4               /* rcx=0 from rep above */
 	rep	movsq               /* r ← a */
 
 	xor	ebx, ebx
 	mov	bl, 254
-.Le:	mov	rdi, r12
-	/* push rdi = 1 byte; so push/push/pop/pop = 4 bytes vs two
-	 * 3-byte movs.  Stack balances before the call. */
+.Le:	mov	rdi, [rbp+8]
+	push	rdi                 /* stash for reuse after .Lfm clobbers */
 	push	rdi
 	push	rdi
 	pop	rdx
 	pop	rsi
 	call	.Lfm
-	/* bt with mem operand indexes an unbounded bit array; ebx ≤ 254
-	 * stays in signed 32-bit range.  Dropping REX.W: −1. */
+	pop	rdi                 /* restore dest — before bt so [rsp]=exp */
 	bt	DWORD PTR [rsp], ebx
 	jnc	.Lnx
-	mov	rdi, r12
 	push	rdi
 	pop	rsi
-	mov	rdx, r13
+	mov	rdx, [rbp+16]       /* src */
 	call	.Lfm
 .Lnx:	dec	ebx
 	jns	.Le
 
 	leave
-	pop	rcx                 /* discard modulus (rcx dead) */
+	pop	rcx                 /* discard dst */
+	pop	rcx                 /* discard src */
+	pop	rcx                 /* discard m */
 	pop	rbx
-	pop	r13
-	pop	r12
 	ret
 
 /* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
