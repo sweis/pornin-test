@@ -91,35 +91,41 @@ ax.plot(px, py, '-', color='#c41e3a', linewidth=2.8, zorder=4,
 ax.scatter(px, py, c='#c41e3a', s=110, marker='D',
            edgecolors='#7a1225', linewidths=1.2, zorder=5)
 
-# Thomas track — green circles, dotted
+# Thomas track — BOTH DOMINATED now.  Gray, no frontier diamond.
 ttx, tty = [THOMAS_V1[0], THOMAS[0]], [THOMAS_V1[1], THOMAS[1]]
-ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.5, zorder=4,
-        label='Thomas')
-ax.scatter(ttx, tty, c='#2e8b57', s=90, marker='o',
-           edgecolors='#1a5235', linewidths=1.2, zorder=5)
-ax.annotate(f'Thomas v2\n{THOMAS[0]}B', THOMAS,
-            textcoords="offset points", xytext=(12, -4), fontsize=10,
-            fontweight='bold', bbox=dict(boxstyle='round,pad=0.35',
-            fc='#d4f4dd', ec='#2e8b57', lw=1))
-ax.annotate('v1', THOMAS_V1, textcoords="offset points", xytext=(8, 4),
-            fontsize=8, color='#2e8b57')
+ax.plot(ttx, tty, ':', color='#999', linewidth=1.2, zorder=3,
+        label='Thomas (both dominated)')
+ax.scatter(ttx, tty, c='#bbb', s=70, marker='o',
+           edgecolors='#888', linewidths=1, zorder=3)
+ax.annotate(f'Thomas v2\n{THOMAS[0]}B\n(dominated)', THOMAS,
+            textcoords="offset points", xytext=(12, -4), fontsize=9,
+            color='#666', bbox=dict(boxstyle='round,pad=0.3',
+            fc='#eee', ec='#aaa', lw=0.8))
 
-# Claude star
-ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=260, marker='*',
+# Claude stars — TWO of them.  Size floor + the Thomas-killer.
+CLAUDE_FAST = (1032, 3645)  # dominates Thomas v2 on both axes
+ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=280, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
-           label=f'Claude ({CLAUDE[0]}B, ratio {CLAUDE[1]/1850:.2f})')
-ax.annotate(f'Claude\n{CLAUDE[0]}B, ratio {CLAUDE[1]/1850:.2f}',
-            CLAUDE, textcoords="offset points", xytext=(14, -24),
+           label=f'Claude {CLAUDE[0]}B — under 1024')
+ax.annotate(f'Claude\n{CLAUDE[0]}B\nUNDER TARGET',
+            CLAUDE, textcoords="offset points", xytext=(-110, -10),
             fontsize=10, fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.35', fc='#ffe4c4',
+            bbox=dict(boxstyle='round,pad=0.4', fc='#ffe4c4',
+                      ec='#e07000', lw=1.5))
+ax.scatter([CLAUDE_FAST[0]], [CLAUDE_FAST[1]], c='#e07000', s=200, marker='*',
+           edgecolors='#8a4500', linewidths=1.2, zorder=6)
+ax.annotate(f'{CLAUDE_FAST[0]}B, ratio {CLAUDE_FAST[1]/1850:.2f}\ndominates Thomas',
+            CLAUDE_FAST, textcoords="offset points", xytext=(14, -24),
+            fontsize=9, fontweight='bold',
+            bbox=dict(boxstyle='round,pad=0.3', fc='#ffe4c4',
                       ec='#e07000', lw=1))
 
-# 1024 B target line
-ax.axvline(TARGET, color='#888', linestyle='--', linewidth=1.2,
-           alpha=0.5, zorder=1)
-ax.annotate(f'{TARGET}B\ntarget', (TARGET, 350),
-            textcoords="offset points", xytext=(6, 0), fontsize=9,
-            color='#666', fontweight='bold')
+# 1024 B target line — we're PAST it.
+ax.axvline(TARGET, color='#2e8b57', linestyle='--', linewidth=1.8,
+           alpha=0.7, zorder=1)
+ax.annotate(f'{TARGET}B target\n← past', (TARGET, 350),
+            textcoords="offset points", xytext=(6, 0), fontsize=10,
+            color='#2e8b57', fontweight='bold')
 
 # Turning-point labels only — the path, not every step
 LABEL_OFFSETS = {
@@ -128,6 +134,7 @@ LABEL_OFFSETS = {
     "32-bit":     (12, -8),
     "projective": (-8, 16),
     "bt-on-cN":   (-90, -6),
+    "RCB":        (12, -10),
 }
 for b, c, lab in TRAIL:
     if lab:
