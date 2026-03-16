@@ -576,11 +576,15 @@ pt_mul:
 .Lpm:	xor	edi, edi
 	call	bcrun_r14           /* double */
 
-	bt	[rbx+32], rbp       /* u2 bit */
+	/* bt [mem],reg indexes an unbounded bit array regardless of
+	 * operand size — 32 vs 64-bit only affects the signed range
+	 * of the reg.  ebp ∈ [0,255] fits comfortably.  Dropping
+	 * REX.W: −1 B × 2. */
+	bt	DWORD PTR [rbx+32], ebp   /* u2 bit */
 	jnc	2f
 	call	pt_add_acc          /* Q already in slot 4-5 */
 2:
-	bt	[rbx], rbp          /* u1 bit */
+	bt	DWORD PTR [rbx], ebp      /* u1 bit */
 	jnc	3f
 	mov	rdi, r12            /* &slot4 */
 	push	rdi                 /* stash for restore after pt_add_acc clobbers rdi */
@@ -718,15 +722,14 @@ Fadd:	push	rdi
  * Push/pop rbx costs +2 bytes, but `mov ebx,imm` and `dec ebx` are
  * each 1 byte shorter than their r10d equivalents — net zero. */
 fe_inv_m:
-	/* All args on stack — fe_mul_m preserves r12-r15 now so no
-	 * callee-save reg is needed for dest/src/m.  Just push rbx
-	 * (loop counter) + args.  rbp from enter is the stable base;
-	 * [rbp+8]=dest, [rbp+16]=src, [rbp+24]=m.  −7 B: drop push
-	 * r12,r13 (−4) + pops (−4) + movs (−6); add push rdi,rsi
-	 * (+2), pops (+2), [rbp+N] loads vs reg (+3).  */
+	/* dst in r8 — fe_mul_m no longer touches it (m went on the
+	 * stack).  r8 is caller-saved so no push/pop; survives both
+	 * .Lfm calls.  src stays on stack at [rbp+8].  −2 B: mov vs
+	 * push (+2), 2× reg-read vs mem-read (−2), one less discard
+	 * pop (−1), src disp drops 16→8 (0 B, both disp8). */
 	push	rbx
-	push	rsi                 /* src → [rbp+16] */
-	push	rdi                 /* dst → [rbp+8]  */
+	push	rsi                 /* src → [rbp+8] */
+	mov	r8, rdi             /* dst — survives fe_mul_m */
 	enter	32, 0
 
 	mov	rdi, rsp
@@ -737,14 +740,14 @@ fe_inv_m:
 	/* Both moduli have low limb ≫ 2 → no borrow into limb 1. */
 	sub	DWORD PTR [rsp], 2
 
-	mov	rdi, [rbp+8]        /* dst */
-	mov	rsi, [rbp+16]       /* src */
+	mov	rdi, r8             /* dst */
+	mov	rsi, [rbp+8]        /* src */
 	mov	cl, 4               /* rcx=0 from rep above */
 	rep	movsq               /* r ← a */
 
 	xor	ebx, ebx
 	mov	bl, 254
-.Le:	mov	rdi, [rbp+8]
+.Le:	mov	rdi, r8
 	push	rdi                 /* stash for reuse after .Lfm clobbers */
 	push	rdi
 	push	rdi
@@ -756,13 +759,12 @@ fe_inv_m:
 	jnc	.Lnx
 	push	rdi
 	pop	rsi
-	mov	rdx, [rbp+16]       /* src */
+	mov	rdx, [rbp+8]        /* src */
 	call	.Lfm
 .Lnx:	dec	ebx
 	jns	.Le
 
 	leave
-	pop	rcx                 /* discard dst */
 	pop	rcx                 /* discard src */
 	pop	rbx
 	ret
