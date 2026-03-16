@@ -355,18 +355,41 @@ fe_mul_m:
 #endif
 	/* rsp → t[0].  rcx=0. */
 
-	/* Schoolbook then reduce (separate — merged reverse-order has
-	 * an overflow: i−1's fold writes t[i+7] large, then i−1's
-	 * mulacc final-carry add to t[i+7] can exceed 2^32, dropping
-	 * a bit.  Forward-order merged is equivalent to separate). */
+	/* 64-BIT SCHOOLBOOK: 4×4=16 qword muls vs 8×8=64 dword muls.
+	 * The 512-bit product t is identical either way — reduce
+	 * stays 32-bit (q=t[top] only works there, top dword = -1).
+	 * Inner body grows (REX on every op) but outer×inner drops
+	 * 64→16.  +8 B over the 32-bit macro for ~19% fewer cycles.
+	 * -DSMALL_MUL8 uses the shared 32-bit mul8 macro instead. */
 	push	-32
 	pop	r11
-.Lm:	mov	ebx, [r10+r11+32]   /* a[i] */
+#ifdef SMALL_MUL8
+.Lm:	mov	ebx, [r10+r11+32]   /* a[i], dword */
 	lea	rdi, [rsp+r11+32]   /* &t[i] */
 	mov	rsi, r9             /* b */
 	mul8	add                 /* t[i..i+8] += a[i]·b */
 	add	r11, 4
 	jnz	.Lm
+#else
+.Lm:	mov	rbx, [r10+r11+32]   /* a[i], qword (same 5 B — REX.W|XB) */
+	lea	rdi, [rsp+r11+32]   /* &t[i] */
+	mov	rsi, r9             /* b */
+	mov	cl, 4
+	xor	ebp, ebp            /* 32-bit op zero-extends rbp */
+7:	lodsq
+	mul	rbx
+	add	rax, rbp
+	adc	rdx, 0
+	add	[rdi], rax
+	adc	rdx, 0
+	mov	rbp, rdx
+	lea	rdi, [rdi+8]
+	dec	ecx
+	jnz	7b
+	add	[rdi], rbp
+	add	r11, 8
+	jnz	.Lm
+#endif
 
 	/* rdi as window pointer (no REX on [rdi+32]); push/pop around
 	 * mul8's +32 advance.  −2 B vs r9.  */
