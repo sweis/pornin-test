@@ -212,14 +212,6 @@ bc_v1:
  * 256-bit primitives (4 × u64 limbs, little-endian).
  * -------------------------------------------------------------------- */
 
-/* fe_cpy(dst=rdi, src=rsi).  rep at cnt=4 is ~20 cyc startup ×
- * ~2900 calls ≈ 58K cyc — accepted for −2 B. */
-fe_cpy:
-	push	4
-	pop	rcx
-	rep	movsq
-	ret
-
 /* fe_iszero(a=rdi) -> eax=1 iff zero.  OR accumulates into rax; the
  * last OR's ZF reflects the full OR (rax is cumulative).  loop/sete/
  * movzx/ret all preserve flags: callers may branch on ZF directly.
@@ -339,7 +331,7 @@ fe_mul_m:
 .Lr:	mov	ebx, [r9+32]        /* q = t[j+8] */
 	test	ebx, ebx
 	jz	4f
-	and	DWORD PTR [r9+32], 0
+	xor	[r9+32], ebx        /* = 0 (ebx=[r9+32]); 4 B vs 5 B for and-imm */
 	mov	rdi, r9
 	mov	rsi, r10            /* neg_m */
 	call	mulacc              /* t[j..j+8] += q·neg_m */
@@ -362,7 +354,8 @@ fe_mul_m:
 	pop	rdi
 	test	eax, eax            /* borrow ⇔ t < m ⇔ r wrong */
 	jz	5f
-	call	fe_cpy              /* copy t back over r */
+	mov	cl, 4               /* rcx=0 from fe_sub_raw */
+	rep	movsq               /* copy t back over r */
 5:
 	add	rsp, 104
 	pop	rbp
@@ -394,14 +387,16 @@ fe_inv_m:
 
 	mov	rdi, rsp
 	mov	rsi, r14
-	call	fe_cpy
-	/* Both moduli have low limb ≫ 2 → no borrow into limb 1.
-	 * 32-bit sub drops REX.W: −1. */
+	push	4
+	pop	rcx
+	rep	movsq               /* exponent ← m; rcx=0 after */
+	/* Both moduli have low limb ≫ 2 → no borrow into limb 1. */
 	sub	DWORD PTR [rsp], 2
 
 	mov	rdi, r12
 	mov	rsi, r13
-	call	fe_cpy
+	mov	cl, 4               /* rcx=0 from rep above */
+	rep	movsq               /* r ← a */
 
 	xor	ebx, ebx
 	mov	bl, 254
