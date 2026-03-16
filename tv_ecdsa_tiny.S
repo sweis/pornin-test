@@ -1,7 +1,7 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 989 B default build; 969 B with -DSMALL_MUL8 (~2× cycles).
+ * 984 B default build; 964 B with -DSMALL_MUL8 (~2× cycles).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -268,13 +268,11 @@ fe_iszero:
 	\op	[rdi], ebp
 .endm
 
-/* .Lfm: load rcx=&cN, fall through.  Called only from fe_inv_m,
- * which only runs mod-n (mod-p gone — projective check).  r14 at
- * the call site is bc_run's .Ljt hoist.  gas won't pick disp8 for
- * forward-ref oN — hardcode + assert. */
+/* oN hardcode: gas won't pick disp8 for forward-ref oN at the bt
+ * in fe_inv_m.  Assert below.  .Lfm deleted — fe_inv_m calls Nmul
+ * directly (same lea + tail-jump to fe_mul_m; Nmul is a backward
+ * ref so gas picks disp8 for ITS lea). */
 .equ	oN_early, 73
-.Lfm:	lea	rcx, [r14+oN_early]
-	/* FALLTHROUGH */
 /* fe_mul_m(r=rdi, a=rsi, b=rdx, m=rcx).  r = a·b mod m.  32-bit limbs.
  *
  * THE TRICK: both P-256 moduli have top dword 0xFFFFFFFF AND
@@ -564,7 +562,7 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 .equ oN,   cN   - .Ljt
 .equ oP,   cP   - .Ljt
 .if oN - oN_early
-.error "oN moved — update oN_early in .Lfm"
+.error "oN moved — update oN_early (fe_inv_m bt uses hardcoded disp8)"
 .endif
 .if oP - oP_early
 .error "oP moved — update oP_early in bc_run"
@@ -687,7 +685,7 @@ Fadd:	push	rdi
  *   ebx == 4:        force skip (n bit4=1 but n−2 bit4=0)
  *   ebx ≥ 5:         n and n−2 agree — bt on cN is exact.
  *
- * Loop counter in rbx (callee-saved, survives .Lfm).  src at
+ * Loop counter in rbx (callee-saved, survives Nmul).  src at
  * [rsp].  r14 = .Ljt (bc_run's hoist — fe_mul_m doesn't touch). */
 fe_inv_m:
 	push	rbx
@@ -696,10 +694,10 @@ fe_inv_m:
 	mov	bl, 255
 .Le:	push	rdi
 	push	rdi
-	push	rdi                 /* 3rd push = rdi-preserve across .Lfm */
+	push	rdi                 /* 3rd push = rdi-preserve across call */
 	pop	rdx
 	pop	rsi
-	call	.Lfm
+	call	Nmul                /* = lea rcx,&cN; jmp fe_mul_m.  .Lfm gone. */
 	pop	rdi                 /* fe_mul_m may leave rdi at dst+32 */
 	cmp	ebx, 4
 	jb	.Lmul
@@ -710,8 +708,8 @@ fe_inv_m:
 	pop	rsi
 	pop	rdx                 /* src from prologue push; 2B vs 4B mov[rsp] */
 	push	rdx                 /* keep it there for next iter */
-	push	rdi                 /* preserve rdi across this .Lfm too */
-	call	.Lfm
+	push	rdi                 /* preserve rdi across this call too */
+	call	Nmul
 	pop	rdi
 .Lnx:	dec	ebx
 	jns	.Le
@@ -788,9 +786,11 @@ tv_ecdsa_p256_verify_asm:
 	pop	rbx                 /* slot 16 */
 
 	/* Format byte: lodsb advances rsi past the 0x04 to the X
-	 * coord for free.  mov+lodsb+cmp(al) = 6 B vs cmp[rdx]+lea
-	 * = 7 B.  rdx dead after (hash pointer in r8 already used). */
-	mov	rsi, rdx
+	 * coord for free.  push;pop+lodsb+cmp(al) = 5 B vs cmp[rdx]
+	 * +lea = 7 B.  rdx,rsi both non-REX → push;pop beats mov.
+	 * rdx dead after (hash pointer in r8 already used). */
+	push	rdx
+	pop	rsi
 	lodsb
 	cmp	al, 0x04
 	jne	.Lf2
