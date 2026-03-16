@@ -66,7 +66,9 @@ FAST = [
     (1266, 7180, None),   # INV bytecode ops
     (1257, 7180, None),
     (1255, 7460, None),
-    (1252, 7460, "mulsub+r12 stack\n1252B, 4.03"),
+    (1252, 7460, None),
+    (1238, 7460, None),   # mul8 inline
+    (1216, 7460, "r9/r10 args + all-stack inv\n1216B, 4.03"),
 ]
 
 def pareto(pts):
