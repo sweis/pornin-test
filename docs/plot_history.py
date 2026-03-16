@@ -94,7 +94,10 @@ FAST = [
     (1125, 2407, None),   # +8B: 64-bit schoolbook.        ratio 1.30
     # --- r13 single-use inlined (−7B, cold path, 0 cyc cost) ---
     (1098, 6186, None),   # SMALL_MUL8 — still dominated
-    (1118, 2407, None),   # default — CLAUDE star
+    (1118, 2407, None),   # 64-bit schoolbook + r13 drop
+    # --- MULCN (n·z² direct) + r12 drop (−19B combined) ---
+    (1079, 6186, None),   # SMALL_MUL8 — still dominated
+    (1099, 2407, None),   # default — CLAUDE star
 ]
 
 def pareto(pts):
@@ -111,7 +114,7 @@ def pareto(pts):
 # he reclaimed the size corner.  But our 1117B stays Pareto: faster.
 THOMAS_V1 = (1156, 3600, "Thomas v1\n1156B, 1.95")
 THOMAS    = (1046, 3990, "Thomas v2\n1046B, 2.16")   # new size record
-CLAUDE    = (1118, 2407, "Claude\n1118B, 1.30")       # Pareto: faster
+CLAUDE    = (1099, 2407, "Claude\n1099B, 1.30")       # Pareto: faster
 TARGET    = 1024
 
 ALL_PTS = FAST + [THOMAS, THOMAS_V1]
