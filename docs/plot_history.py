@@ -53,6 +53,14 @@ FAST = [
     (1406,  653, None),   # enter/leave fe_inv_m
     (1399,  652, None),   # pt_mul rbx direct
     (1397,  652, "rcx-chain + enter/leave\n1397B, 0.35"),
+    # --- tiny.S size-only fork (speed traded, target 1024B) ---
+    (1374,  948, None),   # muladd4 looped (scaled: 951/1855*1850)
+    (1362,  948, None),   # r8/r15 chain
+    (1360,  945, None),   # fe_cpy rep
+    (1357,  950, None),   # push-loop
+    (1347,  945, "B-derive\n1347B"),
+    (1338,  945, None),   # Shamir one-rep
+    (1300, 1456, "32-bit q=t[top]\n1300B, 0.79"),  # 1461/1855*1850
 ]
 
 def pareto(pts):
