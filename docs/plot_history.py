@@ -146,22 +146,28 @@ ax.plot(px, py, '-', color='#c41e3a', linewidth=2.5, zorder=4,
 ax.scatter(px, py, c='#c41e3a', s=120, marker='D',
            edgecolors='#7a1225', linewidths=1.2, zorder=5)
 
-# Thomas v2 marker — holds the size corner now.
+# Thomas track: green circles joined by a dotted line (like bc.S
+# track but green).  v1 → v2 shows his progression.
+THOMAS_TRACK = [THOMAS_V1, THOMAS]
+ttx = [p[0] for p in THOMAS_TRACK]
+tty = [p[1] for p in THOMAS_TRACK]
+ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.5, zorder=4,
+        label='Thomas (chronological)')
+ax.scatter(ttx, tty, c='#2e8b57', s=100, marker='o',
+           edgecolors='#1a5235', linewidths=1.2, zorder=5)
+
+# v2 annotation — holds the size corner.
 tb, tc, _ = THOMAS
-ax.scatter([tb], [tc], c='#2e8b57', s=250, marker='*',
-           edgecolors='#1a5235', linewidths=1.5, zorder=6,
-           label=f'Thomas v2 ({tb}B, {tc/1000:.1f}M cyc)')
 ax.annotate(f'Thomas v2\n{tb}B, ratio {tc/1850:.2f}',
             (tb, tc), textcoords="offset points", xytext=(14, -6),
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.4', fc='#d4f4dd',
                       ec='#2e8b57', lw=1))
-# Thomas v1 — dominated by both v2 and our 1117B.  Small gray marker.
+# v1 annotation — dominated now.
 t1b, t1c, _ = THOMAS_V1
-ax.scatter([t1b], [t1c], c='#aaa', s=80, marker='*', zorder=3)
 ax.annotate(f'Thomas v1\n(dominated)', (t1b, t1c),
             textcoords="offset points", xytext=(10, 4), fontsize=8,
-            color='#888')
+            color='#2e8b57')
 
 # Claude marker — Pareto-optimal: faster than Thomas v2, but v2 is
 # smaller.  Neither dominates.
