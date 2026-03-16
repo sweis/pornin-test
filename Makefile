@@ -222,3 +222,20 @@ clean:
 	      test_ecdsa_small \
 	      tv_ecdsa_size.o tv_ecdsa_small.o tv_ecdsa_thumb.o tv_ecdsa_amd64.o \
 	      tv_ecdsa_bc.o tv_ecdsa_fast.o
+
+# ---------------------------------------------------------------------
+# All-ZMM signer (AVX-512 IFMA, constant-time Montgomery ladder)
+# ---------------------------------------------------------------------
+sign_vectors.h: gen_sign_vectors.py sign_zmm_model.py
+	python3 gen_sign_vectors.py
+
+sign_zmm_test: sign_zmm.c sign_vectors.h
+	$(CC) -O3 -mavx512f -mavx512ifma -mavx512vl -DSIGN_ZMM_TEST -o $@ sign_zmm.c
+
+test-sign: sign_zmm_test
+	./sign_zmm_test
+
+sign-crossverify: sign_zmm.c tv_ecdsa_tiny.S sign_vectors.h
+	# Sign with ZMM, verify with tiny — catches everything except
+	# bugs shared between the two RCB implementations.
+	@echo "(cross-verify harness in /tmp/crossverify.c — manual for now)"

@@ -13,3 +13,4 @@ bench_bc
 bench_fast
 /tmp/
 tv_ecdsa_fast.S.bak*
+sign_vectors.h
