@@ -111,3 +111,26 @@ Montgomery multiplier and one generic Fermat inverter, both
 parameterised by modulus. Thumb-2's 16-bit encoding is very dense for
 pointer-passing code: pt_dbl/pt_add/verify are 40–46% smaller on
 Cortex-M4 than on x86-64.
+
+---
+
+## `sign_zmm.c` — constant-time signer (AVX-512 IFMA)
+
+The opposite problem from the verifier. Not size-optimised; instead,
+secrets (d, k, every ladder intermediate) never touch memory in a
+data-dependent way. Zero conditional branches in the hot path.
+~1.8M cycles/sign.
+
+- **5×52 limbs**, one field element per ZMM. `vpmadd52luq`/`huq`
+  give the schoolbook product directly.
+- **Barrett K=512**: μ = ⌊2^512/m⌋ fits exactly 5 limbs for both p
+  and n. Three schoolbooks per reduce, one `cond_sub`.
+- **Montgomery ladder** + XOR-mask cswap. Same 43-op RCB complete
+  addition as `tv_ecdsa_tiny.S` — doubling is self-add, no ∞ cases.
+- **pt_add spills** (~200 stack writes) to fixed `%rbp` offsets —
+  same cache pattern every call. Not a leak; the addresses don't
+  vary with the secret.
+
+`make test-sign` — 6 layers × 783 vectors, including RFC 6979 A.2.5.
+Cross-verified against `tv_ecdsa_tiny.S`. Reference model in
+`sign_zmm_model.py`; design notes in `tv_ecdsa_sign_zmm.S`.

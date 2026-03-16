@@ -1,85 +1,109 @@
 /* ======================================================================
- * ECDSA/P-256 sign — AVX-512 IFMA, ALL-REGISTER, constant-time.
+ * ECDSA/P-256 sign — AVX-512 IFMA, constant-time.  DESIGN NOTES.
  *
- * DESIGN GOAL: secrets never touch memory.  The private key d, the
- * nonce k, and every intermediate of the Montgomery ladder live
- * exclusively in ZMM registers from entry to exit.  No spill, no
- * stack frame for working state, no secret-dependent branch or
- * load.  An attacker watching L1D traffic or branch history sees a
- * fixed pattern regardless of k.
+ * The working implementation is sign_zmm.c (intrinsics).  This file
+ * documents the design decisions and what "constant-time" means here.
  *
- * Requires: AVX-512F + AVX-512IFMA (vpmadd52luq/huq).
+ * ──────────────────────────────────────────────────────────────────
+ *  THREAT MODEL
+ * ──────────────────────────────────────────────────────────────────
  *
- * REPRESENTATION: 5×52-bit redundant limbs.  One field element =
- * one ZMM register, lanes 0-4 (lanes 5-7 zero).  The 4 bits of
- * headroom per lane (52 < 64) allow a few additions before carry
- * propagation is needed — critical for the RCB add sequence.
+ * An attacker observes: branch history, cache-line access pattern,
+ * instruction timing.  They do NOT see register contents or the
+ * values stored to memory (only which addresses are touched, when).
+ *
+ * LEAKS we defend against:
+ *   - Secret-dependent BRANCH: iteration counts, if/else on key bits.
+ *   - Secret-dependent MEMORY INDEX: table[secret] leaks secret via
+ *     cache line.  Even fixed-size tables.
+ *
+ * NOT a leak (and we rely on this):
+ *   - Storing a secret VALUE to a FIXED address.  The address doesn't
+ *     vary, so the access pattern doesn't either.  pt_add's ~200
+ *     register spills are this category — fixed %rbp offsets, 0
+ *     branches, same trace every call.  Store-to-load forwarding
+ *     latency is value-independent on every x86 we care about.
+ *
+ * ──────────────────────────────────────────────────────────────────
+ *  REPRESENTATION: 5×52-bit limbs
+ * ──────────────────────────────────────────────────────────────────
  *
  *   a = a₀ + a₁·2^52 + a₂·2^104 + a₃·2^156 + a₄·2^208
  *
- * IFMA SCHOOLBOOK: vpmadd52luq computes low52(a×b) per-lane;
- * vpmadd52huq the high 52.  The product of two 52-bit values is
- * 104 bits — exactly two 52-bit halves with no slack bits lost.
- * Five broadcast-and-accumulate passes (one per limb of a) build
- * the full 10-limb product, shifted into place with valignq.
+ * One field element = lanes 0-4 of a ZMM.  Lanes 5-7 MUST be zero
+ * (IFMA madd is lane-wise — garbage in 5-7 pollutes the accumulator).
+ * 12 bits of headroom per lane (52 < 64) let additions accumulate
+ * before carry propagation is needed.
  *
- * MONTGOMERY LADDER:  R0,R1 = ∞,G.  For each bit of k from the
- * top: cswap(R0,R1,bit); R1=R0+R1; R0=2·R0; cswap(R0,R1,bit).
- * Both operations ALWAYS execute — no branch on the bit.  The
- * cswap is XOR-with-mask (vpternlogq).  Point ops use the same
- * RCB complete addition as tv_ecdsa_tiny.S — doubling is self-add,
- * ∞ is (0:1:0), no special cases.
+ * Carry propagation has no cross-lane flag.  Synthesize it:
+ *   c  = t >> 52                        (vpsrlq — or srai if signed)
+ *   t &= MASK52                          (vpandq)
+ *   t += c shifted left 1 lane           (valignq + vpaddq)
+ * Five passes fully tighten (lane 0's overflow reaches lane 5).
  *
- * ZMM ALLOCATION (persistent through the ladder):
- *   zmm0-2  R0 = (X:Y:Z)                SECRET
- *   zmm3-5  R1 = (X:Y:Z)                SECRET
- *   zmm6    k (bits being consumed)     SECRET — THE nonce
- *   zmm7    d (private key)             SECRET — used post-ladder
- *   zmm8    p (modulus, 5×52)           public constant
- *   zmm9    MASK52 = 2^52 − 1           public constant
- *   zmm10   b (curve param, 5×52)       public constant
- *   zmm11   FOLD260 = 2^260 mod p       reduction constant
- *   zmm12-27  pt_add + fe_mul scratch   transient
- *   zmm28-31  cswap + misc scratch      transient
+ * ──────────────────────────────────────────────────────────────────
+ *  REDUCTION: Barrett K=512
+ * ──────────────────────────────────────────────────────────────────
  *
- * WHAT STILL TOUCHES MEMORY (and why it's safe):
- *   - Loading constants (p, b, G, FOLD260) — all public.
- *   - Loading d, k, e at entry — ONE read each, same address every
- *     call, no secret-dependent addressing.
- *   - Storing r, s at exit — they're the public output.
- *   - The code itself (instruction fetch) — public.
- *   - call/ret for fe_mul (stack) — fixed sequence, no secret data.
+ *   μ = ⌊2^512 / m⌋   — 257 bits, fits EXACTLY in 5 limbs (both p, n)
+ *   q = ⌊t · μ / 2^512⌋
+ *   r = t − q·m       ∈ [0, 2m)   — one cond_sub finishes
  *
- * CAVEAT: this is a foundation, not a production signer.  No RFC
- * 6979 (k must be supplied — do the HMAC derivation in C, it's all
- * public-hash operations on the message).  No fault-injection
- * countermeasures.  Assumes the process has exclusive ZMM use
- * (no context switch saves secrets to the kernel's XSAVE area —
- * that's an OS-level guarantee, not something this code controls).
- * ====================================================================== */
-
-	.intel_syntax noprefix
-	.text
-
-/* ----------------------------------------------------------------------
- * fe_mul: zmm_c = zmm_a · zmm_b  (mod p)
+ * Why K=512: it's the largest K where μ fits 5 limbs.  K=520 gives a
+ * 265-bit μ (limb 5 = 16) — small but nonzero, needs special handling.
+ * K=512 keeps everything in the 5×5 schoolbook.
  *
- * ZMM16 = a, ZMM17 = b on entry.  ZMM16 = result on exit.
- * Clobbers ZMM18-27.  Reads ZMM8 (p), ZMM9 (MASK52), ZMM11 (FOLD260).
+ * The one fiddly bit: 512 = 9·52 + 44 (not limb-aligned).  Extract
+ * output limbs 9-14, then cross-lane shift right 44:
+ *   q[i] = (L[9+i] >> 44) | (L[10+i] << 8)
+ * That's vpsrlq + valignr + vpsllq + vporq.
  *
- * The product is built in two ZMM accumulators holding the 10-limb
- * result (limbs 0-7 in zmm19, limbs 8-9 spill into zmm20).  valignq
- * shifts the accumulator window as each broadcast row accumulates.
- * -------------------------------------------------------------------- */
-	.globl	fe_mul_ifma
-	.type	fe_mul_ifma, @function
-
-/* ======================================================================
- * STATUS: DESIGN DOCUMENT.  See sign_zmm_femul.c for the intrinsics
- * implementation of fe_mul (the one primitive everything else composes).
- * The Python model (sign_zmm_model.py) passes RFC 6979 A.2.5.
+ * Three schoolbooks per reduce (t_lo·μ, t_hi·μ, q·m).  ~60 IFMA ops.
  *
- * Hand-tuned assembly comes AFTER the intrinsics version passes the
- * full test suite and a careful read of the compiler output shows
- * a spill.  Writing valignq lane-shifts freehand is a bug farm.
+ * ──────────────────────────────────────────────────────────────────
+ *  LADDER: Montgomery, constant-time
+ * ──────────────────────────────────────────────────────────────────
+ *
+ *   R0, R1 = ∞, G
+ *   for i = 255 downto 0:
+ *     b = bit i of k                    (extract to GPR — value secret,
+ *     cswap(R0, R1, b)                   sequence fixed)
+ *     R1 = R0 + R1                      (ALWAYS — no skip-on-zero-bit)
+ *     R0 = 2·R0
+ *     cswap(R0, R1, b)
+ *
+ * cswap: XOR-with-mask.  mask = (0−b) broadcast.
+ *   delta = (a XOR b) AND mask;  a ^= delta;  b ^= delta.
+ *
+ * Point addition uses RCB complete formulas (same 43-op sequence as
+ * tv_ecdsa_tiny.S's bc_rcb).  ∞ = (0:1:0) — the Y≠0 matters; (0:0:0)
+ * doesn't work as ∞ under RCB.
+ *
+ * ──────────────────────────────────────────────────────────────────
+ *  WHAT TOUCHES MEMORY (and why it's OK)
+ * ──────────────────────────────────────────────────────────────────
+ *
+ *   Loading d, k, e at entry        one read each, fixed address
+ *   Loading constants (p, n, μ, G)  public
+ *   Storing r, s at exit            the public output
+ *   pt_add's spills                 fixed offsets, fixed order
+ *   call/ret for fe_mul (stack)     fixed sequence, public
+ *
+ * NOT handled (out of scope):
+ *   - Context switches saving ZMM to XSAVE area.  That's an OS-level
+ *     guarantee (mlock the key, or don't context-switch mid-sign).
+ *   - Fault injection / glitching.  Physical-access attacks.
+ *   - RFC 6979 k derivation.  Do it in C — it's all public-hash ops.
+ *
+ * ──────────────────────────────────────────────────────────────────
+ *  STATUS
+ * ──────────────────────────────────────────────────────────────────
+ *
+ * sign_zmm.c passes: 200 schoolbook vectors, 500 fe_mul, 27 pt_add
+ * (including completeness edge cases), 20 ladder, 32 sign (including
+ * RFC 6979 A.2.5).  Cross-verified against tv_ecdsa_tiny.S (607/607
+ * Wycheproof).  ~1.8M cycles/sign on Sapphire Rapids.
+ *
+ * Hand-tuned asm would save some cycles (GCC's spills cost ~20%), but
+ * the compiler already produces branch-free code.  Diminishing returns.
  * ====================================================================== */

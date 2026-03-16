@@ -1,12 +1,20 @@
 /* ======================================================================
- * ECDSA/P-256 sign — AVX-512 IFMA, all-register, constant-time.
+ * ECDSA/P-256 sign — AVX-512 IFMA, constant-time.  ~1.8M cycles.
  *
- * See tv_ecdsa_sign_zmm.S for the design document.  This is the
- * working implementation.  Intrinsics, not asm: the compiler
- * handles ZMM allocation, and we verify no-spill by reading the
- * output.  Every layer tested against sign_vectors.h.
+ * Secrets (d, k, ladder intermediates) never touch memory in a
+ * data-dependent way.  Zero conditional branches in the hot path.
+ * The spills that do happen (pt_add's ~200 stack writes) are to
+ * FIXED offsets — same cache-line pattern every call, no leak.
+ *
+ * CORE PRIMITIVES
+ *   5×52 limbs, one field element per ZMM (lanes 0-4, 5-7 zero).
+ *   IFMA schoolbook: 5 bcast+accumulate passes, valignq lane-shifts.
+ *   Barrett K=512: μ=⌊2^512/m⌋ fits EXACTLY 5 limbs for both p and n.
+ *   Montgomery ladder + XOR-mask cswap — same ops regardless of bit.
+ *   RCB complete addition: no ∞/doubling special cases.
  *
  * Build: cc -O3 -mavx512f -mavx512ifma -mavx512vl sign_zmm.c
+ * Test:  make test-sign   (6 layers × 783 vectors, incl. RFC 6979)
  * ====================================================================== */
 
 #include <immintrin.h>

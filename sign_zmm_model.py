@@ -102,24 +102,14 @@ def ifma_mul_5x5(a, b):
 # t[0..4].  Two passes converge (same ≤2-iteration argument as the
 # scalar code, because p > 2^255 so the quotient is small).
 # ----------------------------------------------------------------------
-# 2^260 mod p — the single fold constant.  High limbs fold one at a
-# time: t[k]·2^(52k) = t[k]·2^(52(k-5))·2^260 ≡ t[k]·2^(52(k-5))·C.
-# Each fold brings the value closer to 5 limbs; a few passes converge.
-FOLD260 = pow(2, 260, p)    # 5-limb constant
-FOLD260_L = to_limbs(FOLD260)
+# Barrett reduction constants — μ = floor(2^512/m) fits 5 limbs exactly.
+MU_P = (1 << 512) // p
+MU_N = (1 << 512) // n
 
 def reduce_p(t):
-    """
-    Fold a loose 10-limb product down to 5 tight limbs, mod p.
-
-    The assembly will do this as: multiply t[5..9] (treated as a second
-    5-limb number) by FOLD260 using the same IFMA schoolbook, add to
-    t[0..4], repeat once.  Here we just compute the correct answer to
-    validate against.
-
-    TODO: replace with the exact IFMA-modeled fold once the basic
-    pipeline is verified.  For now, correctness > fidelity.
-    """
+    """Reference reduce: 10-limb product → canonical 5-limb mod p.
+    The C implementation uses Barrett K=512 (three schoolbooks + one
+    cond-sub).  This is the oracle it's checked against."""
     return to_limbs(from_limbs(propagate(t)) % p)
 
 def fe_mul(a, b, mod=p):
@@ -307,17 +297,4 @@ if __name__ == '__main__':
         assert sig and verify((Qx,Qy), e, *sig), "sign/verify mismatch"
     print("  OK (20 random signatures)")
 
-    print("\n=== ALL TESTS PASS — math model ready for assembly ===")
-    print("\nZMM register budget for the assembly version:")
-    print("  zmm0-2   : R0 = (X:Y:Z)                    [SECRET during ladder]")
-    print("  zmm3-5   : R1 = (X:Y:Z)                    [SECRET]")
-    print("  zmm6     : k (the nonce)                   [SECRET — never spills]")
-    print("  zmm7     : d (private key)                 [SECRET — never spills]")
-    print("  zmm8-9   : p, n as 5×52 constants")
-    print("  zmm10    : b (curve constant)")
-    print("  zmm11-15 : pt_add temporaries t0-t4")
-    print("  zmm16-18 : pt_add X3,Y3,Z3 outputs")
-    print("  zmm19-27 : fe_mul accumulator + scratch (9-limb product)")
-    print("  zmm28-30 : cswap mask + scratch")
-    print("  zmm31    : MASK52 constant")
-    print("  Total: 32 registers, no spills.  Working set never touches L1D.")
+    print("\n=== Model verified against RFC 6979 — reference for sign_zmm.c ===")
