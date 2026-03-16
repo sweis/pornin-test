@@ -42,12 +42,15 @@ TRAIL = [
     (1109, 3665, None), (1111, 3268, None), (1117, 2996, None),
     (1125, 2407, None), (1098, 6186, None), (1118, 2407, None),
     (1079, 6186, None),
-    (1099, 2407, None),  # default — star
+    (1099, 2407, None),
+    # --- op6/7 merge + fe_sub_raw inline chain (−8B). .Lop8=255/255 ---
+    (1071, 6186, None),   # SMALL_MUL8
+    (1091, 2407, None),   # default — star
 ]
 
 THOMAS_V1 = (1156, 3600)
 THOMAS    = (1046, 3990)
-CLAUDE    = (1099, 2407)
+CLAUDE    = (1091, 2407)
 TARGET    = 1024
 
 def pareto(pts):
