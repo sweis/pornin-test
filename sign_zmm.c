@@ -129,185 +129,158 @@ static inline void schoolbook(fe a, fe b, __m512i *t_lo, __m512i *t_hi) {
  * propagation of t−p's lanes — same op sequence regardless of value.
  * -------------------------------------------------------------------- */
 /* ----------------------------------------------------------------------
- * reduce_p: 10-limb product → canonical 5-limb result mod m.
- *
- * CONSTANT-TIME SCALAR SCAFFOLD.  Stores the product to stack, reduces
- * via the same q=t[top_dword] trick as tv_ecdsa_tiny.S, reloads.
- *
- * Why this is NOT a leak despite touching memory: every access is to a
- * FIXED stack offset in a FIXED order.  The inner reduce loop runs
- * exactly 2 passes per position (not while-nonzero).  An attacker
- * watching cache lines sees the same trace every call — the addresses
- * don't vary with the secret, only the values stored do.  Same category
- * as pt_add's register spills.
- *
- * What WOULD be a leak: branching on secret bits (the old while loop
- * did), or indexing memory by secret values (we never do).
- *
- * Remaining improvement: Barrett reduction in pure ZMM (~20 IFMA ops).
- * Eliminates the scalar bottleneck.  Pure performance win, not security.
+ * Cross-lane propagate for a full 8-lane ZMM (not just 5).
+ * Returns (propagated, overflow-into-lane-8-as-scalar).
  * -------------------------------------------------------------------- */
-static inline fe reduce_p(__m512i t_lo, __m512i t_hi, fe fold260, fe p52) {
-    (void)fold260;   /* unused in scaffold — kept for API compat */
-
-    /* Store the 10-limb product.  Fixed addresses, fixed order. */
-    uint64_t L[16];
-    _mm512_storeu_si512((__m512i*)L, t_lo);
-    _mm512_storeu_si512((__m512i*)(L+8), t_hi);
-
-    /* Repack 10×52 (loose, each limb up to ~2^56) → 9×64 (tight).
-     * NO early-exit on carry==0 — that would branch on secret data.
-     * Always propagate to the top; when carry is 0, the adds are
-     * no-ops but STILL EXECUTE. */
-    uint64_t w64[9] = {0};
-    for (int i = 0; i < 10; i++) {
-        int bit = 52*i, wi = bit/64, sh = bit%64;
-        __uint128_t contrib = (__uint128_t)L[i] << sh;
-        __uint128_t sum = (__uint128_t)w64[wi] + (uint64_t)contrib;
-        w64[wi] = (uint64_t)sum;
-        uint64_t carry = (uint64_t)(sum >> 64) + (uint64_t)(contrib >> 64);
-        for (int j = wi+1; j < 9; j++) {   /* no `&& carry` — fixed count */
-            __uint128_t s2 = (__uint128_t)w64[j] + carry;
-            w64[j] = (uint64_t)s2;
-            carry = (uint64_t)(s2 >> 64);
-        }
+static inline __m512i prop8(__m512i t, uint64_t *carry_out) {
+    __m512i m = _mm512_set1_epi64(MASK52);
+    __m512i Z = _mm512_setzero_si512();
+    uint64_t co = 0;
+    for (int i = 0; i < 8; i++) {
+        __m512i c = _mm512_srli_epi64(t, 52);
+        t = _mm512_and_si512(t, m);
+        /* Extract lane 7's carry before it shifts off. */
+        __m512i c7 = _mm512_permutexvar_epi64(_mm512_set1_epi64(7), c);
+        co += (uint64_t)_mm_cvtsi128_si64(_mm512_castsi512_si128(c7));
+        __m512i cs = _mm512_alignr_epi64(c, Z, 7);
+        t = _mm512_add_epi64(t, cs);
     }
-    /* w64[0..8] is the product as 9 qwords (≤ 576 bits; product is
-     * ≤ 2·2^256·2^256 = 2^513 so 9 qwords suffice). */
-
-    /* ================================================================
-     * CONSTANT-TIME scalar reduce.  The old `while(w32[j+8])` branched
-     * on secret data — iteration count leaked whether the product's
-     * high limb was 0, 1, or 2.  Fix: ALWAYS iterate the maximum
-     * (2 passes per position — the q=t[top] invariant guarantees
-     * t[j+8] ∈ {0,1} after pass 1, so pass 2 with q≤1 finishes).
-     * When q=0, the inner subtract is a no-op but STILL EXECUTES.
-     *
-     * This is the same reduce as tv_ecdsa_tiny.S's fe_mul_m, just
-     * unrolled to a fixed trip count.  Still touches memory (w64 on
-     * stack) — but at FIXED offsets with FIXED access order, so no
-     * cache-index leak.  Same category as pt_add's spills.
-     * ================================================================ */
-    uint64_t m52_arr[8]; _mm512_storeu_si512((__m512i*)m52_arr, p52);
-    uint64_t M[4] = {0};
-    for (int i = 0; i < 5; i++) {
-        int bit = 52*i, wi = bit/64, sh = bit%64;
-        __uint128_t v = (__uint128_t)m52_arr[i] << sh;
-        M[wi] |= (uint64_t)v;
-        if (wi+1 < 4 && sh) M[wi+1] |= (uint64_t)(v >> 64);
-    }
-    uint32_t *w32 = (uint32_t*)w64;
-    uint32_t *M32 = (uint32_t*)M;
-    for (int j = 8; j >= 0; j--) {
-        /* Exactly 2 passes — no data-dependent while. */
-        for (int pass = 0; pass < 2; pass++) {
-            uint64_t q = w32[j+8];
-            uint64_t borrow = 0;
-            for (int k = 0; k < 8; k++) {
-                uint64_t prod = q * (uint64_t)M32[k] + borrow;
-                uint64_t sub = (uint64_t)w32[j+k] - (uint32_t)prod;
-                w32[j+k] = (uint32_t)sub;
-                borrow = (prod >> 32) + ((sub >> 32) & 1);
-            }
-            w32[j+8] -= (uint32_t)borrow;
-        }
-    }
-    /* w64[0..3] < 2^256, possibly ≥ m.  Constant-time cond-sub:
-     * compute w−m always, select based on borrow-out (not a branch). */
-    uint64_t diff[4], borrow = 0;
-    for (int i = 0; i < 4; i++) {
-        __uint128_t d = (__uint128_t)w64[i] - M[i] - borrow;
-        diff[i] = (uint64_t)d;
-        borrow = (d >> 127) & 1;
-    }
-    /* borrow=1 → w<m → keep w.  borrow=0 → w≥m → use diff.
-     * mask = borrow−1: 0 if borrowed (keep w), ~0 if not (use diff). */
-    uint64_t mask = borrow - 1;
-    for (int i = 0; i < 4; i++)
-        w64[i] ^= (w64[i] ^ diff[i]) & mask;
-    /* Convert back to 5×52. */
-    uint64_t out52[5];
-    for (int i = 0; i < 5; i++) {
-        int bit = 52*i, wi = bit/64, sh = bit%64;
-        uint64_t lo = w64[wi] >> sh;
-        uint64_t hi = (wi+1 < 4) ? (w64[wi+1] << (64-sh)) : 0;
-        if (sh == 0) hi = 0;
-        out52[i] = (lo | hi) & MASK52;
-    }
-    return _mm512_maskz_loadu_epi64(0x1F, out52);
-}
-
-/* Public-facing fe_mul.  Constants passed in so they can live in
- * ZMM registers across many calls (the signer loads them once). */
-fe fe_mul(fe a, fe b, fe fold260, fe p52) {
-    __m512i t_lo, t_hi;
-    schoolbook(a, b, &t_lo, &t_hi);
-    return reduce_p(t_lo, t_hi, fold260, p52);
+    *carry_out = co;
+    return t;
 }
 
 /* ----------------------------------------------------------------------
- * fe_add / fe_sub.  Easy: lane-wise add/sub, propagate, cond-sub p.
- * The lazy version: convert via one fe_mul by 1.  The right version:
- * add, propagate once (add can only overflow by 1 bit), cond-sub.
+ * Constant-time conditional subtract of m.  Returns t (if t<m) or t−m.
+ * Lane 5 of t must be zero on entry; lanes 0-4 tight.
  * -------------------------------------------------------------------- */
-fe fe_add(fe a, fe b, fe fold260, fe p52) {
-    __m512i t = _mm512_add_epi64(a, b);   /* lanes up to 2^53 */
-    /* Treat as a reduce problem with t_hi=0.  Overkill but correct
-     * and constant-time.  TODO: specialize (one propagate + cond-sub). */
-    return reduce_p(t, _mm512_setzero_si512(), fold260, p52);
-}
-fe fe_sub(fe a, fe b, fe fold260, fe p52) {
-    /* a − b + p is ALWAYS in (0, 2p) for tight a, b ∈ [0, p).
-     * No sign test needed — reduce_p's final cond-sub handles [0, 2p).
-     *
-     * LANEWISE a − b can still go negative (where b[i] > a[i]).
-     * Adding p lanewise FIRST doesn't help: p[2] = 0, so lane 2
-     * stays a[2] − b[2] which can be negative.  Instead: subtract,
-     * propagate borrows signedly (so lanes 0-4 end up in [0, 2^52)),
-     * then add p.  The post-propagate integer value is exactly
-     * a − b (the signed lane-5 is dropped by fe_clean, but since
-     * we add p ALWAYS, the one-extra-p it would account for is
-     * already covered). */
+static inline fe cond_sub(fe t, fe m) {
     __m512i Z = _mm512_setzero_si512();
     __m512i m52 = _mm512_set1_epi64(MASK52);
-    __m512i t = _mm512_sub_epi64(a, b);
+    __m512i d = _mm512_sub_epi64(t, m);
     for (int i = 0; i < 5; i++) {
-        __m512i c  = _mm512_srai_epi64(t, 52);
-        t = _mm512_and_si512(t, m52);
-        __m512i cs = _mm512_alignr_epi64(c, Z, 7);
-        t = _mm512_add_epi64(t, cs);
+        __m512i c = _mm512_srai_epi64(d, 52);        /* signed: {−1,0} */
+        d = _mm512_mask_and_epi64(d, 0x1F, d, m52);  /* keep lane 5 sign */
+        d = _mm512_add_epi64(d, _mm512_alignr_epi64(c, Z, 7));
     }
-    /* t (lanes 0-4) is now (a − b) mod 2^260, all lanes in [0, 2^52).
-     * For a ≥ b: this equals a − b.     Add p → (a − b) + p ∈ [p, 2p).
-     * For a < b: equals a − b + 2^260.  Add p → a − b + 2^260 + p.
-     *   But 2^260 ≡ FOLD260 (mod p), so this is a − b + FOLD260 + p
-     *   ... which is WRONG.
+    /* Lane 5 negative ⇔ t < m ⇔ keep t. */
+    __m512i s5 = _mm512_permutexvar_epi64(_mm512_set1_epi64(5), d);
+    __mmask8 keep_t = _mm512_cmplt_epi64_mask(s5, Z);
+    return fe_clean(_mm512_mask_blend_epi64(keep_t, d, t));
+}
+
+/* ----------------------------------------------------------------------
+ * Barrett reduction, K=512.  μ = floor(2^512/m) fits in exactly 5 limbs
+ * for both p and n.  Two schoolbooks + extract + one schoolbook + sub.
+ *
+ *   q = (t·μ) >> 512          — exact Barrett quotient estimate
+ *   r = t − q·m               — in [0, 2m)
+ *
+ * All ZMM.  ~60 IFMA ops + propagates.  No memory touch.
+ * -------------------------------------------------------------------- */
+static inline fe reduce_p(__m512i t_lo, __m512i t_hi, fe mu, fe m) {
+    __m512i Z = _mm512_setzero_si512();
+
+    /* Propagate t to tight limbs.  t_lo lane 7 carry flows into t_hi. */
+    uint64_t carry78;
+    t_lo = prop8(t_lo, &carry78);
+    t_hi = _mm512_add_epi64(t_hi, _mm512_maskz_set1_epi64(0x01, carry78));
+    t_hi = prop5(t_hi);
+    t_hi = fe_clean(t_hi);
+    /* Now: t = t_lo (8 tight limbs) + t_hi (2 tight limbs) · 2^416.
+     * As integer: t < 2^520.  Split for schoolbook: */
+    __m512i t_low5  = fe_clean(t_lo);                          /* limbs 0-4 */
+    __m512i t_high5 = fe_clean(_mm512_alignr_epi64(t_hi, t_lo, 5));  /* 5-9 */
+
+    /* t·μ = t_low5·μ + t_high5·μ · 2^260.  We want bits 512+.
      *
-     * The conditional-add IS necessary.  The earlier bug was clearing
-     * lane 5 BEFORE the mask-and-add: use lane 5's sign FOR the mask,
-     * add p (making t now correctly a − b + p in [0, p) for a<b, OR
-     * a − b in [0, p) for a≥b), THEN re-propagate to absorb p's carry. */
-    /* fe_clean drops lane 5.  As an integer:
-     *   a ≥ b: clean(t) = a − b.                    ✓ already correct.
-     *   a < b: clean(t) = (a − b) + 2^260.
-     * We want both ≡ a − b (mod p).  2^260 ≡ FOLD260 (mod p), so
-     * subtract FOLD260 (masked by lane5's sign) to compensate.
-     *   a ≥ b: t = (a−b) − 0 = a − b ∈ [0, p).      ✓
-     *   a < b: t = (a−b+2^260) − FOLD260.  Since 2^260 = FOLD260 +
-     *          ⌊2^260/p⌋·p = FOLD260 + 16p, this is a − b + 16p
-     *          ∈ (15p, 16p).  Positive; reduce_p folds it down. */
-    __m512i s5 = _mm512_permutexvar_epi64(_mm512_set1_epi64(5), t);
-    __m512i f_masked = _mm512_and_si512(fold260, s5);
-    t = _mm512_sub_epi64(fe_clean(t), f_masked);
-    /* Lanes may now be slightly negative again (p−fold can be neg
-     * in some lanes).  One more signed prop, then reduce. */
+     * t_low5·μ  < 2^260 · 2^257 = 2^517.  Its bits 512-516 (≤ 5 bits)
+     *   land in output limb 9 (bit 468-519) and limb 10 (520+).  After
+     *   propagation, limb 10 contribution is ≤ 2^5 / 2^52 — at most 1.
+     * t_high5·μ · 2^260: this product's limbs 0-9 become output 5-14.
+     *   Output bit 512 is in output limb 9 (bit 468-519), at position 44.
+     *   So we want: this product's limb 4 top 8 bits + limbs 5-9.
+     *
+     * Simplest correct extraction: compute both full products, combine
+     * into a 15-limb integer view, shift right 512 bits.  Since 512 =
+     * 9·52 + 44, this is: take limbs 9-14, shift the whole thing right
+     * 44 bits (lanewise shift + cross-lane borrow). */
+
+    __m512i p1_lo, p1_hi, p2_lo, p2_hi;
+    schoolbook(t_low5, mu, &p1_lo, &p1_hi);   /* → output limbs 0-9 */
+    schoolbook(t_high5, mu, &p2_lo, &p2_hi);  /* → output limbs 5-14 */
+
+    /* Combine: output[k] = p1[k] + p2[k−5] (for k≥5).  p1 contributes
+     * only to limbs 0-9; p2 shifted by 5 contributes to 5-14. */
+    __m512i p1_59 = fe_clean(_mm512_alignr_epi64(p1_hi, p1_lo, 5));
+    __m512i p2_04 = fe_clean(p2_lo);
+    __m512i s_59  = _mm512_add_epi64(p1_59, p2_04);   /* output[5..9] */
+    __m512i p2_59 = fe_clean(_mm512_alignr_epi64(p2_hi, p2_lo, 5));  /* output[10..14] */
+
+    /* Propagate s_59 (loose from the add) and carry into p2_59. */
+    s_59 = prop5(s_59);
+    __m512i c_to_10 = _mm512_maskz_compress_epi64(0x20, s_59);  /* lane 5 → lane 0 */
+    p2_59 = _mm512_add_epi64(p2_59, c_to_10);
+    s_59 = fe_clean(s_59);
+    p2_59 = prop5(p2_59);
+    p2_59 = fe_clean(p2_59);
+    /* Now s_59 = output limbs 5-9 (tight), p2_59 = limbs 10-14 (tight). */
+
+    /* q = (t·μ) >> 512.  512 = 9·52 + 44: drop limbs 0-8, shift
+     * limb 9 right 44, cross-lane borrow from limbs 10+.
+     * Assemble limbs 9-14 consecutively (L9 from s_59 lane 4, rest
+     * from p2_59), then lanewise >> 44 | next<<8. */
+    __m512i L9 = _mm512_permutexvar_epi64(_mm512_set1_epi64(4), s_59);
+    __m512i p2_shifted = _mm512_alignr_epi64(p2_59, Z, 7);
+    __m512i L9_15 = _mm512_mask_blend_epi64(0x01, p2_shifted, L9);
+    __m512i q_lo = _mm512_srli_epi64(L9_15, 44);
+    __m512i q_hi = _mm512_slli_epi64(_mm512_alignr_epi64(Z, L9_15, 1), 8);
+    __m512i q = fe_clean(_mm512_and_si512(
+                    _mm512_or_si512(q_lo, q_hi),
+                    _mm512_set1_epi64(MASK52)));
+
+    /* r = t − q·m.  Only need r's low 5 limbs (r < 2m < 2^257). */
+    __m512i qm_lo, qm_hi;
+    schoolbook(q, m, &qm_lo, &qm_hi);
+    __m512i r = _mm512_sub_epi64(t_low5, fe_clean(qm_lo));
+    /* r's high limbs: t_high5 − qm[5..9] − borrow.  But r < 2m means
+     * r's limbs 5+ are zero after propagation.  Just propagate r[0..4]
+     * with signed arithmetic (borrows), ignore what goes into lane 5. */
+    __m512i m52 = _mm512_set1_epi64(MASK52);
     for (int i = 0; i < 5; i++) {
-        __m512i c  = _mm512_srai_epi64(t, 52);
-        t = _mm512_and_si512(t, m52);
-        __m512i cs = _mm512_alignr_epi64(c, Z, 7);
-        t = _mm512_add_epi64(t, cs);
+        __m512i c = _mm512_srai_epi64(r, 52);
+        r = _mm512_and_si512(r, m52);
+        r = _mm512_add_epi64(r, _mm512_alignr_epi64(c, Z, 7));
     }
-    return reduce_p(fe_clean(t), Z, fold260, p52);
+    return cond_sub(fe_clean(r), m);
+}
+
+fe fe_mul(fe a, fe b, fe mu, fe m) {
+    __m512i t_lo, t_hi;
+    schoolbook(a, b, &t_lo, &t_hi);
+    return reduce_p(t_lo, t_hi, mu, m);
+}
+
+/* fe_add: a + b ∈ [0, 2m) → one cond_sub. */
+fe fe_add(fe a, fe b, fe mu, fe m) {
+    (void)mu;
+    __m512i t = prop5(_mm512_add_epi64(a, b));
+    return cond_sub(fe_clean(t), m);
+}
+
+/* fe_sub: (a − b + m) ∈ (0, 2m) — always positive.  Propagate, cond_sub. */
+fe fe_sub(fe a, fe b, fe mu, fe m) {
+    (void)mu;
+    __m512i Z = _mm512_setzero_si512();
+    __m512i m52 = _mm512_set1_epi64(MASK52);
+    /* Lanewise a − b + m: each lane in (−2^52, 2^53).  srai handles
+     * both signs (carry ∈ {−1,0,1}). */
+    __m512i t = _mm512_add_epi64(_mm512_sub_epi64(a, b), m);
+    for (int i = 0; i < 5; i++) {
+        __m512i c = _mm512_srai_epi64(t, 52);
+        t = _mm512_and_si512(t, m52);
+        t = _mm512_add_epi64(t, _mm512_alignr_epi64(c, Z, 7));
+    }
+    return cond_sub(fe_clean(t), m);
 }
 
 /* ----------------------------------------------------------------------
@@ -340,10 +313,10 @@ static inline void cswap(uint64_t bit, fe *a, fe *b) {
 typedef struct { fe X, Y, Z; } pt;
 
 static void pt_add(pt *R, const pt *P, const pt *Q,
-                   fe b_curve, fe fold260, fe p52) {
-    #define M(a,b) fe_mul(a,b,fold260,p52)
-    #define A(a,b) fe_add(a,b,fold260,p52)
-    #define S(a,b) fe_sub(a,b,fold260,p52)
+                   fe b_curve, fe mu, fe p52) {
+    #define M(a,b) fe_mul(a,b,mu,p52)
+    #define A(a,b) fe_add(a,b,mu,p52)
+    #define S(a,b) fe_sub(a,b,mu,p52)
     fe t0 = M(P->X, Q->X);
     fe t1 = M(P->Y, Q->Y);
     fe t2 = M(P->Z, Q->Z);
@@ -374,7 +347,7 @@ static void pt_add(pt *R, const pt *P, const pt *Q,
  * only in ZMM — no memory traffic inside the loop.
  * -------------------------------------------------------------------- */
 static void ladder(pt *out, const uint64_t k_limbs[5], const pt *G,
-                   fe b_curve, fe fold260, fe p52) {
+                   fe b_curve, fe mu, fe p52) {
     /* k as a ZMM: we'll extract bits via right-shift + mask of
      * lane ⌊i/52⌋.  Load once, never store. */
     fe k = fe_load(k_limbs);
@@ -401,8 +374,8 @@ static void ladder(pt *out, const uint64_t k_limbs[5], const pt *G,
         cswap(bit, &R0.X, &R1.X);
         cswap(bit, &R0.Y, &R1.Y);
         cswap(bit, &R0.Z, &R1.Z);
-        pt_add(&R1, &R0, &R1, b_curve, fold260, p52);   /* R1 = R0 + R1 */
-        pt_add(&R0, &R0, &R0, b_curve, fold260, p52);   /* R0 = 2·R0   */
+        pt_add(&R1, &R0, &R1, b_curve, mu, p52);   /* R1 = R0 + R1 */
+        pt_add(&R0, &R0, &R0, b_curve, mu, p52);   /* R0 = 2·R0   */
         cswap(bit, &R0.X, &R1.X);
         cswap(bit, &R0.Y, &R1.Y);
         cswap(bit, &R0.Z, &R1.Z);
@@ -433,17 +406,17 @@ int ecdsa_sign_zmm(uint64_t r_out[5], uint64_t s_out[5],
                    const uint64_t e_in[5],
                    const uint64_t Gx[5], const uint64_t Gy[5],
                    const uint64_t b[5], const uint64_t p[5],
-                   const uint64_t n[5], const uint64_t f260p[5],
-                   const uint64_t f260n[5]) {
+                   const uint64_t n[5], const uint64_t mu_p[5],
+                   const uint64_t mu_n[5]) {
     fe p52 = fe_load(p), n52 = fe_load(n);
-    fe fp  = fe_load(f260p), fn = fe_load(f260n);
+    fe mup = fe_load(mu_p), mun = fe_load(mu_n);
     fe bc  = fe_load(b);
     pt G   = { fe_load(Gx), fe_load(Gy),
                _mm512_maskz_set1_epi64(0x01, 1) };
 
     /* R = k·G.  k is secret — ladder is constant-time. */
     pt R;
-    ladder(&R, k_in, &G, bc, fp, p52);
+    ladder(&R, k_in, &G, bc, mup, p52);
 
     /* r = (R.X / R.Z) mod n.  R is PUBLIC once we commit to k
      * (the whole point of signing is publishing R.x), so the
@@ -457,39 +430,16 @@ int ecdsa_sign_zmm(uint64_t r_out[5], uint64_t s_out[5],
      * minus 2 in limb 0 (no borrow — p's limb 0 is all-ones). */
     uint64_t pm2[5]; fe_store(pm2, p52); pm2[0] -= 2;
     for (int i = 255; i >= 0; i--) {
-        Zi_acc = fe_mul(Zi_acc, Zi_acc, fp, p52);   /* square */
+        Zi_acc = fe_mul(Zi_acc, Zi_acc, mup, p52);   /* square */
         int lane = i/52, shift = i%52;
         if ((pm2[lane] >> shift) & 1)                /* PUBLIC branch */
-            Zi_acc = fe_mul(Zi_acc, Zi, fp, p52);
+            Zi_acc = fe_mul(Zi_acc, Zi, mup, p52);
     }
-    fe Rx_aff = fe_mul(R.X, Zi_acc, fp, p52);        /* R.x affine */
+    fe Rx_aff = fe_mul(R.X, Zi_acc, mup, p52);
 
-    /* r = Rx_aff mod n.  Rx_aff < p < 2n, so at most one subtract. */
-    /* (Same cond-sub as reduce, but with n.) */
-    fe r = reduce_p(Rx_aff, _mm512_setzero_si512(), fn, n52);
-    /* Actually that's wrong — reduce_p folds via fold260_p, not n.
-     * For a single cond-sub of n on a value already < 2n, just: */
-    /* TODO: proper mod-n cond-sub.  For now, the scalar escape: */
-    uint64_t rL[5]; fe_store(rL, Rx_aff);
-    /* Reconstruct, mod n, re-split.  Rx_aff is PUBLIC — this is safe. */
-    /* (Doing it properly in ZMM is the same borrow-chain as reduce_p's
-     * final step, just with n52 instead of p52.  Straightforward.) */
-    __uint128_t v = 0;
-    /* Can't fit 256 bits in __uint128_t.  Use the limb form directly. */
-    /* Shortcut: compare and subtract once. */
-    int ge_n = 0;
-    for (int i = 4; i >= 0; i--) {
-        uint64_t ni = ((const uint64_t*)&n52)[i];  /* hmm — this loads. */
-        /* Actually n is public — loading it is fine. */
-        uint64_t ni_arr[8]; _mm512_storeu_si512((__m512i*)ni_arr, n52);
-        if (rL[i] > ni_arr[i]) { ge_n = 1; break; }
-        if (rL[i] < ni_arr[i]) { ge_n = 0; break; }
-    }
-    (void)ge_n; (void)v;
-    /* This is getting messy.  Punt: reduce_p with fold260_N and n52
-     * DOES work for the full mod-n reduce (it's the same algorithm),
-     * we just need to call it with the right constants. */
-    r = reduce_p(Rx_aff, _mm512_setzero_si512(), fn, n52);
+    /* r = Rx_aff mod n.  Rx_aff < p < 2n → one cond_sub.
+     * r is PUBLIC once computed — fine to store. */
+    fe r = cond_sub(Rx_aff, n52);
     fe_store(r_out, r);
 
     /* Check r ≠ 0.  Compare to zero, collect mask. */
@@ -505,15 +455,15 @@ int ecdsa_sign_zmm(uint64_t r_out[5], uint64_t s_out[5],
     fe kinv = _mm512_maskz_set1_epi64(0x01, 1);
     uint64_t nm2[5]; fe_store(nm2, n52); nm2[0] -= 2;  /* n's limb0 ends ...551, −2 safe */
     for (int i = 255; i >= 0; i--) {
-        kinv = fe_mul(kinv, kinv, fn, n52);
+        kinv = fe_mul(kinv, kinv, mun, n52);
         int lane = i/52, shift = i%52;
         if ((nm2[lane] >> shift) & 1)            /* bits of n-2: PUBLIC */
-            kinv = fe_mul(kinv, k, fn, n52);
+            kinv = fe_mul(kinv, k, mun, n52);
     }
 
-    fe rd  = fe_mul(r, d, fn, n52);              /* SECRET intermediate */
-    fe erd = fe_add(e, rd, fn, n52);
-    fe s   = fe_mul(kinv, erd, fn, n52);
+    fe rd  = fe_mul(r, d, mun, n52);              /* SECRET intermediate */
+    fe erd = fe_add(e, rd, mun, n52);
+    fe s   = fe_mul(kinv, erd, mun, n52);
     fe_store(s_out, s);
 
     __mmask8 s_zero = _mm512_cmpeq_epi64_mask(s, _mm512_setzero_si512());
@@ -568,10 +518,10 @@ int main(void) {
 
     /* Layer 2: fe_mul */
     printf("L2 fe_mul:     ");
-    fe fp = fe_load(C_F260P), p52 = fe_load(C_P);
+    fe mup = fe_load(C_MU_P), p52 = fe_load(C_P);
     for (int v = 0; v < N_FEMUL; v++) {
         fe a = fe_load(V_FEMUL[v].a), b = fe_load(V_FEMUL[v].b);
-        fe c = fe_mul(a, b, fp, p52);
+        fe c = fe_mul(a, b, mup, p52);
         uint64_t got[5]; fe_store(got, c);
         if (!eq5(got, V_FEMUL[v].c)) {
             if (!fail) printf("\n");
@@ -602,7 +552,7 @@ int main(void) {
         pt P = {fe_load(V_PTADD[v].px),fe_load(V_PTADD[v].py),fe_load(V_PTADD[v].pz)};
         pt Q = {fe_load(V_PTADD[v].qx),fe_load(V_PTADD[v].qy),fe_load(V_PTADD[v].qz)};
         pt R;
-        pt_add(&R, &P, &Q, bc, fp, p52);
+        pt_add(&R, &P, &Q, bc, mup, p52);
         uint64_t gx[5],gy[5],gz[5];
         fe_store(gx,R.X);fe_store(gy,R.Y);fe_store(gz,R.Z);
         if (!eq5(gx,V_PTADD[v].rx)||!eq5(gy,V_PTADD[v].ry)||!eq5(gz,V_PTADD[v].rz)) {
@@ -618,7 +568,7 @@ int main(void) {
     pt G = {fe_load(C_GX), fe_load(C_GY), _mm512_maskz_set1_epi64(0x01,1)};
     for (int v = 0; v < N_LADDER; v++) {
         pt R;
-        ladder(&R, V_LADDER[v].k, &G, bc, fp, p52);
+        ladder(&R, V_LADDER[v].k, &G, bc, mup, p52);
         uint64_t gx[5],gy[5],gz[5];
         fe_store(gx,R.X);fe_store(gy,R.Y);fe_store(gz,R.Z);
         if (!eq5(gx,V_LADDER[v].rx)||!eq5(gy,V_LADDER[v].ry)||!eq5(gz,V_LADDER[v].rz)) {
@@ -634,7 +584,7 @@ int main(void) {
     for (int v = 0; v < N_SIGN; v++) {
         uint64_t r[5], s[5];
         int rc = ecdsa_sign_zmm(r, s, V_SIGN[v].d, V_SIGN[v].k, V_SIGN[v].e,
-                                C_GX, C_GY, C_B, C_P, C_N, C_F260P, C_F260N);
+                                C_GX, C_GY, C_B, C_P, C_N, C_MU_P, C_MU_N);
         if (rc || !eq5(r,V_SIGN[v].r) || !eq5(s,V_SIGN[v].s)) {
             if (!fail) printf("\n");
             printf("  FAIL #%d (rc=%d)\n", v, rc); fail++;

@@ -44,8 +44,8 @@ with open('sign_vectors.h', 'w') as f:
     print("static const uint64_t C_B[8]    =", file=f); emit_limbs("b", b_curve, f)
     print("static const uint64_t C_GX[8]   =", file=f); emit_limbs("Gx", Gx, f)
     print("static const uint64_t C_GY[8]   =", file=f); emit_limbs("Gy", Gy, f)
-    print("static const uint64_t C_F260P[8]=", file=f); emit_limbs("2^260 mod p", pow(2,260,p), f)
-    print("static const uint64_t C_F260N[8]=", file=f); emit_limbs("2^260 mod n", pow(2,260,n), f)
+    print("static const uint64_t C_MU_P[8] =", file=f); emit_limbs("floor(2^512/p)", (1<<512)//p, f)
+    print("static const uint64_t C_MU_N[8] =", file=f); emit_limbs("floor(2^512/n)", (1<<512)//n, f)
     print(file=f)
 
     # ------------------------------------------------------------------
