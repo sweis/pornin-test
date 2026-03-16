@@ -65,15 +65,17 @@ TRAIL = [
     (989,  3530, None),
     (969,  8030, None),
     (984,  3540, None),
-    (964,  8115, "fe_inv_m redesign\n964B — size corner"),
+    (964,  8115, None),
+    (983,  3525, None),
+    (963,  8115, "fe_inv_m redesign\n963B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B).
-# Post-964B: our 984B DOMINATES Thomas v4 (smaller AND faster).
+# Post-963B: our 983B DOMINATES Thomas v4 (smaller AND faster).
 # Thomas is fully off the frontier now.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100)]
 THOMAS    = (996, 4100)
-CLAUDE    = (964, 8115)     # size corner — 32 B under Thomas v4
+CLAUDE    = (963, 8115)     # size corner — 33 B under Thomas v4
 TARGET    = 1024
 
 def pareto(pts):
