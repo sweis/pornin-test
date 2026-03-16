@@ -318,8 +318,9 @@ fe_mul_m:
 	xchg	eax, ebx            /* 1 B */
 	stosd
 	loop	3b
+	/* rdi = rsp+104 (stosd advanced 8× from rsp+72). */
 
-	lea	r10, [rsp+72]       /* &neg_m (stable across mulacc) */
+	lea	r10, [rdi-32]       /* = rsp+72 = &neg_m; 4 B vs 5 B */
 
 	/* Schoolbook: 8 rounds, count down −32→0 to drop the cmp. */
 	push	-32
@@ -332,8 +333,9 @@ fe_mul_m:
 	jnz	.Lm
 	/* t[0..15] = a·b.  t[16..17] = 0 (product < 2^512). */
 
-	/* Reduce: slide 9-dword window from j=8 to j=0.  r9 = &t[j]. */
-	lea	r9, [rsp+32]        /* &t[8] */
+	/* Reduce: slide 9-dword window from j=8 to j=0.  r9 = &t[j].
+	 * r10 = rsp+72; r9 = rsp+32 = r10−40.  4 B disp8 vs 5 B SIB. */
+	lea	r9, [r10-40]
 .Lr:	mov	ebx, [r9+32]        /* q = t[j+8] */
 	test	ebx, ebx
 	jz	4f
@@ -724,18 +726,6 @@ Fmul:	jmp	fe_mul_m
  * so jnc replaces test+jz.  The add-back loop's first adc needs
  * CF=0: `xor ecx,ecx` clears it (we're on the CF=1 branch here
  * but mov+xor reset it).  −10 vs standalone fe_sub_m+fe_add_raw. */
-/* cond_sub_n — r12=&cN.  Conditional subtract IS subtract-then-add-
- * back-on-borrow, which is exactly .Lop3 with the modulus swapped
- * from P to N.  Placed here to fall through.  .Lop3 computes
- * dst = s1 - s2; on borrow adds back rcx.  With rcx=rdx=r12=&N and
- * rsi=rdi=&a: result is a-N if a≥N else (a-N)+N = a.
- * Not on the dispatch path — op3 in the jump table points at .Lop3
- * proper, past these 9 bytes.  Fadd shifts to offset 244 (fits u8). */
-cond_sub_n:
-	mov	rcx, r12
-	mov	rsi, rdi
-	mov	rdx, r12
-	/* FALLTHROUGH */
 /* rcx = &P is supplied by the decoder.  Fadd also preserves it
  * across its fe_sub_raw call (push/pop around it, +2 B) and jumps to
  * .Lop3 directly — the old `Fsub: lea rcx,[r14+oP]` re-load is gone. */
@@ -880,19 +870,17 @@ tv_ecdsa_p256_verify_asm:
 .Lf2:	xor	eax, eax
 	jmp	.Ld2
 1:
-	/* inv-n already done by bc_v1's last op (INV slot0 = slot13^−1
-	 * mod slot8=cN).  Stockpile slot 13 for hash decode / cond_sub /
-	 * Shamir rbx.  rbx (hash ptr) goes dead after `mov rsi,rbx`. */
+	/* inv-n done by bc_v1's last op.  Hash decode goes to slot 13
+	 * (was s, now e).  NO cond_sub: e might be ≥ n but bc_v2's
+	 * Nmul computes e·s⁻¹ mod n regardless — (a·b) mod n is right
+	 * for any a < 2^256.  Stockpile slot 13 for decode + Shamir rbx. */
 	lea	rsi, [r13+32]
-	push	rsi
 	push	rsi
 	push	rsi
 
 	mov	rsi, rbx
 	pop	rdi
 	call	fe_from_be
-	pop	rdi
-	call	cond_sub_n
 	pop	rbx                 /* rbx = &slot13; dead window until inv-p */
 
 	push	obc_v2
@@ -933,7 +921,13 @@ tv_ecdsa_p256_verify_asm:
 	push	rbx
 	push	rbx
 	pop	rdi
-	call	cond_sub_n
+	/* cond_sub_n inlined (sole caller).  r12 = &cN in verify.
+	 * .Lop3 semantics: dst = s1 − s2, add-back rcx on borrow.
+	 * With rsi=rdi, rdx=rcx=&cN: cond-sub mod n. */
+	mov	rcx, r12
+	mov	rsi, rdi
+	mov	rdx, r12
+	call	.Lop3
 	pop	rsi
 	pop	rdi
 	mov	rdx, r13
