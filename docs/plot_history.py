@@ -64,7 +64,8 @@ FAST = [
     (1293, 7180, None),   # loop everywhere (true speed)
     (1279, 7180, None),   # cdq + .Lop3 cond-sub
     (1266, 7180, None),   # INV bytecode ops
-    (1257, 7180, "INV bytecode\n1257B, 3.88"),  # 7180/1855*1850
+    (1257, 7180, None),
+    (1255, 7460, "mulsub reduce\n1255B, 4.03"),  # 7480/1855*1850
 ]
 
 def pareto(pts):

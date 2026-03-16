@@ -298,16 +298,17 @@ mulacc:
  * One mulacc serves both schoolbook multiply AND reduce.  No m0i,
  * no R², no Montgomery — plain modular arithmetic.  r8 ignored. */
 fe_mul_m:
-	push	r12
 	push	r13
 	push	r14
 	push	rbx                 /* mulacc reads ebx */
 	push	rbp                 /* mulacc clobbers ebp */
 
-	mov	r12, rdi            /* r */
 	mov	r13, rdx            /* b */
 	mov	r14, rsi            /* a */
 	mov	r8, rcx             /* m — reduce AND cond-sub use it directly */
+	/* dest (rdi) goes on the stack under t — popped after t is
+	 * released.  r12 no longer pushed/used; .Lepi4 shrinks. */
+	push	rdi
 
 	/* Frame: just t[0..17] = 72 B.  mulsub subtracts q·m directly,
 	 * so no neg_m needed.  Push-zero 9 qwords (72 B). */
@@ -353,23 +354,21 @@ fe_mul_m:
 	jae	.Lr
 	/* t[0..7] < 2^256, possibly ≥ m.  t[8] = 0. */
 
-	/* Final cond-sub via .Lop3 (dst = s1 − s2, add-back rcx on
-	 * borrow).  With rsi=t, rdx=rcx=m: r12 = t−m; if borrow,
-	 * r12 += m = t.  Exactly our cond-sub.  .Lop3 already exists
-	 * for Fsub/cond_sub_n.  −10 B vs inline fe_sub_raw+copy. */
-	mov	rdi, r12
+	/* Final cond-sub via .Lop3.  rsi = &t BEFORE releasing the
+	 * frame (reads are safe: .Lop3's pushes land at t[14..17],
+	 * past the result in t[0..7]).  dest pops from under t. */
 	mov	rsi, rsp
+	add	rsp, 72
+	pop	rdi                 /* dest (pushed before push-loop) */
 	mov	rdx, r8             /* m */
 	mov	rcx, r8
 	call	.Lop3
 
-	add	rsp, 72
 	pop	rbp
 	pop	rbx
-.Lepi4:                             /* fe_inv_m jumps here (3 pops) */
+.Lepi4:                             /* fe_inv_m jumps here (2 pops now) */
 	pop	r14
 	pop	r13
-	pop	r12
 	ret
 
 /* fe_inv_m.  Loop counter in rbx (callee-saved, survives fe_mul_m).
@@ -428,7 +427,11 @@ fe_inv_m:
 
 	leave
 	pop	rbx
-	jmp	.Lepi4
+	/* Can't share .Lepi4 anymore (it dropped pop r12).  Own epi. */
+	pop	r14
+	pop	r13
+	pop	r12
+	ret
 
 /* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
  * 32 first, for chained decode (rdi already advanced by the prior
