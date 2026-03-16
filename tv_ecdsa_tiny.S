@@ -1,7 +1,7 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 983 B default build; 963 B with -DSMALL_MUL8 (~2× cycles).
+ * 980 B default build; 960 B with -DSMALL_MUL8 (~2× cycles).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -397,21 +397,66 @@ fe_from_be:
 	ret
 
 /* ----------------------------------------------------------------------
- * .Lcadd / pt_mul read the slot base from r14 (verify's r14=rsp).
+ * pt_mul / .Lcadd read the slot base from r14 (verify's r14=rsp).
  * bc_run push/pops r14 around its own use so it always comes back.
- * r15 dropped — .Lcadd's slot5 is now r14+160 (disp32; +3 B here,
- * −7 B in verify = −3 B net).
  *
- * Placed right before bcrun_r14: add2 path FALLS THROUGH (no jmp),
- * dbl path's jmp is rel8.  x86-64 has no short call — the mid-body
- * `call bcrun_r14` is still rel32.
+ * pt_mul is BEFORE .Lcadd (which is before bcrun_r14) so pt_mul's
+ * tail `jmp bcrun_r14` only jumps over .Lcadd (14 B) — rel8, not
+ * rel32.  .Lcadd still falls through to bcrun_r14.  pt_mul's three
+ * calls to .Lcadd go forward but are rel32 either way (no short
+ * call on x86-64).
  * -------------------------------------------------------------------- */
+/* pt_mul: Shamir via RCB-ONLY.  Doubling = self-add (acc→addend,
+ * RCB).  Q/G adds use 3-slot backups (X,Y,Z=1) — RCB reads addend
+ * Z from slot7 and NEVER writes slots 5-7.
+ *
+ * Caller (verify): rbx=&slot16.  u1 at [rbx−96], u2 at [rbx−64].
+ * G-backup at [rbx], Q-backup at [rbx+96] — both disp8.  r14=slot
+ * base.  G-backup at slots 16-18, Q-backup at 19-21.
+ * slot10 = b (RCB reads, never writes).  rcx=0 on entry. */
+pt_mul:
+	push	rbp
+	/* Init acc = ∞ = (0:1:0).  RCB needs Y≠0 for ∞+Q=Q. */
+	mov	rdi, r14
+	xor	eax, eax
+	mov	cl, 12
+	rep	stosq               /* slots 0-2 = 0.  rdi → r14+96. */
+	inc	DWORD PTR [rdi-64]  /* slot1 = 1.  [r14+32] costs REX; −1B. */
+	dec	al                  /* al was 0, now 255 */
+	xchg	ebp, eax            /* ebp = 255 */
+.Lpm:
+	/* Doubling: copy acc (0-2) → addend (5-7), self-add. */
+	mov	rsi, r14
+	call	.Lcadd
+	/* u2 bit: copy Q-backup (slots 19-21) → addend, add. */
+	bt	DWORD PTR [rbx-64], ebp   /* u2 = slot14 = slot16−64 */
+	jnc	2f
+	lea	rsi, [rbx+96]       /* slot19 = slot16+96.  disp8. */
+	call	.Lcadd
+2:	/* u1 bit: copy G-backup (slots 16-18) → addend, add. */
+	bt	DWORD PTR [rbx-96], ebp   /* u1 = slot13 */
+	jnc	3f
+	push	rbx
+	pop	rsi                 /* slot16 — G is here; 2B vs 3B mov */
+	call	.Lcadd
+3:	dec	ebp
+	jns	.Lpm
+	/* TAIL into bc_v3 dispatch.  pop rbp BEFORE the jmp (bcrun
+	 * doesn't know about our push); bcrun's ret goes to OUR
+	 * caller (verify) directly — call pt_mul's ret addr is
+	 * still on the stack, the jmp preserves it.  CF (check
+	 * result) survives all the way to verify's sbb.  The jmp
+	 * is rel8 now — only .Lcadd (14 B) between here and bcrun. */
+	pop	rbp
+	push	obc_v3
+	pop	rdi
+	jmp	bcrun_r14
+
 /* RCB complete addition handles P+Q, 2P, P−P=∞, ∞+Q uniformly.
  * pt_mul's helper copies src → addend slots (5-7), then dispatches
  * bc_rcb.  Doubling = self-add (src=r14=acc); Q/G adds use 3-slot
  * backups (X,Y,Z=1).  rsi set by caller; rcx=0 on entry (every
- * path: rep movsq above or bc_run epilogue's neg+pops).  rel8 to
- * bcrun_r14 just below. */
+ * path: bc_run epilogue's neg+pops, or pt_mul init's rep stosq). */
 .Lcadd:
 	lea	rdi, [r14+160]      /* addend = slot5.  disp32; r15 is gone. */
 	mov	cl, 12
@@ -489,56 +534,9 @@ bc_run:
 .Lbce:	neg	ebp
 	pop	r14
 	pop	r12
-.Lepi2:
 	pop	rbx
 	pop	rbp
 	ret
-
-/* pt_mul: Shamir via RCB-ONLY.  Doubling = self-add (acc→addend,
- * RCB).  Q/G adds use 3-slot backups (X,Y,Z=1) — RCB reads addend
- * Z from slot6 and NEVER writes slots 4-6.  r12 not needed.
- *
- * Caller (verify): rbx=&slot16.  u1 at [rbx−96], u2 at [rbx−64].
- * G-backup at [rbx], Q-backup at [rbx+96] — both disp8.  r14=slot
- * base.  G-backup at slots 16-18, Q-backup at 19-21.
- * slot10 = b (RCB reads, never writes).  rcx=0 on entry. */
-pt_mul:
-	push	rbp
-	/* Init acc = ∞ = (0:1:0).  RCB needs Y≠0 for ∞+Q=Q. */
-	mov	rdi, r14
-	xor	eax, eax
-	mov	cl, 12
-	rep	stosq               /* slots 0-2 = 0.  rdi → r14+96. */
-	inc	DWORD PTR [rdi-64]  /* slot1 = 1.  [r14+32] costs REX; −1B. */
-	dec	al                  /* al was 0, now 255 */
-	xchg	ebp, eax            /* ebp = 255 */
-.Lpm:
-	/* Doubling: copy acc (0-2) → addend (4-6), self-add. */
-	mov	rsi, r14
-	call	.Lcadd
-	/* u2 bit: copy Q-backup (slots 19-21) → addend, add. */
-	bt	DWORD PTR [rbx-64], ebp   /* u2 = slot14 = slot16−64 */
-	jnc	2f
-	lea	rsi, [rbx+96]       /* slot19 = slot16+96.  disp8. */
-	call	.Lcadd
-2:	/* u1 bit: copy G-backup (slots 16-18) → addend, add. */
-	bt	DWORD PTR [rbx-96], ebp   /* u1 = slot13 */
-	jnc	3f
-	push	rbx
-	pop	rsi                 /* slot16 — G is here; 2B vs 3B mov */
-	call	.Lcadd
-3:	dec	ebp
-	jns	.Lpm
-	/* TAIL into bc_v3 dispatch.  pop rbp BEFORE the jmp (bcrun
-	 * doesn't know about our push); bcrun's ret goes to OUR
-	 * caller (verify) directly — call pt_mul's ret addr is
-	 * still on the stack, the jmp preserves it.  CF (check
-	 * result) survives all the way to verify's sbb.  +7 B here,
-	 * −8 B in verify (push;pop;call gone). */
-	pop	rbp
-	push	obc_v3
-	pop	rdi
-	jmp	bcrun_r14
 
 /* .Ljt + constants.  cGX→cGY→cN→cP contiguous in that order:
  * verify copies all four to slots 2-5 in one 16-qword rep movsq

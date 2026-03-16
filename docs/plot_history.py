@@ -67,15 +67,18 @@ TRAIL = [
     (984,  3540, None),
     (964,  8115, None),
     (983,  3525, None),
-    (963,  8115, "fe_inv_m redesign\n963B — size corner"),
+    (963,  8115, None),
+    # --- pt_mul before .Lcadd: tail jmp is rel8 over 14 B (−3B) ---
+    (980,  3540, None),
+    (960,  8085, "fe_inv_m redesign\n960B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B).
-# Post-963B: our 983B DOMINATES Thomas v4 (smaller AND faster).
+# Post-960B: our 980B DOMINATES Thomas v4 (smaller AND faster).
 # Thomas is fully off the frontier now.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100)]
 THOMAS    = (996, 4100)
-CLAUDE    = (963, 8115)     # size corner — 33 B under Thomas v4
+CLAUDE    = (960, 8085)     # size corner — 36 B under Thomas v4
 TARGET    = 1024
 
 def pareto(pts):
@@ -173,7 +176,7 @@ ax.set_title('ECDSA/P-256 verify — size vs speed (lower-left is better)',
 ax.legend(loc='upper right', framealpha=0.95, fontsize=9)
 ax.grid(True, alpha=0.2)
 ax.set_axisbelow(True)
-ax.set_xlim(960, 2060)
+ax.set_xlim(940, 2060)
 ax.set_ylim(0, 9000)
 
 plt.tight_layout()
