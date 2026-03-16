@@ -303,36 +303,27 @@ fe_mul_m:
 	loop	2b
 	/* rsp → t[0].  rcx=0. */
 
-	/* Schoolbook: 8 rounds, count down −32→0 to drop the cmp. */
+	/* Schoolbook then reduce (separate — merged reverse-order has
+	 * an overflow: i−1's fold writes t[i+7] large, then i−1's
+	 * mulacc final-carry add to t[i+7] can exceed 2^32, dropping
+	 * a bit.  Forward-order merged is equivalent to separate). */
 	push	-32
 	pop	r11
-.Lm:	mov	ebx, [r14+r11+32]   /* a[i] (32-bit load) */
+.Lm:	mov	ebx, [r14+r11+32]   /* a[i] */
 	lea	rdi, [rsp+r11+32]   /* &t[i] */
 	mov	rsi, r13            /* b */
-	mul8	add                 /* inline: t[i..i+8] += a[i]·b */
+	mul8	add                 /* t[i..i+8] += a[i]·b */
 	add	r11, 4
 	jnz	.Lm
-	/* t[0..15] = a·b.  t[16..17] = 0 (product < 2^512). */
 
-	/* Reduce: slide 9-dword window from j=8 to j=0.  mulsub does
-	 * t[j..j+8] −= q·m directly — NO neg_m compute, NO clearing.
-	 *
-	 * Correctness: V = t[j+8]·2^256 + L.  q·m = H·2^256 + M with
-	 * H = ⌊q·m/2^256⌋.  Since m < 2^256: V − q·m ≥ L ≥ 0.  Since
-	 * V − q·m = (q−H)·2^256 + (L−M) and q−H ∈ {0,1} (because
-	 * H ≥ q − ⌈q/2^32⌉ from m ≥ 2^256−2^224): new t[j+8] ∈ {0,1}.
-	 * Second iteration with q=1: subtracts m, borrow iff t < m.
-	 * ≤2 iterations per position, same as neg_m.  −27 B net
-	 * (neg_m compute 23 B + lea r10 4 B gone; mulsub 26 B added
-	 * but xor-clear 4 B also gone, reduce mov rsi uses r8 same).  */
 	lea	r9, [rsp+32]        /* &t[8] */
 .Lr:	mov	ebx, [r9+32]        /* q = t[j+8] — NOT cleared */
 	test	ebx, ebx
 	jz	4f
 	mov	rdi, r9
-	mov	rsi, r8             /* m directly */
-	mul8	sub                 /* inline: t[j..j+8] -= q·m */
-	jmp	.Lr                 /* recheck (≤2 iters per j) */
+	mov	rsi, r8             /* m */
+	mul8	sub                 /* t[j..j+8] -= q·m */
+	jmp	.Lr
 4:	sub	r9, 4
 	cmp	r9, rsp
 	jae	.Lr
@@ -743,14 +734,12 @@ Fadd:	push	rdi
 	push	rsi
 	push	rcx                 /* save &P across fe_sub_raw */
 	lea	rdi, [r12+3*32]
-	/* Push scratch addr before fe_sub_raw clobbers rdi; pop into
-	 * rdx after.  rcx = &P from decoder → push/pop into rsi. */
 	push	rdi
 	push	rcx
 	pop	rsi
 	call	fe_sub_raw
 	pop	rdx
-	pop	rcx                 /* restore &P */
+	pop	rcx
 	pop	rsi
 	pop	rdi
 	jmp	.Lop3
