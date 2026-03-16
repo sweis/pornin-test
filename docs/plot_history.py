@@ -64,7 +64,15 @@ def pareto(pts):
     front.sort(key=lambda i: pts[i][0])
     return front
 
-FRONT = pareto(FAST)
+# External reference implementation.  Smaller than anything of ours,
+# but ~5.5× our cycles — defines the far-left corner of the frontier.
+THOMAS = (1156, 3600, "Thomas\n1156B, 1.95")
+TARGET = 1024
+
+# Frontier is computed over OUR points + Thomas: nothing of ours is
+# smaller, so Thomas is Pareto-optimal (no point dominates it).
+ALL_PTS = FAST + [THOMAS]
+FRONT = pareto(ALL_PTS)
 
 # ======================================================================
 # Single chart: full history with inset zoom on the frontier region.
@@ -87,13 +95,31 @@ ax.plot(fx, fy, ':', color='#aaaaaa', linewidth=0.8, zorder=2,
 ax.scatter(fx, fy, c='#3b5998', s=40, edgecolors='#1a2d5c',
            linewidths=0.8, zorder=3)
 
-# Pareto frontier
-px = [FAST[i][0] for i in FRONT]
-py = [FAST[i][1] for i in FRONT]
+# Pareto frontier (ours + Thomas)
+px = [ALL_PTS[i][0] for i in FRONT]
+py = [ALL_PTS[i][1] for i in FRONT]
 ax.plot(px, py, '-', color='#c41e3a', linewidth=2.5, zorder=4,
         label='Pareto frontier')
 ax.scatter(px, py, c='#c41e3a', s=120, marker='D',
            edgecolors='#7a1225', linewidths=1.2, zorder=5)
+
+# Thomas marker (star overlays the frontier diamond)
+tb, tc, _ = THOMAS
+ax.scatter([tb], [tc], c='#2e8b57', s=250, marker='*',
+           edgecolors='#1a5235', linewidths=1.5, zorder=6,
+           label=f'Thomas ({tb}B, {tc/1000:.1f}M cyc)')
+ax.annotate(f'Thomas\n{tb}B, ratio {tc/1850:.2f}',
+            (tb, tc), textcoords="offset points", xytext=(14, -6),
+            fontsize=10, fontweight='bold',
+            bbox=dict(boxstyle='round,pad=0.4', fc='#d4f4dd',
+                      ec='#2e8b57', lw=1))
+
+# 1024 B size target — vertical marker line.
+ax.axvline(TARGET, color='#2e8b57', linestyle='--', linewidth=1.5,
+           alpha=0.6, zorder=1)
+ax.annotate(f'target\n{TARGET}B', (TARGET, 400),
+            textcoords="offset points", xytext=(6, 0), fontsize=10,
+            color='#2e8b57', fontweight='bold')
 
 # Main-axis labels
 LABEL_OFFSETS = {
@@ -117,16 +143,17 @@ ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, nominal 1.85M bc baseline)', fontsize=12)
 ax.set_title('ECDSA/P-256 verify optimization history — lower-left is better',
              fontsize=13)
-ax.legend(loc='upper left', framealpha=0.95)
+ax.legend(loc='upper center', framealpha=0.95)
 ax.grid(True, alpha=0.2)
 ax.set_axisbelow(True)
+ax.set_xlim(1000, 2050)
 
 # ----------------------------------------------------------------------
 # Inset: the frontier region (1390-1440 B × 600-700 Kcyc) where the
 # 1427→1397 sweep is otherwise too cramped to read.
 # ----------------------------------------------------------------------
-axins = inset_axes(ax, width="42%", height="38%", loc='center',
-                   bbox_to_anchor=(0.02, -0.08, 1, 1),
+axins = inset_axes(ax, width="38%", height="28%", loc='lower right',
+                   bbox_to_anchor=(0, 0.04, 0.98, 1),
                    bbox_transform=ax.transAxes)
 
 # Only the sub-900Kcyc points
@@ -163,4 +190,4 @@ ax.indicate_inset_zoom(axins, edgecolor="#888", alpha=0.4)
 
 plt.savefig('docs/progress.png', dpi=100, bbox_inches='tight')
 print(f"wrote docs/progress.png")
-print(f"Pareto frontier: {[(FAST[i][0], FAST[i][1]) for i in FRONT]}")
+print(f"Pareto frontier: {[(ALL_PTS[i][0], ALL_PTS[i][1]) for i in FRONT]}")
