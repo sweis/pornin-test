@@ -1,7 +1,7 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 1005 B default build; 985 B with -DSMALL_MUL8 (~2× cycles).
+ * 1000 B default build; 980 B with -DSMALL_MUL8 (~2× cycles).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -393,9 +393,10 @@ fe_from_be:
 	ret
 
 /* ----------------------------------------------------------------------
- * .Lcadd / pt_mul read the slot base from r14 (verify's r14=rsp) and
- * r15 (= slot 2, for deriving &slot4 as r15+64).  bc_run push/pops
- * r14/r15 around its own use so they always come back.
+ * .Lcadd / pt_mul read the slot base from r14 (verify's r14=rsp).
+ * bc_run push/pops r14 around its own use so it always comes back.
+ * r15 dropped — .Lcadd's slot5 is now r14+160 (disp32; +3 B here,
+ * −7 B in verify = −3 B net).
  *
  * Placed right before bcrun_r14: add2 path FALLS THROUGH (no jmp),
  * dbl path's jmp is rel8.  x86-64 has no short call — the mid-body
@@ -408,7 +409,7 @@ fe_from_be:
  * path: rep movsq above or bc_run epilogue's neg+pops).  rel8 to
  * bcrun_r14 just below. */
 .Lcadd:
-	lea	rdi, [r15+96]       /* addend = slot5 */
+	lea	rdi, [r14+160]      /* addend = slot5.  disp32; r15 is gone. */
 	mov	cl, 12
 	rep	movsq
 	xor	edi, edi            /* obc_rcb = 0 */
@@ -494,8 +495,8 @@ bc_run:
  * Z from slot6 and NEVER writes slots 4-6.  r12 not needed.
  *
  * Caller (verify): rbx=&slot16.  u1 at [rbx−96], u2 at [rbx−64].
- * G-backup at [rbx], Q-backup at [rbx+96] — both disp8.  r14=slot base.
- * r15=slot2.  G-backup at slots 16-18, Q-backup at 19-21.
+ * G-backup at [rbx], Q-backup at [rbx+96] — both disp8.  r14=slot
+ * base.  G-backup at slots 16-18, Q-backup at 19-21.
  * slot10 = b (RCB reads, never writes).  rcx=0 on entry. */
 pt_mul:
 	push	rbp
@@ -503,8 +504,8 @@ pt_mul:
 	mov	rdi, r14
 	xor	eax, eax
 	mov	cl, 12
-	rep	stosq               /* slots 0-2 = 0 */
-	inc	DWORD PTR [r14+32]  /* slot1 = 1 */
+	rep	stosq               /* slots 0-2 = 0.  rdi → r14+96. */
+	inc	DWORD PTR [rdi-64]  /* slot1 = 1.  [r14+32] costs REX; −1B. */
 	dec	al                  /* al was 0, now 255 */
 	xchg	ebp, eax            /* ebp = 255 */
 .Lpm:
@@ -722,15 +723,13 @@ fe_inv_m:
 	.type	tv_ecdsa_p256_verify_asm, @function
 
 tv_ecdsa_p256_verify_asm:
-	/* enter 648,0 = push rbp; mov rbp,rsp; sub rsp,648 in 4 B.
+	/* enter N,0 = push rbp; mov rbp,rsp; sub rsp,N in 4 B.
 	 * rbp stays a true frame pointer end-to-end → leave works at
 	 * exit.  Every callee either leaves rbp alone or push/pops it
-	 * (bc_run, pt_mul, fe_mul_m).  r15 is the slot-2 mid-pointer;
-	 * no callee writes it (pt_mul reads it once for &slot4).
-	 * enter is microcoded (~12 cyc) but runs once. */
+	 * (bc_run, pt_mul, fe_mul_m).  enter is microcoded (~12 cyc)
+	 * but runs once.  r15 dropped — .Lcadd goes via r14 disp32. */
 	push	rbx
 	push	r14
-	push	r15
 	enter	712, 0              /* 22 slots: 3-slot backups for RCB */
 	/* r12 not pushed: after MULCN dropped the p−n compute, verify's
 	 * only use of &cN was the block-copy source.  Direct rip-rel to
@@ -754,11 +753,13 @@ tv_ecdsa_p256_verify_asm:
 	cmp	r9, 32
 	ja	.Lf2
 	/* fe_from_be: stosq×4 advances rdi by 32; rsi index-read only.
-	 * Chain: rdi flows call→call; rsi bumped +32 in place by the
-	 * _next entry.  rdi (sig, ABI arg1) still live here. */
-	push	rdi                 /* 2B vs 3B REX.W mov */
-	pop	rsi
-	lea	rdi, [r14+12*32]    /* slot 12 (disp32) */
+	 * Chain: rdi flows call→call; rsi bumped +32 by _next entry.
+	 * rsi still = 64 here (cmp doesn't modify) → 64·6 = 384 =
+	 * slot12 offset.  imul(3)+add(3) = 6 B vs 7 B lea disp32. */
+	push	rdi                 /* sig → stack */
+	imul	edi, esi, 6         /* edi = 64·6 = 384.  zero-extends rdi. */
+	add	rdi, r14            /* slot 12 */
+	pop	rsi                 /* rsi = sig */
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi flowed to slot 13 */
 
@@ -788,8 +789,7 @@ tv_ecdsa_p256_verify_asm:
 	lea	rsi, [rdx+1]
 	mov	rdi, r14            /* slot 0 */
 	call	fe_from_be
-	call	fe_from_be_next     /* rsi+=32; rdi flowed to r14+64 */
-	mov	r15, rdi            /* = slot 2; cheaper than lea from r14 */
+	call	fe_from_be_next     /* rsi+=32; rdi flowed to r14+64 = slot2 */
 
 	/* ONE 16-qword copy: cGX,cGY,cN,cP → slots 2,3,4,5.  G → 2,3
 	 * (survives to Shamir — bc_v1 never writes them).  cN,cP → 4,5
@@ -821,7 +821,7 @@ tv_ecdsa_p256_verify_asm:
 	 * copy op (+2 B) buys this 18 B drop.  rcx=0 from last Nmul. */
 	push	rbx
 	pop	rdi                 /* slot 16 — 2B vs 3B mov */
-	mov	rsi, r15            /* slot 2 */
+	lea	rsi, [r14+64]       /* slot 2.  4B disp8; r15 (3B mov) gone. */
 	mov	cl, 24
 	rep	movsq               /* slots 2-7 → 16-21.  rcx → 0. */
 
@@ -835,7 +835,6 @@ tv_ecdsa_p256_verify_asm:
 	sbb	eax, eax            /* CF=1 → eax=−1; CF=0 → eax=0 */
 	inc	eax                 /* −1→0 (fail), 0→1 (valid) */
 .Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
-	pop	r15
 	pop	r14
 	pop	rbx
 	ret
