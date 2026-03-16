@@ -84,7 +84,10 @@ FAST = [
     (1140, 6300, None),   # H-check bytecode
     (1136, 6300, None),   # push/pop
     (1124, 6300, None),   # cGX block merge
-    (1105, 6300, None),   # bt-on-cN, no exp buffer — CLAUDE star
+    (1105, 6186, "SIZE FLOOR\n1105B (SMALL_MUL8)"),  # bt-on-cN, loop+scasd
+    # --- Pareto pivot: loop→dec+jnz in mul8. +12B but halves cycles.
+    # This point DOMINATES THOMAS on both axes. ---
+    (1117, 2996, None),   # 3049/1883*1850 — CLAUDE star
 ]
 
 def pareto(pts):
@@ -96,14 +99,14 @@ def pareto(pts):
     front.sort(key=lambda i: pts[i][0])
     return front
 
-# External reference.  Faster than us (1.95 vs 3.4) but we are now
-# SMALLER (1154 < 1156).  Neither dominates — both are Pareto.
+# External reference — DOMINATED by (1117, 2996) on both axes.
+# Still drawn as a reference marker but no longer on the frontier.
 THOMAS = (1156, 3600, "Thomas\n1156B, 1.95")
-CLAUDE = (1105, 6300, "Claude\n1105B, 3.41")  # 51B past Thomas, 81B to target
+CLAUDE = (1117, 2996, "Claude\n1117B, 1.62")  # dominates Thomas
 TARGET = 1024
 
-# Frontier is computed over OUR points + Thomas: nothing of ours is
-# smaller, so Thomas is Pareto-optimal (no point dominates it).
+# Frontier: compute over OUR points only now — Thomas is dominated.
+
 ALL_PTS = FAST + [THOMAS]
 FRONT = pareto(ALL_PTS)
 
@@ -141,20 +144,19 @@ tb, tc, _ = THOMAS
 ax.scatter([tb], [tc], c='#2e8b57', s=250, marker='*',
            edgecolors='#1a5235', linewidths=1.5, zorder=6,
            label=f'Thomas ({tb}B, {tc/1000:.1f}M cyc)')
-ax.annotate(f'Thomas\n{tb}B, ratio {tc/1850:.2f}',
+ax.annotate(f'Thomas\n{tb}B, ratio {tc/1850:.2f}\n(dominated)',
             (tb, tc), textcoords="offset points", xytext=(14, -6),
             fontsize=10, fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.4', fc='#d4f4dd',
-                      ec='#2e8b57', lw=1))
+            bbox=dict(boxstyle='round,pad=0.4', fc='#e8f0e8',
+                      ec='#888', lw=1))
 
-# Claude marker — our best.  2 B SMALLER than Thomas now; Thomas
-# is still faster (1.95 vs 3.41).  Both Pareto-optimal.
+# Claude marker — DOMINATES Thomas (smaller AND faster).
 cb, cc, _ = CLAUDE
 ax.scatter([cb], [cc], c='#e07000', s=250, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
            label=f'Claude ({cb}B, {cc/1000:.1f}M cyc)')
-ax.annotate(f'Claude\n{cb}B, ratio {cc/1850:.2f}\n(past Thomas on size)',
-            (cb, cc), textcoords="offset points", xytext=(14, 10),
+ax.annotate(f'Claude\n{cb}B, ratio {cc/1850:.2f}\nDOMINATES Thomas',
+            (cb, cc), textcoords="offset points", xytext=(-150, -8),
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.4', fc='#ffe4c4',
                       ec='#e07000', lw=1))
@@ -178,6 +180,7 @@ LABEL_OFFSETS = {
     "rcx-chain":(-145, -8),
     "PROJECTIVE":(10, -22),
     "bc_v2":    (-80, -8),
+    "SIZE FLOOR":(-60, 14),
 }
 for b, c, lab in FAST:
     if lab:
