@@ -246,42 +246,26 @@ fe_sub_raw:
 	neg	eax
 	ret
 
-/* mulacc/mulsub: dst[0..8] ±= x·src[0..7], 32-bit limbs.  Bodies
- * are identical except add↔sub at two spots (4 B of 26 B).  Shared
- * via r10b mode flag — test+branch in the loop (slow, but −3 B).
- * Clobbers: ebp, r10, rcx→0, eax/edx, rsi/rdi +32.  Preserves: ebx.
- *
- * mulsub for reduce (t −= q·m, no neg_m needed): borrow-out of
- * `sub [rdi],eax` is additional DEBT to the next limb → `adc edx,0`
- * (not sbb).  See fe_mul_m's reduce comment for the convergence
- * proof — t[j+8] stays in-place, ends up ∈ {0,1} after mulsub. */
-mulsub:
-	mov	r10b, 1
-	jmp	1f
-mulacc:
-	xor	r10d, r10d
-1:	push	8
-	pop	rcx
+/* mul8 OP: dst[0..8] OP= ebx·src[0..7], 32-bit limbs.  INLINED at
+ * both call sites (schoolbook=add, reduce=sub).  25 B macro body ×
+ * 2 sites = 50 B vs 51 B shared function + 10 B calls = 61 B.  −11.
+ * Clobbers: ebp (prev_hi), rcx→0, eax/edx, rsi/rdi advance +32. */
+.macro	mul8 op
+	/* rcx=0 always here: push-loop's `loop` (first schoolbook),
+	 * or prior mul8's `loop` (all subsequent).  −1 B × 2 sites. */
+	mov	cl, 8
 	xor	ebp, ebp
-2:	lodsd
+7:	lodsd
 	mul	ebx
 	add	eax, ebp
 	adc	edx, 0
-	test	r10b, r10b
-	jnz	3f
-	add	[rdi], eax
-	jmp	4f
-3:	sub	[rdi], eax
-4:	adc	edx, 0
+	\op	[rdi], eax
+	adc	edx, 0
 	mov	ebp, edx
 	scasd
-	loop	2b
-	test	r10b, r10b
-	jnz	5f
-	add	[rdi], ebp
-	ret
-5:	sub	[rdi], ebp
-	ret
+	loop	7b
+	\op	[rdi], ebp
+.endm
 
 /* .Lfm falls through; fe_inv_m's r14 = m. */
 .Lfm:	mov	rcx, r14
@@ -325,7 +309,7 @@ fe_mul_m:
 .Lm:	mov	ebx, [r14+r11+32]   /* a[i] (32-bit load) */
 	lea	rdi, [rsp+r11+32]   /* &t[i] */
 	mov	rsi, r13            /* b */
-	call	mulacc
+	mul8	add                 /* inline: t[i..i+8] += a[i]·b */
 	add	r11, 4
 	jnz	.Lm
 	/* t[0..15] = a·b.  t[16..17] = 0 (product < 2^512). */
@@ -347,7 +331,7 @@ fe_mul_m:
 	jz	4f
 	mov	rdi, r9
 	mov	rsi, r8             /* m directly */
-	call	mulsub              /* t[j..j+8] -= q·m (q still in t[j+8]) */
+	mul8	sub                 /* inline: t[j..j+8] -= q·m */
 	jmp	.Lr                 /* recheck (≤2 iters per j) */
 4:	sub	r9, 4
 	cmp	r9, rsp
