@@ -20,8 +20,8 @@ make size      test      wp          # portable C reference
 
 | Implementation | text+rodata | Cycles | Requires | Notes |
 |---|---:|---:|---|---|
-| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **957 B** | ~8.5M | MOVBE | 32-bit schoolbook, size floor |
-| **`tv_ecdsa_tiny.S`** (default) | **977 B** | **~3.7M** | MOVBE | 64-bit schoolbook |
+| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **957 B** | ~8.1M | MOVBE | 32-bit schoolbook, size floor |
+| **`tv_ecdsa_tiny.S`** (default) | **977 B** | **~3.5M** | MOVBE | 64-bit schoolbook |
 | `tv_ecdsa_fast.S` | 1397 B | ~0.65M | BMI2+MOVBE | Montgomery+mulx, predecessor |
 | `tv_ecdsa_bc.S` | 1712 B | ~1.85M | — | first bytecode version |
 | `tv_ecdsa.c` (Cortex-M4) | 2082 B | — | — | realistic boot-ROM target |
@@ -33,8 +33,8 @@ make size      test      wp          # portable C reference
 both microcoded, ~950K iterations/verify, ~4M extra cycles. Same reduce
 step either way.
 
-**vs Thomas** (external competing implementation): v4 at 996 B / ~4.1M
-cycles. Our default (977 B / ~3.7M) now DOMINATES it on both axes —
+**vs Thomas** (external competing implementation): v5 at 989 B / ~4.15M
+cycles. Our default (977 B / ~3.5M) DOMINATES it on both axes —
 Thomas is fully off the Pareto frontier. Full chart at
 [`docs/progress.png`](docs/progress.png).
 

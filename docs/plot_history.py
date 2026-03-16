@@ -69,19 +69,22 @@ TRAIL = [
     (983,  3525, None),
     (963,  8115, None),
     # --- Layout reorders: pt_mul/.Lcadd, fe_mul_m for rel8 jmps (−6B) ---
-    #   Costs ~5% cycles from new I-cache layout — accepted for size.
+    #   Cycle numbers below are 10-run medians.  (Earlier single-shot
+    #   measurements showed a ~5% "regression" here — noise.  The move
+    #   actually landed reduce's inner loop in a single DSB chunk.)
     (980,  3540, None),
-    (960,  8085, None),
-    (977,  3720, None),
-    (957,  8470, "fe_inv_m + layout\n957B — size corner"),
+    (960,  8120, None),
+    (977,  3520, None),
+    (957,  8060, "fe_inv_m + layout\n957B — size corner"),
 ]
 
-# Thomas's track: v1, v2, v3 (1004B), v4 (996B).
-# Post-957B: our 977B DOMINATES Thomas v4 (smaller AND faster).
-# Thomas is fully off the frontier now.
-THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100)]
-THOMAS    = (996, 4100)
-CLAUDE    = (957, 8470)     # size corner — 39 B under Thomas v4
+# Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).
+# Our 977B default DOMINATES v5 on both axes (smaller AND faster).
+# Thomas is fully off the frontier.
+THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
+                (989, 4150)]
+THOMAS    = (989, 4150)     # latest — still dominated
+CLAUDE    = (957, 8060)     # size corner — 32 B under Thomas v5
 TARGET    = 1024
 
 def pareto(pts):
@@ -127,12 +130,12 @@ ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.5, zorder=4,
         label='Thomas')
 ax.scatter(ttx, tty, c='#2e8b57', s=90, marker='o',
            edgecolors='#1a5235', linewidths=1.2, zorder=5)
-ax.annotate(f'Thomas v4\n{THOMAS[0]}B', THOMAS,
+ax.annotate(f'Thomas v5\n{THOMAS[0]}B', THOMAS,
             textcoords="offset points", xytext=(-14, 14), fontsize=10,
             fontweight='bold', ha='right',
             bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',
             ec='#2e8b57', lw=1))
-ax.annotate(f'{THOMAS_TRACK[2][0]}B', THOMAS_TRACK[2],
+ax.annotate(f'{THOMAS_TRACK[3][0]}B', THOMAS_TRACK[3],
             textcoords="offset points", xytext=(8, -14), fontsize=8,
             color='#2e8b57')
 
