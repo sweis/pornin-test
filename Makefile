@@ -2,7 +2,8 @@
 #
 # Per-implementation targets (each has size-X / test-X / wp-X where
 # applicable):
-#   -fast   tv_ecdsa_fast.S   1397 B  BMI2+MOVBE  (best result)
+#   -tiny   tv_ecdsa_tiny.S   ????B   BMI2+MOVBE  (size-only, speed traded)
+#   -fast   tv_ecdsa_fast.S   1397 B  BMI2+MOVBE  (best speed+size)
 #   -bc     tv_ecdsa_bc.S     1712 B  portable x86-64
 #   -asm    tv_ecdsa_amd64.S  2875 B  conventional hand-asm
 #   (none)  tv_ecdsa.c        3076 B  portable C, 32-bit limbs
@@ -106,6 +107,31 @@ size-bc: tv_ecdsa_bc.o
 	@echo ""
 	@echo "=== undefined symbols ==="
 	@nm $< | grep ' U ' || echo "NONE — fully self-contained"
+
+# Size-only variant (forked from fast.S, speed traded for bytes).
+tv_ecdsa_tiny.o: tv_ecdsa_tiny.S
+	$(CC) -c -o $@ $<
+
+test_ecdsa_tiny: tv_ecdsa_tiny.S test_ecdsa_asm.c test_ecdsa.c
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_tiny.S test_ecdsa_asm.c
+
+test-tiny: test_ecdsa_tiny
+	./test_ecdsa_tiny
+
+size-tiny: tv_ecdsa_tiny.o
+	@echo "=== size of tv_ecdsa_tiny.S (size-only, speed traded) ==="
+	@size $<
+	@echo ""
+	@size -A $< | grep -E '^\.(text|rodata|data|bss)' || true
+
+test_wycheproof_tiny: tv_ecdsa_tiny.S test_wycheproof_asm.c test_wycheproof.c wycheproof_vectors.h
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_tiny.S test_wycheproof_asm.c
+
+wp-tiny: test_wycheproof_tiny
+	./test_wycheproof_tiny
+
+bench_tiny: tv_ecdsa_tiny.S bench.c
+	$(CC) -O2 -o $@ $^
 
 # Speed+size optimized bytecode variant (BMI2 mulx).
 tv_ecdsa_fast.o: tv_ecdsa_fast.S
