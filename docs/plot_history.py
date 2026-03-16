@@ -85,7 +85,6 @@ THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
                 (989, 4150)]
 THOMAS    = (989, 4150)     # latest — still dominated
 CLAUDE    = (957, 8060)     # size corner — 32 B under Thomas v5
-TARGET    = 1024
 
 def pareto(pts):
     front = []
@@ -114,66 +113,38 @@ ax.plot(tx, ty, ':', color='#b0b0b0', linewidth=0.7, zorder=2,
 ax.scatter(tx, ty, c='#4a6fa5', s=22, edgecolors='#2a4670',
            linewidths=0.5, zorder=3, alpha=0.7)
 
-# Pareto frontier — bold red
+# Pareto frontier — thin line, small dots.  The frontier is dense on the
+# left (many sub-1000B points separated by single bytes), so big diamonds
+# just pile into a blob.  Small markers + thin line let the curve read.
 px = [ALL_XY[i][0] for i in FRONT]
 py = [ALL_XY[i][1] for i in FRONT]
-ax.plot(px, py, '-', color='#c41e3a', linewidth=2.8, zorder=4,
+ax.plot(px, py, '-', color='#c41e3a', linewidth=1.5, zorder=4,
         label='Pareto frontier')
-ax.scatter(px, py, c='#c41e3a', s=110, marker='D',
-           edgecolors='#7a1225', linewidths=1.2, zorder=5)
+ax.scatter(px, py, c='#c41e3a', s=20, marker='o',
+           edgecolors='none', zorder=5)
 
-# Thomas track — 4 points.  v3/v4 (1004B, 996B) RETAKE the size corner,
-# both under 1024, both faster than our SMALL_MUL8.  v1/v2 dominated.
+# Thomas track.  v5 is his latest; all 5 points dominated.
 ttx = [p[0] for p in THOMAS_TRACK]
 tty = [p[1] for p in THOMAS_TRACK]
-ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.5, zorder=4,
+ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.2, zorder=4,
         label='Thomas')
-ax.scatter(ttx, tty, c='#2e8b57', s=90, marker='o',
-           edgecolors='#1a5235', linewidths=1.2, zorder=5)
-ax.annotate(f'Thomas v5\n{THOMAS[0]}B', THOMAS,
-            textcoords="offset points", xytext=(-14, 14), fontsize=10,
-            fontweight='bold', ha='right',
+ax.scatter(ttx, tty, c='#2e8b57', s=50, marker='o',
+           edgecolors='#1a5235', linewidths=0.8, zorder=5)
+ax.annotate(f'Thomas v5 — {THOMAS[0]}B', THOMAS,
+            textcoords="offset points", xytext=(12, 6), fontsize=10,
+            fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',
             ec='#2e8b57', lw=1))
-ax.annotate(f'{THOMAS_TRACK[3][0]}B', THOMAS_TRACK[3],
-            textcoords="offset points", xytext=(8, -14), fontsize=8,
-            color='#2e8b57')
 
-# Claude star — size corner, 11 B under Thomas v4.
-ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=280, marker='*',
+# Size corner — the one annotation that matters.
+ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=260, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
            label=f'Claude {CLAUDE[0]}B')
-ax.annotate(f'Claude\n{CLAUDE[0]}B — size corner',
-            CLAUDE, textcoords="offset points", xytext=(14, -22),
+ax.annotate(f'Claude — {CLAUDE[0]}B',
+            CLAUDE, textcoords="offset points", xytext=(14, -4),
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.35', fc='#ffe4c4',
                       ec='#e07000', lw=1))
-
-# 1024 B target line — both Thomas and Claude now past it.
-ax.axvline(TARGET, color='#888', linestyle='--', linewidth=1.5,
-           alpha=0.7, zorder=1)
-ax.annotate(f'{TARGET}B', (TARGET, 500),
-            textcoords="offset points", xytext=(6, 0), fontsize=9,
-            color='#888')
-
-# Turning-point labels only — the path, not every step
-LABEL_OFFSETS = {
-    "fork":       (8, 10),
-    "Shamir":     (12, -10),
-    "32-bit":     (12, -8),
-    "projective": (-8, 16),
-    "bt-on-cN":   (-90, -6),
-    "RCB":        (12, -10),
-    "addend":     (12, 12),
-    "fe_inv_m":   (12, 8),
-}
-for b, c, lab in TRAIL:
-    if lab:
-        key = next((k for k in LABEL_OFFSETS if lab.lower().startswith(k.lower())), None)
-        dx, dy = LABEL_OFFSETS.get(key, (10, 8))
-        ax.annotate(lab, (b, c), textcoords="offset points", xytext=(dx, dy),
-                    fontsize=8, bbox=dict(boxstyle='round,pad=0.25',
-                    fc='#fffacd', ec='#bbb', lw=0.5, alpha=0.9))
 
 ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
