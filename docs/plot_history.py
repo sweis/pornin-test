@@ -47,7 +47,7 @@ TRAIL = [
     (1071, 6186, None),   # SMALL_MUL8
     (1091, 2407, None),
     # --- RCB COMPLETE ADDITION — one formula, no 3-way branch (−59B) ---
-    (1012, 7950, "RCB\n1012B — UNDER 1024"),  # SMALL_MUL8 size floor
+    (1012, 7950, None),   # SMALL_MUL8 — labeled via CLAUDE star
     (1032, 3645, None),   # default — CLAUDE star
 ]
 
@@ -107,8 +107,8 @@ CLAUDE_FAST = (1032, 3645)  # dominates Thomas v2 on both axes
 ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=280, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
            label=f'Claude {CLAUDE[0]}B — under 1024')
-ax.annotate(f'Claude\n{CLAUDE[0]}B\nUNDER TARGET',
-            CLAUDE, textcoords="offset points", xytext=(-110, -10),
+ax.annotate(f'RCB complete addition\n{CLAUDE[0]}B — UNDER TARGET',
+            CLAUDE, textcoords="offset points", xytext=(20, -12),
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.4', fc='#ffe4c4',
                       ec='#e07000', lw=1.5))
@@ -148,7 +148,7 @@ ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
 ax.set_title('ECDSA/P-256 verify — size vs speed (lower-left is better)',
              fontsize=13)
-ax.legend(loc='upper left', framealpha=0.95, fontsize=9)
+ax.legend(loc='upper right', framealpha=0.95, fontsize=9)
 ax.grid(True, alpha=0.2)
 ax.set_axisbelow(True)
 ax.set_xlim(960, 2060)
