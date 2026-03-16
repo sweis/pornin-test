@@ -84,10 +84,13 @@ FAST = [
     (1140, 6300, None),   # H-check bytecode
     (1136, 6300, None),   # push/pop
     (1124, 6300, None),   # cGX block merge
-    (1105, 6186, None),   # SMALL_MUL8 — dominated by Thomas v2 now
-    # --- Pareto pivot: loop→dec+jnz in mul8. +12B but halves cycles.
-    # This point DOMINATES THOMAS on both axes. ---
-    (1117, 2996, None),   # 3049/1883*1850 — CLAUDE star
+    (1105, 6186, None),   # SMALL_MUL8 — dominated by Thomas v2
+    # --- Speed/size scan: loop is 80% of the penalty.  All three
+    # intermediate points are Pareto vs Thomas v2 (he's smaller,
+    # we're faster).  Ratios on this machine, bc.S ≈ 1.88M. ---
+    (1109, 3665, None),   # +4B: mul8 loop→dec+jnz only.  ratio 2.02
+    (1111, 3268, None),   # +6B: +pushzero loop fix.       ratio 1.80
+    (1117, 2996, None),   # +12B: +scasd→lea.  DEFAULT.    ratio 1.62
 ]
 
 def pareto(pts):
