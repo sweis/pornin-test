@@ -300,14 +300,17 @@ fe_mul_m:
 	loop	2b
 	/* rsp → t[0].  neg_m at rsp+72.  rcx=0. */
 
-	/* Compute neg_m = 0 − m.  lodsd/stosd advance; string ops
-	 * and `loop` preserve CF.  Zero kept in r9d. */
+	/* Compute neg_m = 0 − m.  eax=0 survived the push-loop (push
+	 * reads, doesn't write; loop touches only rcx).  CF=0 from
+	 * the same xor (every intervening op preserves flags).  `cdq`
+	 * (1 B) sign-extends eax=0 → edx=0.  Loop body never touches
+	 * edx.  −3 B vs xor r9d (3B, REX) + mov ebx,r9d (3B, REX). */
 	lea	rdi, [rsp+72]
 	mov	rsi, r8
-	xor	r9d, r9d            /* zero AND clears CF */
+	cdq                         /* edx = 0; preserves CF (still 0) */
 	mov	cl, 8               /* rcx=0 from push-loop */
 3:	lodsd                       /* eax = m[i] */
-	mov	ebx, r9d            /* ebx = 0 (mov preserves CF) */
+	mov	ebx, edx            /* ebx = 0 (2 B — no REX) */
 	sbb	ebx, eax            /* ebx = 0 − m[i] − borrow */
 	xchg	eax, ebx            /* 1 B */
 	stosd
@@ -315,15 +318,15 @@ fe_mul_m:
 
 	lea	r10, [rsp+72]       /* &neg_m (stable across mulacc) */
 
-	/* Schoolbook: 8 rounds, t[i..i+8] += a[i] * b. */
-	xor	r11d, r11d          /* i*4 = 0 */
-.Lm:	mov	ebx, [r14+r11]      /* a[i] (32-bit load) */
-	lea	rdi, [rsp+r11]      /* &t[i] */
+	/* Schoolbook: 8 rounds, count down −32→0 to drop the cmp. */
+	push	-32
+	pop	r11
+.Lm:	mov	ebx, [r14+r11+32]   /* a[i] (32-bit load) */
+	lea	rdi, [rsp+r11+32]   /* &t[i] */
 	mov	rsi, r13            /* b */
 	call	mulacc
-	add	r11d, 4
-	cmp	r11d, 32
-	jne	.Lm
+	add	r11, 4
+	jnz	.Lm
 	/* t[0..15] = a·b.  t[16..17] = 0 (product < 2^512). */
 
 	/* Reduce: slide 9-dword window from j=8 to j=0.  r9 = &t[j]. */
@@ -341,22 +344,16 @@ fe_mul_m:
 	jae	.Lr
 	/* t[0..7] < 2^256, possibly ≥ m.  t[8] = 0. */
 
-	/* Final: r = t − m if t ≥ m else t.  32-bit packed limbs are
-	 * LE within and across dwords → [rsp..+31] IS the 256-bit
-	 * value as 4 qwords.  fe_sub_raw works on it directly. */
+	/* Final cond-sub via .Lop3 (dst = s1 − s2, add-back rcx on
+	 * borrow).  With rsi=t, rdx=rcx=m: r12 = t−m; if borrow,
+	 * r12 += m = t.  Exactly our cond-sub.  .Lop3 already exists
+	 * for Fsub/cond_sub_n.  −10 B vs inline fe_sub_raw+copy. */
 	mov	rdi, r12
 	mov	rsi, rsp
-	push	rdi
-	push	rsi
-	mov	rdx, r8             /* m (saved at entry) */
-	call	fe_sub_raw
-	pop	rsi
-	pop	rdi
-	test	eax, eax            /* borrow ⇔ t < m ⇔ r wrong */
-	jz	5f
-	mov	cl, 4               /* rcx=0 from fe_sub_raw */
-	rep	movsq               /* copy t back over r */
-5:
+	mov	rdx, r8             /* m */
+	mov	rcx, r8
+	call	.Lop3
+
 	add	rsp, 104
 	pop	rbp
 	pop	rbx
