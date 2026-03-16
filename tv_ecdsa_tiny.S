@@ -797,13 +797,11 @@ tv_ecdsa_p256_verify_asm:
 	 * is +7 B but −11 B from push+pop+lea.  −4 B net. */
 	mov	r14, rsp
 
-	mov	r12, rdi
-	mov	rbx, r8
-	/* rdx (pub ptr, arg 3) survives the two fe_from_be calls below
-	 * (they touch only rsi/rdi/rcx/rax), so use it directly for the
-	 * 0x04 format-byte check.  Drops `mov r8,rdx` (−3) and the REX
-	 * byte on `cmp BYTE PTR [rdx],4` (−1). */
-
+	/* ABI args rdi (sig), rdx (pub), r8 (hash) all survive the
+	 * length checks (cmp-only on rsi/rcx/r9) and fe_from_be calls
+	 * (touch rsi/rdi/rcx/rax only — r8 untouched).  The old
+	 * `mov r12,rdi; mov rbx,r8` pair stashed values that were
+	 * never in danger.  −6 B. */
 	cmp	rsi, 64
 	jne	.Lf2
 	cmp	rcx, 65
@@ -814,8 +812,9 @@ tv_ecdsa_p256_verify_asm:
 	cmp	r9, 32
 	ja	.Lf2
 	/* fe_from_be: stosq×4 advances rdi by 32; rsi index-read only.
-	 * Chain: rdi flows call→call; rsi bumped +32 in place. */
-	mov	rsi, r12
+	 * Chain: rdi flows call→call; rsi bumped +32 in place.
+	 * rdi (sig ptr, ABI arg1) still live — nothing above touched it. */
+	mov	rsi, rdi
 	lea	rdi, [r14+12*32]    /* slot 12 (disp32; r13 gone) */
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi already r13+32 */
@@ -823,10 +822,10 @@ tv_ecdsa_p256_verify_asm:
 	/* HASH DECODE here — rdi = slot 14 from sig-decode flowthrough.
 	 * Slot 13 (s) untouched so bc_v1 can check it AND invert it;
 	 * e goes to 14 where the appended Nmul reads it.  fe_from_be
-	 * touches only rsi/rdi/rcx/rax — rdx (pub) and rbx both
-	 * survive to the pub check below.  rcx=0 on entry (fe_from_be
-	 * loop exit).  rdi → slot 15 for build_one. */
-	mov	rsi, rbx
+	 * touches only rsi/rdi/rcx/rax — r8 (hash, ABI arg5) and rdx
+	 * (pub) both survive the sig-decode calls above.  rcx=0 on
+	 * entry (fe_from_be loop exit).  rdi → slot 15 for build_one. */
+	mov	rsi, r8
 	call	fe_from_be
 
 	/* build_one: rdi = slot 15.  Only 4 qwords (slot 14 already
