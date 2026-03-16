@@ -90,7 +90,8 @@ FAST = [
     # we're faster).  Ratios on this machine, bc.S ≈ 1.88M. ---
     (1109, 3665, None),   # +4B: mul8 loop→dec+jnz only.  ratio 2.02
     (1111, 3268, None),   # +6B: +pushzero loop fix.       ratio 1.80
-    (1117, 2996, None),   # +12B: +scasd→lea.  DEFAULT.    ratio 1.62
+    (1117, 2996, None),   # +12B: +scasd→lea.              ratio 1.62
+    (1125, 2407, None),   # +8B: 64-bit schoolbook. NEW DEFAULT. ratio 1.30
 ]
 
 def pareto(pts):
@@ -107,7 +108,7 @@ def pareto(pts):
 # he reclaimed the size corner.  But our 1117B stays Pareto: faster.
 THOMAS_V1 = (1156, 3600, "Thomas v1\n1156B, 1.95")
 THOMAS    = (1046, 3990, "Thomas v2\n1046B, 2.16")   # new size record
-CLAUDE    = (1117, 2996, "Claude\n1117B, 1.62")       # Pareto: faster
+CLAUDE    = (1125, 2407, "Claude\n1125B, 1.30")       # Pareto: faster
 TARGET    = 1024
 
 ALL_PTS = FAST + [THOMAS, THOMAS_V1]
