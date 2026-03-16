@@ -195,8 +195,9 @@ bc_add2:
  * as scratch so 0,1,4,5 survive for the Shamir copy.  No Fadd
  * anywhere (its handler clobbers slot 3 = Gy). */
 bc_v1:
-	.byte 0x06,0xc0, 0x05,0xc8, 0x06,0xd0, 0x05,0xd8
-	.byte 0x05,0x09, 0x05,0x19
+	/* cN/cP now in slots 4,5 (via the 16-qword block copy). */
+	.byte 0x06,0xc0, 0x05,0xc4, 0x06,0xd0, 0x05,0xd4
+	.byte 0x05,0x05, 0x05,0x15
 	.byte 0xf0,0x40            /* slot4 = Qx·1 = Qx  (copy)    */
 	.byte 0xf0,0x51            /* slot5 = Qy·1 = Qy  (copy)    */
 	.byte 0xf0,0x6f            /* slot6 = 1·1 = 1    (z-coord) */
@@ -298,7 +299,7 @@ fe_sub_raw:
  * (mod-p inversion gone via projective check).  r14 in bc_run
  * context = .Ljt; cN is at r14+9 (9-entry table).  Hardcode the
  * 9 — gas won't pick disp8 for forward-ref oN. */
-.equ	oN_early, 9
+.equ	oN_early, 73
 .Lfm:	lea	rcx, [r14+oN_early]
 	/* FALLTHROUGH */
 /* fe_mul_m(r=rdi, a=rsi, b=rdx, m=rcx).  r = a·b mod m.  32-bit limbs.
@@ -526,7 +527,7 @@ bc_run:
 	 * +4 here, −4 in Fmul, −2 in Fadd.  Fadd now preserves it across
 	 * its own fe_sub_raw.  oP is a forward reference here, so gas
 	 * picks disp32 — hardcode and assert. */
-.equ	oP_early, 41        /* .Ljt(9) + cN(32) — 9-entry table */
+.equ	oP_early, 105       /* .Ljt(9) + cGX/Y(64) + cN(32) */
 	lea	rcx, [r14+oP_early]
 	call	rax
 	jmp	.Lbc
@@ -618,23 +619,24 @@ pt_mul:
 	pop	rbp
 	ret
 
-/* G.x, G.y in Montgomery form.  Placed right before .Ljt so verify
- * can address it as [r12-80] (r12=&cN, cN=.Ljt+16, cGXM=.Ljt-64).
- * 5-byte lea (r12 forces SIB) vs 7-byte rip-relative.  Handler
- * offsets from .Ljt are unaffected since this is on the near side. */
-/* G in NORMAL form (no Montgomery).  Same 64 B.  Affine (x,y). */
-cGX:	.quad 0xf4a13945d898c296, 0x77037d812deb33a0
-	.quad 0xf8bce6e563a440f2, 0x6b17d1f2e12c4247
-cGY:	.quad 0xcbb6406837bf51f5, 0x2bce33576b315ece
-	.quad 0x8ee7eb4a7c0f9e16, 0x4fe342e2fe1a7f9b
-
-/* .Ljt + constants.  cN_M0I and cR2P gone (no Montgomery → no m0i,
- * no R²).  cN→cP adjacency load-bearing for verify's block copy. */
+/* .Ljt + constants.  cGX/cGY/cN/cP contiguous (in that order)
+ * so verify's block copy does all four to slots 2-5 in one
+ * 16-qword rep movsq.  G → 2,3; cN → 4; cP → 5.  bc_v1's
+ * check ops read cN/cP from slots 4,5 (nibbles updated); its
+ * Q-copy ops (7,8) then overwrite 4,5 with Qx,Qy — safe
+ * because checks (ops 2-6) run first.  bc_dbl/add use slots
+ * 8,9 as scratch (write-before-read), unchanged.  Handler
+ * offsets shift +64 B (cGX/Y now between .Ljt and handlers);
+ * .Lop8 lands at ~236/255.  −12 B in verify. */
 .Ljt:
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
 	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
 	.byte	.Lop8-.Ljt  /* INV (slot-based, only mod-n now) */
 
+cGX:	.quad 0xf4a13945d898c296, 0x77037d812deb33a0
+	.quad 0xf8bce6e563a440f2, 0x6b17d1f2e12c4247
+cGY:	.quad 0xcbb6406837bf51f5, 0x2bce33576b315ece
+	.quad 0x8ee7eb4a7c0f9e16, 0x4fe342e2fe1a7f9b
 cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
 	.quad 0xffffffffffffffff, 0xffffffff00000000
 cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
@@ -648,9 +650,11 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 .if oP - oP_early
 .error "oP moved — update oP_early in bc_run"
 .endif
-.if (cN - cGX) - 73
-.error "cGX-cN offset changed — update lea rsi,[r12-73] in verify"
+.if (cN - cGX) - 64
+.error "cGX-cN offset changed — update lea rsi,[r12-64] in verify"
 .endif
+/* .Lop8 overflow assertion is after .Lop8 definition (needs
+ * backward ref for gas .if). */
 
 /* fe_geq inlined (sole caller after cond_sub_n was rewritten as a
  * .Lop3 stub).  Compare [rdi] to [rsi] limb-by-limb from the top;
@@ -865,19 +869,14 @@ tv_ecdsa_p256_verify_asm:
 	mov	r15, rdi            /* = slot 2; cheaper than lea from r14 */
 	lea	r12, [rip+cN]
 
-	/* G → slots 2,3 (rdi already there).  Normal form now (no
-	 * Montgomery).  bc_v1 derives B from it and never writes
-	 * slot 2 or 3 so G survives to the Shamir setup.  rcx=0. */
-	lea	rsi, [r12-73]       /* cGX (9-entry table) */
-	mov	cl, 8
-	rep	movsq               /* rdi → slot 4, rcx → 0 */
-
-	sub	rdi, -128           /* slot 4 + 128 = slot 8 */
-	mov	rsi, r12
-	/* 8-qword copy: cN→8, cP→9.  cR2P and cN_M0I both gone —
-	 * no Montgomery, no m0i, no R².  B derived in bc_v1. */
-	mov	cl, 8
-	rep	movsq
+	/* ONE 16-qword copy: cGX,cGY,cN,cP → slots 2,3,4,5.  G → 2,3
+	 * (normal form, survives to Shamir — bc_v1 never writes them);
+	 * cN,cP → 4,5 (bc_v1's check ops read them, then ops 7-8
+	 * overwrite with Qx,Qy — checks run first so safe).  rdi
+	 * already at slot 2 from pub decode.  rcx=0.  −12 B. */
+	lea	rsi, [r12-64]       /* cGX = cN − 64 */
+	mov	cl, 16
+	rep	movsq               /* rdi → slot 6, rcx → 0 */
 
 	push	obc_v1
 	pop	rdi
