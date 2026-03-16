@@ -246,26 +246,41 @@ fe_sub_raw:
 	neg	eax
 	ret
 
-/* mulacc(dst=rdi, src=rsi, x=ebx).  dst[0..8] += x * src[0..7].
- * 32-bit limbs.  lodsd/scasd = 1 B string ops; `mul ebx` = 2 B
- * (32-bit, no REX).  scasd compares eax to [rdi] and advances rdi;
- * flags are dead — next iter's `add eax,ebp` clobbers them.
- * Clobbers: ebp (prev_hi), rcx→0, eax/edx, rsi/rdi advance +32.
- * Preserves: ebx (the multiplier), r8-r15.  26 B. */
+/* mulacc/mulsub: dst[0..8] ±= x·src[0..7], 32-bit limbs.  Bodies
+ * are identical except add↔sub at two spots (4 B of 26 B).  Shared
+ * via r10b mode flag — test+branch in the loop (slow, but −3 B).
+ * Clobbers: ebp, r10, rcx→0, eax/edx, rsi/rdi +32.  Preserves: ebx.
+ *
+ * mulsub for reduce (t −= q·m, no neg_m needed): borrow-out of
+ * `sub [rdi],eax` is additional DEBT to the next limb → `adc edx,0`
+ * (not sbb).  See fe_mul_m's reduce comment for the convergence
+ * proof — t[j+8] stays in-place, ends up ∈ {0,1} after mulsub. */
+mulsub:
+	mov	r10b, 1
+	jmp	1f
 mulacc:
-	push	8
+	xor	r10d, r10d
+1:	push	8
 	pop	rcx
 	xor	ebp, ebp
-1:	lodsd
+2:	lodsd
 	mul	ebx
 	add	eax, ebp
 	adc	edx, 0
+	test	r10b, r10b
+	jnz	3f
 	add	[rdi], eax
-	adc	edx, 0
+	jmp	4f
+3:	sub	[rdi], eax
+4:	adc	edx, 0
 	mov	ebp, edx
 	scasd
-	loop	1b
+	loop	2b
+	test	r10b, r10b
+	jnz	5f
 	add	[rdi], ebp
+	ret
+5:	sub	[rdi], ebp
 	ret
 
 /* .Lfm falls through; fe_inv_m's r14 = m. */
@@ -292,35 +307,16 @@ fe_mul_m:
 	mov	r12, rdi            /* r */
 	mov	r13, rdx            /* b */
 	mov	r14, rsi            /* a */
-	mov	r8, rcx             /* m (kept for final cond-sub) */
+	mov	r8, rcx             /* m — reduce AND cond-sub use it directly */
 
-	/* Frame: t[0..17] (72 B) then neg_m[0..7] (32 B) = 104 B.
-	 * Push-zero 13 qwords; bottom 72 is t, top 32 neg_m space. */
+	/* Frame: just t[0..17] = 72 B.  mulsub subtracts q·m directly,
+	 * so no neg_m needed.  Push-zero 9 qwords (72 B). */
 	xor	eax, eax
-	push	13
+	push	9
 	pop	rcx
 2:	push	rax
 	loop	2b
-	/* rsp → t[0].  neg_m at rsp+72.  rcx=0. */
-
-	/* Compute neg_m = 0 − m.  eax=0 survived the push-loop (push
-	 * reads, doesn't write; loop touches only rcx).  CF=0 from
-	 * the same xor (every intervening op preserves flags).  `cdq`
-	 * (1 B) sign-extends eax=0 → edx=0.  Loop body never touches
-	 * edx.  −3 B vs xor r9d (3B, REX) + mov ebx,r9d (3B, REX). */
-	lea	rdi, [rsp+72]
-	mov	rsi, r8
-	cdq                         /* edx = 0; preserves CF (still 0) */
-	mov	cl, 8               /* rcx=0 from push-loop */
-3:	lodsd                       /* eax = m[i] */
-	mov	ebx, edx            /* ebx = 0 (2 B — no REX) */
-	sbb	ebx, eax            /* ebx = 0 − m[i] − borrow */
-	xchg	eax, ebx            /* 1 B */
-	stosd
-	loop	3b
-	/* rdi = rsp+104 (stosd advanced 8× from rsp+72). */
-
-	lea	r10, [rdi-32]       /* = rsp+72 = &neg_m; 4 B vs 5 B */
+	/* rsp → t[0].  rcx=0. */
 
 	/* Schoolbook: 8 rounds, count down −32→0 to drop the cmp. */
 	push	-32
@@ -333,16 +329,24 @@ fe_mul_m:
 	jnz	.Lm
 	/* t[0..15] = a·b.  t[16..17] = 0 (product < 2^512). */
 
-	/* Reduce: slide 9-dword window from j=8 to j=0.  r9 = &t[j].
-	 * r10 = rsp+72; r9 = rsp+32 = r10−40.  4 B disp8 vs 5 B SIB. */
-	lea	r9, [r10-40]
-.Lr:	mov	ebx, [r9+32]        /* q = t[j+8] */
+	/* Reduce: slide 9-dword window from j=8 to j=0.  mulsub does
+	 * t[j..j+8] −= q·m directly — NO neg_m compute, NO clearing.
+	 *
+	 * Correctness: V = t[j+8]·2^256 + L.  q·m = H·2^256 + M with
+	 * H = ⌊q·m/2^256⌋.  Since m < 2^256: V − q·m ≥ L ≥ 0.  Since
+	 * V − q·m = (q−H)·2^256 + (L−M) and q−H ∈ {0,1} (because
+	 * H ≥ q − ⌈q/2^32⌉ from m ≥ 2^256−2^224): new t[j+8] ∈ {0,1}.
+	 * Second iteration with q=1: subtracts m, borrow iff t < m.
+	 * ≤2 iterations per position, same as neg_m.  −27 B net
+	 * (neg_m compute 23 B + lea r10 4 B gone; mulsub 26 B added
+	 * but xor-clear 4 B also gone, reduce mov rsi uses r8 same).  */
+	lea	r9, [rsp+32]        /* &t[8] */
+.Lr:	mov	ebx, [r9+32]        /* q = t[j+8] — NOT cleared */
 	test	ebx, ebx
 	jz	4f
-	xor	[r9+32], ebx        /* = 0 (ebx=[r9+32]); 4 B vs 5 B for and-imm */
 	mov	rdi, r9
-	mov	rsi, r10            /* neg_m */
-	call	mulacc              /* t[j..j+8] += q·neg_m */
+	mov	rsi, r8             /* m directly */
+	call	mulsub              /* t[j..j+8] -= q·m (q still in t[j+8]) */
 	jmp	.Lr                 /* recheck (≤2 iters per j) */
 4:	sub	r9, 4
 	cmp	r9, rsp
@@ -359,7 +363,7 @@ fe_mul_m:
 	mov	rcx, r8
 	call	.Lop3
 
-	add	rsp, 104
+	add	rsp, 72
 	pop	rbp
 	pop	rbx
 .Lepi4:                             /* fe_inv_m jumps here (3 pops) */
