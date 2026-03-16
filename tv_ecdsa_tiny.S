@@ -1,113 +1,123 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * ~1108 B default build; 1088 B with -DSMALL_MUL8 (~2× cycles).
+ * 1032 B default build; 1012 B with -DSMALL_MUL8 (~2× cycles).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
- * ARCHITECTURE
+ * THE FOUR BIG IDEAS
  *
- *   Plain modular arithmetic — NO MONTGOMERY FORM anywhere.  All
- *   field elements are stored and operated on in normal form.
+ *   1. NO MONTGOMERY.  Both P-256 moduli have top dword 0xFFFFFFFF
+ *   and 2^256 − m < 2^224.  At 32-bit granularity, the reduction
+ *   is just  q = t[top_dword]; t −= q·m  repeated.  Each step
+ *   leaves t[top] ∈ {0,1}.  No quotient estimation, no m⁻¹, no R².
+ *   Field elements stay in normal form throughout.
  *
- *   fe_mul_m reduction: q = t[top_dword].  Both P-256 moduli have
- *   top dword 0xFFFFFFFF and 2^256 − m < 2^224, so at 32-bit
- *   granularity the reduce step is just  t[j..j+8] −= t[j+8]·m.
- *   Since q < 2^32 and product < 2^256, each step leaves
- *   t[j+8] ∈ {0,1} — ≤2 iterations per window position, never
- *   negative.  Slide j from 8 to 0.  No quotient estimation, no
- *   inverse constants, no R².
+ *   2. RCB COMPLETE ADDITION.  One 43-op formula (Renes-Costello-
+ *   Batina, ePrint 2015/1060) handles P+Q, P+P, P−P=∞, ∞+Q=Q
+ *   without branching.  The 62-byte pt_add_acc 3-way branch tree
+ *   (acc.z / H / Rr checks) becomes an 11-byte "copy addend then
+ *   dispatch".  Doubling is the same operation with addend = acc.
+ *   Coordinates are homogeneous projective (x=X/Z), not Jacobian.
  *
- *   fe_mul_m product: 64-bit schoolbook (default, 4×4 qword muls)
- *   or 32-bit (SMALL_MUL8, 8×8 dword).  Either way the 512-bit
- *   product is identical; reduce stays 32-bit regardless — the
- *   q=t[top] trick needs top-limb = all-ones, and only the top
- *   DWORD satisfies that (p's top qword is 0xffffffff00000001).
+ *   3. NO MOD-p INVERSION.  The final check x ≡ r (mod n) becomes
+ *   X ≡ r·Z (mod p) OR X ≡ (r+n)·Z (mod p) — stay in projective
+ *   coords, check the product of the two differences for zero
+ *   (p prime → product zero iff a factor is zero).  All in bc_v3.
  *
- *   Bytecode: 2-byte ops, nibble-encoded (s2|op, dst|s1), over 16
- *   stack slots × 32 B.  Interpreter hoists &cP into rcx and &.Ljt
- *   into r14; handlers address constants at [r14+disp8] instead of
- *   7-B rip-relative.  Jump-table offsets stored as single bytes
- *   — every handler must be within 255 B of .Ljt (.Lop8 is last).
+ *   4. bt ON cN DIRECTLY.  Fermat inversion (mod-n only — mod-p
+ *   gone via #3) needs the bits of n−2.  n and n−2 differ only in
+ *   bits 1-4 (0x51 vs 0x4F: a four-bit borrow cascade, nothing
+ *   higher).  So bt on cN in .text (read-only) is correct for
+ *   bits 5+, and a 7-byte cmp/jb/je handles bits 0-4.  No exponent
+ *   buffer, no copy-and-decrement.
  *
- *   Shamir's trick: one 256-bit walk computes u1·G + u2·Q.  Per
- *   iteration: double; if u2 bit, add Q (resident in slot 4-5);
- *   if u1 bit, swap G into 4-5, add, restore Q.  Both G and Q
- *   have z = 1 and slot 6 is NEVER written by bc_dbl/add — so
- *   the 8-qword X,Y swap is sufficient, z serves both.
+ * BYTECODE INTERPRETER
  *
- *   Projective final check — NO mod-p inversion.  Valid iff
- *   x mod n == r, which in Jacobian coords is X ≡ r·Z² (mod p)
- *   OR X ≡ (r+n)·Z² (mod p).  p prime ⇒ diff1·diff2 ≡ 0 is
- *   equivalent.  Computed entirely in bc_v3 bytecode; the
- *   n·Z² term comes from MULCN (op 9: Fmul with b = &cN in
- *   .text), so no runtime constant derivation.
- *
- *   Fermat inversion — mod n ONLY (mod-p gone via the projective
- *   check).  n and n−2 differ only in bits 1-4 (low byte 0x51 vs
- *   0x4F is a four-bit borrow cascade, no borrow into byte 1).
- *   So: bt directly on cN in .text (read-only); bits 0-4 are
- *   special-cased with a 7-byte cmp/jb/je.  No exponent buffer,
- *   no stack copy, no sub-2.
+ *   2-byte ops over 22 stack slots (16 work + 6 backup).  Nibble
+ *   encoding: byte1 = (s2<<4)|op, byte2 = (dst<<4)|s1.  9 handlers
+ *   in a u8 jump table right before the constants — &cP and &cN
+ *   are disp8-reachable from r14 (= &.Ljt).  .Lop8 (fe_inv_m, the
+ *   biggest handler) lands at offset 255/255 — zero headroom, but
+ *   it fits.  Three streams: bc_rcb (88B), bc_v3 (16B), bc_v1 (58B).
  *
  * KEY INVARIANTS
  *
- *   r14 = slot base through pt_add_acc / pt_mul.  Every callee
- *   that reassigns r14 push/pops it (bc_run).  pt_add_acc and
- *   pt_mul have no frame; they read r14 directly.
+ *   RCB NEVER WRITES slots 4,5,6,10.  pt_mul relies on this: the
+ *   addend (4-6) stays put across the call (no Q-restore needed),
+ *   and b (slot 10, derived by bc_v1) survives all 256 iterations.
  *
- *   .Lai is CALLED from pt_mul (not just a label).  Zeroes the
- *   accumulator and returns eax=0 (pt_mul dec/xchgs that into
- *   ebp=255 for the loop counter).
+ *   ∞ = (0:1:0), NOT (0:0:0).  RCB on (0:0:0)+Q gives (0:0:0),
+ *   which is wrong.  pt_mul's init explicitly sets slot1 = 1 after
+ *   zeroing slots 0-2.  Self-adding (0:1:0) keeps it canonical.
  *
- *   cGX→cGY→cN→cP contiguous after .Ljt: verify's single
- *   16-qword rep movsq lands G in slots 2-3, cN in 4, cP in 5.
- *   bc_v1's check ops read cN/cP from 4,5 (ops run first), then
- *   its copy ops overwrite 4,5 with Q (safe — checks done).
+ *   cGX→cGY→cN→cP contiguous after .Ljt — verify's single 16-qword
+ *   rep movsq lands G in slots 2-3, cN in 4, cP in 5.  bc_v1's
+ *   check ops read cN/cP first, THEN the copy ops overwrite 4,5
+ *   with Q.  Order matters.
  *
- *   Slot 6 = 1 is load-bearing for Shamir: bc_dbl/add1/add2
- *   never write it.  Any bytecode change that writes slot 6
- *   breaks the G/Q swap silently.
+ *   rcx=0 is a precondition for most `mov cl,N` sites.  Every
+ *   caller gets rcx=0 from a prior loop-to-zero (rep, .Lop3's
+ *   dec-to-0, fe_iszero).  Audit these if reordering.
  *
- *   rcx=0 is a frequent precondition (cpy3 macro, pt_mul's
- *   mov cl,8): every caller has rcx=0 from a prior loop-to-zero.
- *   Audit these if reordering.
+ * -DSMALL_MUL8: uses `loop`+`scasd` in mul8's inner loop (both
+ * microcoded, ~7+3 cyc vs 1+1).  ~950K iterations → ~3M cycle
+ * penalty.  Default uses dec+jnz + lea.  See mul8 macro header.
  *
- * -DSMALL_MUL8: `loop`+`scasd` in the mul8 inner loop.  Both
- * are microcoded (~7 cyc and ~3 cyc vs 1 cyc); that loop runs
- * ~950K iterations per verify, so the penalty is ~3M cycles.
- * Default build uses dec+jnz + lea (+20 B, −51% cycles).
- *
- * Security and validation are unchanged from tv_ecdsa_bc.S.
+ * Security and validation unchanged from tv_ecdsa_bc.S.
  * ====================================================================== */
 
 	.intel_syntax noprefix
 
 /* ======================================================================
- * Bytecode.  Placed before .text so stream offsets (bc_X - bc_dbl) are
+ * Bytecode.  Placed before .text so stream offsets (bc_X - bc_rcb) are
  * backward references at the call sites — gas picks the imm8 encoding
  * for `push`.  Order chosen so all offsets ≤ 120 (fits signed imm8;
  * bc_v1 is last).
  *
  * Call sites load the offset as a small integer (push imm8; pop rdi,
- * or xor edi,edi for bc_dbl itself), and bcrun_off adds the base.
+ * or xor edi,edi for bc_rcb), and bcrun_off adds the base.
  * ====================================================================== */
 	.section .rodata
 	.p2align 3
 
-/* bc_rcb: Renes-Costello-Batina complete addition, a=−3 (their
- * Alg. 7).  Handles P+Q, 2P, P+(−P)=∞, ∞+Q=Q uniformly — NO
- * special-case branching in pt_add_acc.  Coords are HOMOGENEOUS
- * PROJECTIVE (x=X/Z, y=Y/Z), NOT Jacobian.  ∞ = (0:Y:0) for any
- * Y≠0; .Lai produces (0:1:0).
+/* bc_rcb: Renes-Costello-Batina COMPLETE addition (ePrint 2015/1060,
+ * Algorithm 7 for a=−3).  "Complete" means one formula gives the
+ * right answer for EVERY input pair — P+Q (distinct), P+P (doubling),
+ * P+(−P) = ∞, and ∞+Q = Q — with no branching.  This is what lets
+ * pt_add_acc be 11 bytes instead of 62: no acc.z check, no H check,
+ * no Rr check.  The old Jacobian add1/add2 formulas would divide by
+ * zero on these edge cases.
  *
- * Inputs:  P in slots 0,1,2.  Q in slots 4,5,6.  b in slot 10.
- * Output:  P+Q in slots 0,1,2.  Slots 4,5,6 PRESERVED (read-only).
- * Scratch: 3 (transient — lives only between its Fadd-write and
- *           next Fmul/Fsub-read), 7,8,9,11,15 (permanent).
+ * COORDINATES: homogeneous projective — (X:Y:Z) represents the
+ * affine point (X/Z, Y/Z).  This is DIFFERENT from Jacobian
+ * (X/Z², Y/Z³).  ∞ is any (0:Y:0) with Y≠0.  Y≠0 matters: RCB
+ * on (0:0:0)+Q gives (0:0:0) ≠ Q, but (0:1:0)+Q gives Q correctly.
+ * The self-add (0:1:0)+(0:1:0) = (0:1:0) — ∞ stays canonical.
  *
- * Slot 3 is Fadd's scratch too — but the three t5-uses here all
- * write via Fadd (dst=scratch overlays OK) and read via Fmul/Fsub
- * (no clobber).  Verified by Python simulation.  43 ops, 88 B. */
+ * THE SIZE WIN:  This one 43-op stream replaces bc_dbl (50 B) +
+ * bc_add1 (24 B) + bc_add2 (28 B) = 102 B with 88 B.  More
+ * importantly, pt_add_acc's entire 3-way branch tree dissolves
+ * into "copy addend; dispatch bc_rcb".  Doubling is the SAME
+ * operation — just copy acc into the addend slots first.
+ *
+ * SLOT LAYOUT:
+ *   Inputs:   P=(X1,Y1,Z1) in 0,1,2.  Q=(X2,Y2,Z2) in 4,5,6.
+ *             b (curve constant) in slot 10.
+ *   Output:   P+Q in slots 0,1,2.
+ *   READ-ONLY: slots 4,5,6,10.  Load-bearing — pt_mul relies on
+ *             Q/G being preserved across the call, and b must
+ *             survive 256 iterations.
+ *   Scratch:  7,8,9,11,15 (permanent) + 3 (transient).
+ *
+ * The slot-3 trick: the formula needs 6 live temporaries at once
+ * (step 10), but we only have 5 permanent scratch slots.  Slot 3
+ * is Fadd's internal scratch (clobbered by every Fadd), BUT the
+ * sixth temp (t5) is always written BY an Fadd and consumed BY the
+ * very next Fmul/Fsub — never spanning another Fadd.  So slot 3
+ * serves both roles: Fadd writes p−s2 there, then dst=3 means the
+ * final result overlays it, and the next op reads it before any
+ * clobber.  Tight but verified by exhaustive Python simulation
+ * against the affine reference for all edge cases. */
 bc_rcb:
 	.byte 0x40,0x70, 0x50,0x81, 0x60,0x92, 0x12,0xb0, 0x52,0xf4
 	.byte 0xf0,0xbb, 0x82,0xf7, 0xf3,0xbb, 0x22,0xf1, 0x62,0x35
@@ -189,11 +199,10 @@ bc_v1:
  * 256-bit primitives (4 × u64 limbs, little-endian).
  * -------------------------------------------------------------------- */
 
-/* fe_iszero(a=rdi) -> al=1 iff zero, ZF set iff zero.  OR
- * accumulates into rax; the last OR's ZF reflects the full value.
- * loop/sete/ret preserve flags: pt_add_acc branches on ZF
- * directly.  High bytes of rax are garbage from the OR loop —
- * .Lop6/7 only read al.  Preserves rdi. */
+/* fe_iszero(a=rdi) -> al=1 iff zero.  OR-accumulates into rax;
+ * last OR's ZF reflects the full 256-bit value.  Sole caller is
+ * .Lop6 (the bytecode check handler) — reads only al.  High bytes
+ * of rax are garbage from the OR loop.  Preserves rdi. */
 fe_iszero:
 	push	4
 	pop	rcx
@@ -361,18 +370,10 @@ fe_from_be:
 	loop	1b
 	ret
 
-/* cpy3: 12-qword copy.  PRECONDITION rcx=0 (high bytes) — every
- * caller has rcx=0 from a prior fe_iszero/rep loop exit.  mov cl
- * is 2 B vs push;pop 3 B. */
-.macro	cpy3
-	mov	cl, 12
-	rep	movsq
-.endm
-
 /* ----------------------------------------------------------------------
- * pt_add_acc / pt_mul read the slot base from r14 directly — no frame.
- * verify sets r14=rsp once; bc_run (called from inside these) push/
- * pops r14 around its own reassignment, so it always comes back.
+ * .Lcadd / pt_mul read the slot base from r14 (verify's r14=rsp) and
+ * r15 (= slot 2, for deriving &slot4 as r15+64).  bc_run push/pops
+ * r14/r15 around its own use so they always come back.
  *
  * Placed right before bcrun_r14: add2 path FALLS THROUGH (no jmp),
  * dbl path's jmp is rel8.  x86-64 has no short call — the mid-body
@@ -394,7 +395,7 @@ fe_from_be:
 /* ======================================================================
  * BYTECODE INTERPRETER
  * ====================================================================== */
-/* rdi = byte offset from bc_dbl.  bcrun_off resolves; bcrun_r14 also
+/* rdi = byte offset from bc_rcb.  bcrun_off resolves; bcrun_r14 also
  * supplies rsi = r14 (slot base).  Call sites use push imm8; pop rdi
  * (2-3 B) instead of 7-B rip-rel lea. */
 bcrun_r14:
@@ -456,8 +457,8 @@ bc_run:
 	jmp	.Lbc
 
 /* NEG sets CF=1 iff operand was nonzero.  pops/ret preserve flags —
- * callers branch on CF directly (jc=fail for bc_v1/v3, jnc for
- * bc_add1's H-check).  ebp is about to be popped anyway. */
+ * callers branch on CF directly (jc = a check failed for bc_v1/v3;
+ * bc_rcb has no checks so CF=0 always). */
 .Lbce:	neg	ebp
 	pop	r14
 	pop	r12
@@ -466,29 +467,6 @@ bc_run:
 	pop	rbp
 	ret
 
-/* pt_mul: Shamir's simultaneous double-and-add.  One 256-bit walk
- * computes u1·G + u2·Q into the accumulator (slots 0-2).
- *
- * Caller contract (verify):
- *   rbx      → &u1 (slot 13); u2 at [rbx+32] (slot 14)
- *   r14      → slot base (slot 0)
- *   r15      → slot 2 (for &slot4 derivation below)
- *   slot 4-5 : Q.x, Q.y   (z in slot 6 — see below)
- *   slot 6   : 1          (shared z for G AND Q)
- *   slot 16-17: G.x, G.y  (at rbx+96)
- *   slot 18-19: Q.x, Q.y backup (for restore after each G-add)
- *
- * z-coordinate trick: bc_add1/2 read slot 6 for the addend's z but
- * NEVER write it.  Both G and Q are affine (z=1), so the same slot
- * 6 serves both — only X,Y (8 qwords) need swapping per G-branch.
- *
- * Per iteration: double; if u2 bit, add (Q already in 4-5); if u1
- * bit, swap G into 4-5, add, restore Q.  u2 checked first so Q is
- * in place without a preceding restore.
- *
- * rbx is callee-saved everywhere pt_mul reaches (bc_run pushes it;
- * pt_add_acc's callees do too), so pt_mul neither pushes nor writes
- * it — verify's &slot13 survives end-to-end. */
 /* pt_mul: Shamir via RCB-ONLY.  Doubling = self-add (acc→addend,
  * RCB).  Q/G adds use 3-slot backups (X,Y,Z=1) — RCB reads addend
  * Z from slot6 and NEVER writes slots 4-6.  r12 not needed.
