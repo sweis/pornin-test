@@ -20,21 +20,21 @@ make size      test      wp          # portable C reference
 
 | Implementation | text+rodata | Cycles | Requires | Notes |
 |---|---:|---:|---|---|
-| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **980 B** | ~8.0M | MOVBE | 32-bit schoolbook, size floor |
-| **`tv_ecdsa_tiny.S`** (default) | **1000 B** | **~3.5M** | MOVBE | 64-bit schoolbook |
+| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **979 B** | ~8.0M | MOVBE | 32-bit schoolbook, size floor |
+| **`tv_ecdsa_tiny.S`** (default) | **999 B** | **~3.5M** | MOVBE | 64-bit schoolbook |
 | `tv_ecdsa_fast.S` | 1397 B | ~0.65M | BMI2+MOVBE | Montgomery+mulx, predecessor |
 | `tv_ecdsa_bc.S` | 1712 B | ~1.85M | — | first bytecode version |
 | `tv_ecdsa.c` (Cortex-M4) | 2082 B | — | — | realistic boot-ROM target |
 | `tv_ecdsa.c` (x86-64, gcc `-Os`) | 3076 B | — | — | portable C reference |
 
-**One source, two Pareto-optimal builds.** The default (1000 B) uses
+**One source, two Pareto-optimal builds.** The default (999 B) uses
 64-bit schoolbook for the 512-bit product; `-DSMALL_MUL8` swaps in a
 32-bit schoolbook (−20 B) that uses `loop`+`scasd` in the hot loop —
 both microcoded, ~950K iterations/verify, ~4M extra cycles. Same reduce
 step either way.
 
 **vs Thomas** (external competing implementation): v4 at 996 B / ~4.1M
-cycles. We hold the size corner by 16 B (980 B); Thomas holds the
+cycles. We hold the size corner by 17 B (979 B); Thomas holds the
 middle of the frontier (his 996 B and 1004 B points sit between our
 two builds). Full frontier at [`docs/progress.png`](docs/progress.png).
 
@@ -75,7 +75,7 @@ What changed from fast.S to drop ~290 bytes:
 - **Shamir's trick inherited from fast.S.** Slot 6 = z = 1 serves both
   G and Q; only X,Y swap.
 
-### Journey (1397 → 980)
+### Journey (1397 → 979)
 
 | ~Size | Key step |
 |---|---|
@@ -91,7 +91,7 @@ What changed from fast.S to drop ~290 bytes:
 | 1071 | op6/7 merge → fe_sub_raw inlines; .Lop8 at 255/255 |
 | 1012 | **RCB complete addition** — 3-way branch → one formula (−59) |
 | 985 | **addend slot shift** — Shamir setup → one rep movsq (−16) |
-| 980 | imul edi,esi,6 for slot12 offset; drop r15 (−5) |
+| 979 | imul edi,esi,6 for slot12; drop r15; lodsb for 0x04 (−6) |
 
 ## Earlier implementations
 

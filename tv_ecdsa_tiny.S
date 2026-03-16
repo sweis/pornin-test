@@ -1,7 +1,7 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 1000 B default build; 980 B with -DSMALL_MUL8 (~2× cycles).
+ * 999 B default build; 979 B with -DSMALL_MUL8 (~2× cycles).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -784,9 +784,13 @@ tv_ecdsa_p256_verify_asm:
 	push	rdi
 	pop	rbx                 /* slot 16 */
 
-	cmp	BYTE PTR [rdx], 0x04
+	/* Format byte: lodsb advances rsi past the 0x04 to the X
+	 * coord for free.  mov+lodsb+cmp(al) = 6 B vs cmp[rdx]+lea
+	 * = 7 B.  rdx dead after (hash pointer in r8 already used). */
+	mov	rsi, rdx
+	lodsb
+	cmp	al, 0x04
 	jne	.Lf2
-	lea	rsi, [rdx+1]
 	mov	rdi, r14            /* slot 0 */
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi flowed to r14+64 = slot2 */

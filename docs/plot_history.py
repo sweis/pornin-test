@@ -54,17 +54,19 @@ TRAIL = [
     #   4,5,6 → 5,6,7 (pure nibble cycle, 0 B).  Retakes size corner.
     (1005, 3475, None),
     (985,  7960, None),
-    # --- Micro-grind: imul for slot12, [rdi-64] inc, drop r15 (−5B) ---
+    # --- Micro-grind: imul for slot12, [rdi-64] inc, drop r15, lodsb ---
     (1000, 3490, None),
-    (980,  7975, "addend slot shift\n980B — size corner"),
+    (980,  7975, None),
+    (999,  3530, None),
+    (979,  7975, "addend slot shift\n979B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B).
-# Post-980B: Thomas v4 stays Pareto (996/4100 is between our two
+# Post-979B: Thomas v4 stays Pareto (996/4100 is between our two
 # points on the frontier) but no longer holds either corner.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100)]
 THOMAS    = (996, 4100)
-CLAUDE    = (980, 7975)     # size corner — 16 B under Thomas v4
+CLAUDE    = (979, 7975)     # size corner — 17 B under Thomas v4
 TARGET    = 1024
 
 def pareto(pts):
