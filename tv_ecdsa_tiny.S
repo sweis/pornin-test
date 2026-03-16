@@ -356,8 +356,10 @@ fe_mul_m:
 
 	/* Final cond-sub via .Lop3.  rsi = &t BEFORE releasing the
 	 * frame (reads are safe: .Lop3's pushes land at t[14..17],
-	 * past the result in t[0..7]).  dest pops from under t. */
-	mov	rsi, rsp
+	 * past the result in t[0..7]).  dest pops from under t.
+	 * `push rsp` = pre-decrement value; pop balances.  2 B vs 3. */
+	push	rsp
+	pop	rsi
 	add	rsp, 72
 	pop	rdi                 /* dest (pushed before push-loop) */
 	mov	rdx, r8             /* m */
