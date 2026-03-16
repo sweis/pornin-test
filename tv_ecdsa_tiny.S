@@ -282,8 +282,12 @@ fe_sub_raw:
 	\op	[rdi], ebp
 .endm
 
-/* .Lfm falls through; fe_inv_m's modulus at [rbp+24]. */
-.Lfm:	mov	rcx, [rbp+24]
+/* .Lfm falls through.  fe_inv_m is ONLY called for mod-n now
+ * (mod-p inversion gone via projective check).  r14 in bc_run
+ * context = .Ljt; cN is at r14+9 (9-entry table).  Hardcode the
+ * 9 — gas won't pick disp8 for forward-ref oN. */
+.equ	oN_early, 9
+.Lfm:	lea	rcx, [r14+oN_early]
 	/* FALLTHROUGH */
 /* fe_mul_m(r=rdi, a=rsi, b=rdx, m=rcx).  r = a·b mod m.  32-bit limbs.
  *
@@ -376,13 +380,12 @@ fe_inv_m:
 	 * r12,r13 (−4) + pops (−4) + movs (−6); add push rdi,rsi
 	 * (+2), pops (+2), [rbp+N] loads vs reg (+3).  */
 	push	rbx
-	push	rdx                 /* m   → [rbp+24] */
 	push	rsi                 /* src → [rbp+16] */
 	push	rdi                 /* dst → [rbp+8]  */
 	enter	32, 0
 
 	mov	rdi, rsp
-	mov	rsi, [rbp+24]       /* m */
+	lea	rsi, [r14+oN_early] /* cN (.text, via bc_run's r14=.Ljt) */
 	push	4
 	pop	rcx
 	rep	movsq               /* exponent ← m; rcx=0 after */
@@ -416,7 +419,6 @@ fe_inv_m:
 	leave
 	pop	rcx                 /* discard dst */
 	pop	rcx                 /* discard src */
-	pop	rcx                 /* discard m */
 	pop	rbx
 	ret
 
@@ -672,6 +674,9 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 
 .equ oN,   cN   - .Ljt
 .equ oP,   cP   - .Ljt
+.if oN - oN_early
+.error "oN moved — update oN_early in .Lfm"
+.endif
 .if oP - oP_early
 .error "oP moved — update oP_early in bc_run"
 .endif
