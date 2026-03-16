@@ -267,8 +267,8 @@ fe_sub_raw:
 	\op	[rdi], ebp
 .endm
 
-/* .Lfm falls through; fe_inv_m's r14 = m. */
-.Lfm:	mov	rcx, r14
+/* .Lfm falls through; fe_inv_m's modulus at [rbp+8]. */
+.Lfm:	mov	rcx, [rbp+8]
 	/* FALLTHROUGH */
 /* fe_mul_m(r=rdi, a=rsi, b=rdx, m=rcx).  r = a·b mod m.  32-bit limbs.
  *
@@ -282,13 +282,13 @@ fe_sub_raw:
  * One mulacc serves both schoolbook multiply AND reduce.  No m0i,
  * no R², no Montgomery — plain modular arithmetic.  r8 ignored. */
 fe_mul_m:
-	push	r13
-	push	r14
-	push	rbx                 /* mulacc reads ebx */
-	push	rbp                 /* mulacc clobbers ebp */
+	push	rbx                 /* mul8 reads ebx */
+	push	rbp                 /* mul8 clobbers ebp */
+	/* b,a in r9,r10 (caller-saved, mul8 doesn't touch).  No r13/r14
+	 * push/pop.  fe_inv_m's r13,r14 survive fe_mul_m unchanged.  −8 B. */
 
-	mov	r13, rdx            /* b */
-	mov	r14, rsi            /* a */
+	mov	r9, rdx             /* b */
+	mov	r10, rsi            /* a */
 	mov	r8, rcx             /* m — reduce AND cond-sub use it directly */
 	/* dest (rdi) goes on the stack under t — popped after t is
 	 * released.  r12 no longer pushed/used; .Lepi4 shrinks. */
@@ -309,9 +309,9 @@ fe_mul_m:
 	 * a bit.  Forward-order merged is equivalent to separate). */
 	push	-32
 	pop	r11
-.Lm:	mov	ebx, [r14+r11+32]   /* a[i] */
+.Lm:	mov	ebx, [r10+r11+32]   /* a[i] */
 	lea	rdi, [rsp+r11+32]   /* &t[i] */
-	mov	rsi, r13            /* b */
+	mov	rsi, r9             /* b */
 	mul8	add                 /* t[i..i+8] += a[i]·b */
 	add	r11, 4
 	jnz	.Lm
@@ -346,9 +346,6 @@ fe_mul_m:
 
 	pop	rbp
 	pop	rbx
-.Lepi4:                             /* fe_inv_m jumps here (2 pops now) */
-	pop	r14
-	pop	r13
 	ret
 
 /* fe_inv_m.  Loop counter in rbx (callee-saved, survives fe_mul_m).
@@ -358,20 +355,19 @@ fe_mul_m:
 fe_inv_m:
 	push	r12
 	push	r13
-	push	r14
 	push	rbx
-	/* enter 32,0 pushes rbp too (−3 B at epilogue via leave; +0 B
-	 * here — 4 B vs sub rsp,32's 4 B).  rbp is never read in the
-	 * body and fe_mul_m/fe_cpy leave it alone, so the frame pointer
-	 * survives to leave.  Exponent buffer still at [rsp]. */
+	/* modulus on stack (pushed before enter → at [rbp+8] after).
+	 * fe_mul_m no longer touches r14 so we don't need it as a
+	 * callee-save home; −3 B (drop push/pop r14 + mov r14,rdx,
+	 * but +1 B each for [rbp+8] loads ×2 + 1 B push rdx + 1 B pop). */
+	push	rdx                 /* m — lands at [rbp+8] post-enter */
 	enter	32, 0
 
 	mov	r12, rdi
 	mov	r13, rsi
-	mov	r14, rdx            /* m; no m0i (4th arg ignored) */
 
 	mov	rdi, rsp
-	mov	rsi, r14
+	mov	rsi, [rbp+8]        /* m */
 	push	4
 	pop	rcx
 	rep	movsq               /* exponent ← m; rcx=0 after */
@@ -406,9 +402,8 @@ fe_inv_m:
 	jns	.Le
 
 	leave
+	pop	rcx                 /* discard modulus (rcx dead) */
 	pop	rbx
-	/* Can't share .Lepi4 anymore (it dropped pop r12).  Own epi. */
-	pop	r14
 	pop	r13
 	pop	r12
 	ret
