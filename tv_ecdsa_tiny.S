@@ -1,125 +1,82 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * Forked from tv_ecdsa_fast.S (1397 B speed+size).  This variant
- * trades cycles for bytes: muladd4 rolled into a loop, store-forward
- * stalls accepted, mulx flag-threading dropped.  Target: 1024 B.
+ * ~1108 B default build; 1088 B with -DSMALL_MUL8 (~2× cycles).
+ * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
- * Requires BMI2 (mulx) and MOVBE.
+ * ARCHITECTURE
  *
- * Hot-path changes:
+ *   Plain modular arithmetic — NO MONTGOMERY FORM anywhere.  All
+ *   field elements are stored and operated on in normal form.
  *
- *   - Shamir's trick: one 256-bit walk for u1·G + u2·Q instead of two
- *     independent pt_muls — halves the doublings (256 vs 512).  Per
- *     iteration: double; if u2 bit, add Q (already in slot 4-5); if
- *     u1 bit, swap G.xy into slot 4-5, add, restore Q.xy.  Both G and
- *     Q have z = Mont(1), and slot 6 is NEVER written by bc_dbl/add,
- *     so the 8-qword X,Y swap is enough — z serves both.  ~30% cycles.
- *     Costs +22 B: larger pt_mul body, but verify's stash/restore/
- *     second-pt_mul/pt_add_acc block (61 B) is gone.
+ *   fe_mul_m reduction: q = t[top_dword].  Both P-256 moduli have
+ *   top dword 0xFFFFFFFF and 2^256 − m < 2^224, so at 32-bit
+ *   granularity the reduce step is just  t[j..j+8] −= t[j+8]·m.
+ *   Since q < 2^32 and product < 2^256, each step leaves
+ *   t[j+8] ∈ {0,1} — ≤2 iterations per window position, never
+ *   negative.  Slide j from 8 to 0.  No quotient estimation, no
+ *   inverse constants, no R².
  *
- *   - Advancing-pointer CIOS in fe_mul_m: instead of shifting the
- *     6-word accumulator down one limb every outer iteration (20 memory
- *     moves per fe_mul_m), the base pointer r9 advances.  The CIOS
- *     invariant guarantees t[0]=0 after reduction, so t[1..] is the
- *     new accumulator — no data movement.  Needs a 9-word buffer.
- *     Removes the shift loop entirely: −21 bytes, huge cycle win.
+ *   fe_mul_m product: 64-bit schoolbook (default, 4×4 qword muls)
+ *   or 32-bit (SMALL_MUL8, 8×8 dword).  Either way the 512-bit
+ *   product is identical; reduce stays 32-bit regardless — the
+ *   q=t[top] trick needs top-limb = all-ones, and only the top
+ *   DWORD satisfies that (p's top qword is 0xffffffff00000001).
  *
- *   - muladd4 fully unrolled with mulx.  mulx preserves all flags,
- *     so each mem-add's CF is threaded straight through the next mulx
- *     into the following limb's adc — one `adc r,0` barrier per limb
- *     instead of two.  The hi-reg (rcx↔rdi) never exceeds 2^64-1
- *     (hi_product ≤ 2^64-2 + one cross-carry), so it cannot wrap; the
- *     second carry lives in CF.  69 bytes, and shortens the carry
- *     dependency chain on the hottest loop — the bulk of the ~13%
- *     cycle win.  Also closes a latent edge case: the old two-adc
- *     form could wrap hi at exactly 2^64 with both carries set.
+ *   Bytecode: 2-byte ops, nibble-encoded (s2|op, dst|s1), over 16
+ *   stack slots × 32 B.  Interpreter hoists &cP into rcx and &.Ljt
+ *   into r14; handlers address constants at [r14+disp8] instead of
+ *   7-B rip-relative.  Jump-table offsets stored as single bytes
+ *   — assert every handler is within 255 B of .Ljt (see .if
+ *   after .Lop8).
  *
- *   - fe_sub_raw/fe_add_raw use lodsq/stosq (auto-increment, 2 bytes
- *     each, flag-preserving) and `dec ecx; jnz` instead of `loop`.
- *     `dec` sets ZF but preserves CF for the carry chain.  `loop` is
- *     microcoded (~7 cyc/iter on modern Intel); dec/jnz is 1.
- *     −15 bytes AND faster.
+ *   Shamir's trick: one 256-bit walk computes u1·G + u2·Q.  Per
+ *   iteration: double; if u2 bit, add Q (resident in slot 4-5);
+ *   if u1 bit, swap G into 4-5, add, restore Q.  Both G and Q
+ *   have z = 1 and slot 6 is NEVER written by bc_dbl/add — so
+ *   the 8-qword X,Y swap is sufficient, z serves both.
  *
- *   - fe_cpy is 4×movsq (no `rep` startup overhead on the ~50%-taken
- *     fe_mul_m copy-back path).  Zero-init of t is `push rax`×9
- *     after xor — allocates and zeroes the 72-byte buffer in one
- *     sweep.  11 B vs 18 B for sub + stosq loop.
+ *   Projective final check — NO mod-p inversion.  Valid iff
+ *   x mod n == r, which in Jacobian coords is X ≡ r·Z² (mod p)
+ *   OR X ≡ (r+n)·Z² (mod p).  p prime ⇒ diff1·diff2 ≡ 0 is
+ *   equivalent.  Computed entirely in bc_v3 bytecode; the
+ *   n·Z² term comes from MULCN (op 9: Fmul with b = &cN in
+ *   .text), so no runtime constant derivation.
  *
- * Size-only changes:
+ *   Fermat inversion — mod n ONLY (mod-p gone via the projective
+ *   check).  n and n−2 differ only in bits 1-4 (low byte 0x51 vs
+ *   0x4F is a four-bit borrow cascade, no borrow into byte 1).
+ *   So: bt directly on cN in .text (read-only); bits 0-4 are
+ *   special-cased with a 7-byte cmp/jb/je.  No exponent buffer,
+ *   no stack copy, no sub-2.
  *
- *   - SQR bytecode encodes s2=s1; decoder sets rdx=rsi for free, so
- *     SQR dispatches straight to Fmul.  −5 bytes.
- *   - `push N; pop reg` replaces `mov reg,imm32` where N fits signed
- *     imm8 (−2 each, many sites).
- *   - fe_mul_m outer counter goes −32→0 so `add;jnz` drops the cmp.
- *   - verify's slot-4/slot-8 leas via rbp/r13 mid-pointers: disp8.
- *   - Constants (cP/cN/cR2P) live right after .Ljt so handlers can
- *     address them as [r14+disp8] instead of 7-byte rip-relative.
- *     5 leas × −3 bytes = −15.
- *   - Check-op handlers share the `or r13b,al; ret` tail.  −4.
- *   - Nmul shares Fmul's `jmp fe_mul_m` via short jmp.  −3.
- *   - pt_add_acc: fe_iszero preserves rdi, so compute the next
- *     address from it with disp8/sub-imm8 instead of disp32 lea.  −6.
- *   - pt_mul counter in ebp (no REX) instead of r13d.  −2.
- *   - r14=rsp in verify: r14 as base drops rsp's SIB byte.  −2.
- *   - fe_from_be advances rdi; slot16 derived as [rdi+64] after it
- *     instead of 7-byte disp32 from r14.  −3.
- *   - fe_inv_m: push rdi (1 byte) instead of mov rsi,rdi (3).  −3.
- *   - fe_sub_m + fe_add_raw inlined into Fsub (sole-caller chain);
- *     fe_sub_raw's neg leaves CF → jnc replaces test+jz.  −10.
- *   - fe_geq returns via CF; cond_sub_n branches on it directly.  −2.
- *   - fe_iszero looped: or-accumulate sets ZF on final OR.  −3.
- *   - build_one inlined (sole caller).  −6.
- *   - verify final-compare: push rbx×4, pop as needed.  −4.
- *   - Fadd: push scratch addr, pop into rdx after call.  −3.
- *   - pt_mul: dead mov removed; dec al → 255 via wrap.  −4.
- *   - Bytecode streams addressed by imm8 offset from bc_dbl; bcrun_off
- *     resolves.  7 sites × (7-byte lea → 2–3 byte load) vs +10.  −20.
- *   - fe_inv_m: sub DWORD (low limb ≫ 2, no borrow) + bt DWORD.  −2.
- *   - bc_run returns check result in CF (neg ebp): caller drops
- *     test+jnz for jc.  −2.
- *   - Decoder preloads rcx = &P; Fmul/Fadd drop their leas.  −2.
+ * KEY INVARIANTS
  *
- * Structural wins (r14-invariant pass):
+ *   r14 = slot base through pt_add_acc / pt_mul.  Every callee
+ *   that reassigns r14 push/pops it (bc_run).  pt_add_acc and
+ *   pt_mul have no frame; they read r14 directly.
  *
- *   - r14 = slot base is an invariant throughout the call tree (every
- *     callee that reassigns r14 also pushes/pops it).  pt_add_acc's
- *     `push r14; mov r14,rdi; ...; pop r14` frame and pt_mul's rbx
- *     copy were both reconstructing that live value.  Dropping them
- *     cascades: pt_add_acc's epilogue becomes a bare `ret`, two of its
- *     `jmp .Laa` paths become `ret`, one becomes a tail-jump; verify
- *     drops three `mov rdi,r14` preambles; pt_mul drops its whole rbx
- *     bookkeeping.  −27 combined.
- *   - cond_sub_n = .Lop3 with rcx=rdx=&N.  Conditional subtract is
- *     subtract-then-add-back-on-borrow, which is exactly the Fsub
- *     handler — just with the modulus swapped.  A 9-byte stub (three
- *     movs) placed right before .Lop3 falls through.  fe_geq then has
- *     only one caller (.Lop5) and gets inlined.  −19.
- *   - Fto_mont opcode eliminated.  verify's block copy takes cR2P
- *     along for the ride (16 qwords instead of 12), landing R² in
- *     slot 11.  A to-Montgomery conversion is then plain Fmul with
- *     s2=0xb.  Drops the handler and one jump-table entry.  −5.
- *   - pt_mul zeros its accumulator by calling .Lai (pt_add_acc's
- *     set-to-infinity path — byte-identical code).  −6.
- *   - verify: rdx (pub ptr) survives both fe_from_be calls unchanged;
- *     Fadd preserves rcx=&P around its own fe_sub_raw; build_one
- *     piggybacks on fe_from_be's advanced rdi; rbp set from that rdi
- *     instead of a prologue lea.  −11 combined.
- *   - bc_run decoder uses rax itself as the table index (consume ah
- *     first, then `and eax,0xF`); pt_mul `xchg ebp,eax`.  −2.
- *   - pt_mul scalar ptr in rbx (1-byte push/pop) not r15 (2-byte).
- *     bt [rbx],rbp is still 4 B (REX.W needed either way).  −2.
- *   - movbe in fe_from_be: load+bswap in one (7 B vs 5+3).  −1.
- *   - cGXM in .text right before .Ljt: [r12-80] (5 B, disp8 but
- *     r12 forces SIB) replaces 7-B rip-relative.  Handler offsets
- *     unaffected (cGXM is on the near side of .Ljt).  −2.
- *   - hv_len range check (32..64) merged: sub r9,32 wraps low
- *     values to huge, so cmp;jbe catches both ends.  −2.
- *   - pt_add_acc moved right before bcrun_r14: the add2 path falls
- *     through (no jmp), the dbl path's jmp is rel8.  −5.
- *   - pt_mul moved right after bc_run's epilogue: its pop rbx;pop
- *     rbp;ret (3 B) becomes a rel8 jmp into .Lepi5's tail (2 B).  −1.
+ *   .Lai is CALLED from pt_mul (not just a label).  Zeroes the
+ *   accumulator and returns eax=0 (pt_mul dec/xchgs that into
+ *   ebp=255 for the loop counter).
+ *
+ *   cGX→cGY→cN→cP contiguous after .Ljt: verify's single
+ *   16-qword rep movsq lands G in slots 2-3, cN in 4, cP in 5.
+ *   bc_v1's check ops read cN/cP from 4,5 (ops run first), then
+ *   its copy ops overwrite 4,5 with Q (safe — checks done).
+ *
+ *   Slot 6 = 1 is load-bearing for Shamir: bc_dbl/add1/add2
+ *   never write it.  Any bytecode change that writes slot 6
+ *   breaks the G/Q swap silently.
+ *
+ *   rcx=0 is a frequent precondition (cpy3 macro, pt_mul's
+ *   mov cl,8): every caller has rcx=0 from a prior loop-to-zero.
+ *   Audit these if reordering.
+ *
+ * -DSMALL_MUL8: `loop`+`scasd` in the mul8 inner loop.  Both
+ * are microcoded (~7 cyc and ~3 cyc vs 1 cyc); that loop runs
+ * ~950K iterations per verify, so the penalty is ~3M cycles.
+ * Default build uses dec+jnz + lea (+20 B, −51% cycles).
  *
  * Security and validation are unchanged from tv_ecdsa_bc.S.
  * ====================================================================== */
@@ -129,11 +86,11 @@
 /* ======================================================================
  * Bytecode.  Placed before .text so stream offsets (bc_X - bc_dbl) are
  * backward references at the call sites — gas picks the imm8 encoding
- * for `push`.  Order chosen so all offsets ≤ 118 (fits signed imm8).
+ * for `push`.  Order chosen so all offsets ≤ 120 (fits signed imm8;
+ * bc_v1 is last).
  *
  * Call sites load the offset as a small integer (push imm8; pop rdi,
  * or xor edi,edi for bc_dbl itself), and bcrun_off adds the base.
- * 7 sites × (7-byte rip-rel lea → 2–3 byte load) vs +10 in bcrun_off.
  * ====================================================================== */
 	.section .rodata
 	.p2align 3
@@ -145,17 +102,16 @@ bc_dbl:
 	.byte 0xa1,0x0a, 0xb3,0x00, 0x03,0x88, 0x80,0x8a, 0x91,0x99
 	.byte 0x92,0x99, 0x92,0x99, 0x92,0x99, 0x93,0x18, 0x00,0x00
 
-/* bc_v2 MERGED into bc_v1 — hash decode now writes e to slot 14
- * (not 13), so s in 13 survives to INV and bc_v1 can flow straight
- * into the two Nmuls.  One dispatch, one terminator, one stream.
- * See bc_v1 tail for the appended ops.  −17 B. */
+/* bc_v2 merged into bc_v1: hash decode writes e to slot 14, so s
+ * in slot 13 survives to INV; the two Nmuls append to bc_v1's tail.
+ * One dispatch, one terminator. */
 
 /* bc_v3: PROJECTIVE CHECK — no mod-p inversion.  Valid iff
- * x mod n == r ⇔ X ≡ r·Z² (mod p) OR X ≡ (r+n)·Z² (mod p).  p is
- * prime → (diff1·diff2 ≡ 0) ⇔ (either ≡ 0).  diff2 = diff1 − n·Z²
- * directly via MULCN (b=cN from .text) + Fsub — same result as
- * diff1 + (p−n)·Z² via Fadd but no native p−n compute (−17 B).
- * slot 7 holds z².  First op: R.z==0 (∞) → fail. */
+ * x mod n == r ⇔ X ≡ r·Z² (mod p) OR X ≡ (r+n)·Z² (mod p).
+ * p is prime → (diff1·diff2 ≡ 0) ⇔ (either ≡ 0).  diff2 =
+ * diff1 − n·Z² via MULCN (b=cN in .text) + Fsub; equivalent to
+ * diff1 + (p−n)·Z² via Fadd but needs no p−n constant.
+ * First op: R.z==0 (∞) → fail. */
 bc_v3:
 	.byte 0x06,0x20            /* checkzero slot2 (R.z): ∞ → fail */
 	.byte 0x21,0x72            /* slot7  = z²                     */
@@ -168,10 +124,9 @@ bc_v3:
 	.byte 0x00,0x00
 
 /* Tail checkzero on slot3 (= H): bc_run returns CF=1 iff H==0.
- * pt_add_acc branches on CF directly — drops the native
- * lea+call+jnz H-test (11 B) for a 2-B jnc + this 2-B op.
- * bc_add1 has no Fadd (ops 0,1,3 only), so slot3 survives as
- * written by the penultimate Fsub.  obc_v1 shifts 118→120. */
+ * pt_add_acc branches on CF directly (jnc).  bc_add1 has no Fadd
+ * (ops 0,1,3 only), so slot3 survives as the penultimate Fsub
+ * wrote it — Fadd would clobber slot 3 as scratch. */
 bc_add1:
 	.byte 0x21,0xa2, 0x61,0xb6, 0xb0,0x80, 0xa0,0x34, 0x60,0x91
 	.byte 0xb0,0x99, 0x20,0x75, 0xa0,0x77, 0x83,0x33, 0x93,0x77
@@ -183,17 +138,19 @@ bc_add2:
 	.byte 0xb0,0x99, 0x71,0x07, 0xb3,0x00, 0x82,0x38, 0x33,0x00
 	.byte 0x03,0x38, 0x30,0x37, 0x93,0x13, 0x00,0x00
 
-/* Opcode renumbering after op4 (Fto_mont) was absorbed into Fmul:
- * No Montgomery.  Inputs (Q in 0,1; G in 2,3) are already in
- * normal form — no to-Mont conversion.  Slots 4,5 still get Qx,Qy
- * (for Shamir): Fmul(x, slot15=1) = x, a plain copy in 2 B.
+/* bc_v1: range checks + curve check + s⁻¹ + u1,u2.
+ *
+ * Q in slots 0,1; G in slots 2,3; cN,cP temporarily in 4,5
+ * (block-copied, read by the checks, then overwritten by Q-copy).
+ *
+ * Slots 4,5 get Qx,Qy via Fmul(x, slot15=1) = x — a 2-B copy.
  * Slot 6 = 1 via 1·1 (pt_add_acc reads it as addend's z).
  *
- * B is derived from G (normal form); curve check uses slots 7,11
- * as scratch so 0,1,4,5 survive for the Shamir copy.  No Fadd
- * anywhere (its handler clobbers slot 3 = Gy). */
+ * Curve constant B is derived from G (B = Gy² − Gx³ + 3·Gx).
+ * Curve check uses slots 7,11 as scratch so 0,1,4,5 survive for
+ * the Shamir copy.  No Fadd anywhere — Fadd clobbers slot 3 (Gy). */
 bc_v1:
-	/* cN/cP now in slots 4,5 (via the 16-qword block copy). */
+	/* Range/zero checks.  cN/cP in slots 4,5 (block-copied). */
 	.byte 0x06,0xc0, 0x05,0xc4, 0x06,0xd0, 0x05,0xd4
 	.byte 0x05,0x05, 0x05,0x15
 	.byte 0xf0,0x40            /* slot4 = Qx·1 = Qx  (copy)    */
@@ -218,7 +175,7 @@ bc_v1:
 	.byte 0xa3,0x77            /* slot7 -= B             (Fsub)*/
 	.byte 0xb3,0x77            /* slot7 -= slot11        (Fsub)*/
 	.byte 0x07,0x70            /* check slot7 nonzero (dst=7!) */
-	.byte 0x88,0x0d            /* INV: slot0 = slot13^-1 mod slot8(cN) */
+	.byte 0x88,0x0d            /* INV: slot0 = slot13^-1 mod n */
 	/* bc_v2 appended: hash is in slot14, s⁻¹ in slot0, r in slot12.
 	 * Checks may have failed — harmless, ebp already tainted. */
 	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
@@ -239,11 +196,10 @@ bc_v1:
  * -------------------------------------------------------------------- */
 
 /* fe_iszero(a=rdi) -> al=1 iff zero, ZF set iff zero.  OR
- * accumulates into rax; the last OR's ZF reflects the full OR.
- * loop/sete/ret all preserve flags: pt_add_acc branches on ZF
- * directly, .Lop6/7 OR al into bpl (low byte only — high bytes
- * of rax are garbage from the OR loop but nobody reads them).
- * movzx was dead code.  −3 B. */
+ * accumulates into rax; the last OR's ZF reflects the full value.
+ * loop/sete/ret preserve flags: pt_add_acc branches on ZF
+ * directly.  High bytes of rax are garbage from the OR loop —
+ * .Lop6/7 only read al.  Preserves rdi. */
 fe_iszero:
 	push	4
 	pop	rcx
@@ -253,14 +209,13 @@ fe_iszero:
 	sete	al
 	ret
 
-/* fe_sub_raw(dst=rdi, a=rsi, b=rdx) -> borrow in eax.
- * lodsq/stosq preserve all flags; `dec` preserves CF (sets ZF only).
- * `xor ecx,ecx` doubles as the CF-clear.  Pointers advance as a side
- * effect — callers must not assume they're preserved. */
-/* fe_sub_raw: dst = a − b.  CF on return = final borrow (last sbb;
- * lea/dec/jnz all preserve CF).  Sole CF consumer is .Lop3's jnc —
- * the old `sbb eax;neg` tail just rebuilt the same CF.  eax never
- * read by any caller (Fadd: p>s2, verify p−n: p>n, both ignore). */
+/* fe_sub_raw: dst = a − b.  Borrow in CF on return (last sbb's CF;
+ * lea/dec/jnz/ret all preserve it).  lodsq/stosq auto-increment and
+ * preserve all flags; `xor ecx,ecx` doubles as the initial CF-clear.
+ * Pointers advance — callers must not assume they're preserved.
+ *
+ * Sole CF consumer is .Lop3's jnc.  eax never read by any caller
+ * (Fadd passes rsi=&cP so a≥b always; fe_mul_m's cond-sub uses CF). */
 fe_sub_raw:
 	xor	ecx, ecx
 	mov	cl, 4
@@ -272,16 +227,14 @@ fe_sub_raw:
 	jnz	1b
 	ret
 
-/* mul8 OP: dst[0..8] OP= ebx·src[0..7], 32-bit limbs.  INLINED at
- * both call sites (schoolbook=add, reduce=sub).
+/* mul8 OP: dst[0..8] OP= ebx·src[0..7], 32-bit limbs.  One
+ * expansion in the default build (reduce=sub only — schoolbook
+ * is 64-bit inlined); two under SMALL_MUL8 (add + sub).
  *
- * SPEED OVER SIZE: `loop` and `scasd` are microcoded on every
- * modern x86 (~7 cyc and ~3 cyc respectively).  This is the
- * HOTTEST loop — ~950K iterations per verify.  Using `dec+jnz`
- * and `lea` costs +5 B × 2 sites = +10 B but cuts measured
- * cycles from 6.25M to 3.20M — enough to dominate Thomas
- * (1156 B / 3.6M) on BOTH axes.  The −10 B variant
- * (1105 B / 6.25M) is available via -DSMALL_MUL8 for the
+ * `loop` and `scasd` are microcoded on every modern x86
+ * (~7 cyc and ~3 cyc).  This is the hottest loop — using
+ * `dec+jnz` + `lea` instead roughly halves total cycles per
+ * verify.  -DSMALL_MUL8 picks the microcoded forms for the
  * absolute size floor.
  *
  * Clobbers: ebp (prev_hi), rcx→0, eax/edx, rsi/rdi advance +32. */
@@ -306,10 +259,10 @@ fe_sub_raw:
 	\op	[rdi], ebp
 .endm
 
-/* .Lfm falls through.  fe_inv_m is ONLY called for mod-n now
- * (mod-p inversion gone via projective check).  r14 in bc_run
- * context = .Ljt; cN is at r14+9 (9-entry table).  Hardcode the
- * 9 — gas won't pick disp8 for forward-ref oN. */
+/* .Lfm: load rcx=&cN, fall through.  Called only from fe_inv_m,
+ * which only runs mod-n (mod-p gone — projective check).  r14 at
+ * the call site is bc_run's .Ljt hoist.  gas won't pick disp8 for
+ * forward-ref oN — hardcode + assert. */
 .equ	oN_early, 74
 .Lfm:	lea	rcx, [r14+oN_early]
 	/* FALLTHROUGH */
@@ -322,25 +275,21 @@ fe_sub_raw:
  * <2^256 window gives <2^257, so new t[j+8] ∈ {0,1}.  ≤2 inner
  * iters per position, never negative.  Slide j from 8 to 0.
  *
- * One mulacc serves both schoolbook multiply AND reduce.  No m0i,
- * no R², no Montgomery — plain modular arithmetic.  r8 ignored. */
+ * One mul-accumulate serves both schoolbook AND reduce (add vs sub). */
 fe_mul_m:
 	push	rbx                 /* mul8 reads ebx */
 	push	rbp                 /* mul8 clobbers ebp */
-	/* b,a in r9,r10 (caller-saved, mul8 doesn't touch).  No r13/r14
-	 * push/pop.  fe_inv_m's r13,r14 survive fe_mul_m unchanged.  −8 B. */
+	/* b,a in r9,r10 (caller-saved, mul8 doesn't touch).  r12-r15
+	 * not touched — no push/pop.  fe_inv_m's r8,r14 survive. */
 
 	mov	r9, rdx             /* b */
 	mov	r10, rsi            /* a */
-	/* m on stack under dest: push is 1 B vs mov r8,rcx (3 B);
-	 * tail pops it straight into rcx for the cond-sub (−2 B vs
-	 * mov rcx,r8).  Reduce loop reads it at [rsp+88] (+2 B vs
-	 * reg).  Net −2 B.  r8 dead. */
+	/* m on stack under dest: push is 1 B, tail pops it straight
+	 * into rcx for the cond-sub.  Reduce loop reads at [rsp+88]. */
 	push	rcx                 /* m → [rsp+80] after zero-loop */
 	push	rdi                 /* dest → [rsp+72] */
 
-	/* Frame: just t[0..17] = 72 B.  mulsub subtracts q·m directly,
-	 * so no neg_m needed.  Push-zero 9 qwords (72 B). */
+	/* Frame: just t[0..17] = 72 B.  Push-zero 9 qwords. */
 	xor	eax, eax
 	push	9
 	pop	rcx
@@ -353,12 +302,10 @@ fe_mul_m:
 #endif
 	/* rsp → t[0].  rcx=0. */
 
-	/* 64-BIT SCHOOLBOOK: 4×4=16 qword muls vs 8×8=64 dword muls.
-	 * The 512-bit product t is identical either way — reduce
-	 * stays 32-bit (q=t[top] only works there, top dword = -1).
-	 * Inner body grows (REX on every op) but outer×inner drops
-	 * 64→16.  +8 B over the 32-bit macro for ~19% fewer cycles.
-	 * -DSMALL_MUL8 uses the shared 32-bit mul8 macro instead. */
+	/* 64-BIT SCHOOLBOOK (default): 4×4 qword muls.  Same 512-bit
+	 * product as 32-bit; reduce stays 32-bit regardless (q=t[top]
+	 * trick needs top DWORD = -1, top qword isn't).  REX on every
+	 * op grows the body but 16 iterations vs 64 wins net. */
 	push	-32
 	pop	r11
 #ifdef SMALL_MUL8
@@ -389,8 +336,8 @@ fe_mul_m:
 	jnz	.Lm
 #endif
 
-	/* rdi as window pointer (no REX on [rdi+32]); push/pop around
-	 * mul8's +32 advance.  −2 B vs r9.  */
+	/* REDUCE.  rdi = window pointer (no REX on [rdi+32]).  mul8
+	 * advances rdi — push/pop around it. */
 	lea	rdi, [rsp+32]       /* &t[8] */
 .Lr:	mov	ebx, [rdi+32]       /* q = t[j+8] — NOT cleared */
 	test	ebx, ebx
@@ -407,13 +354,13 @@ fe_mul_m:
 
 	/* Final cond-sub via .Lop3.  rsi = &t BEFORE releasing the
 	 * frame (reads are safe: .Lop3's pushes land at t[14..17],
-	 * past the result in t[0..7]).  dest pops from under t.
-	 * `push rsp` = pre-decrement value; pop balances.  2 B vs 3. */
+	 * past the result in t[0..7]).  dest/m pop from under t.
+	 * `push rsp` captures pre-decrement value; pop balances. */
 	push	rsp
 	pop	rsi
 	add	rsp, 72
 	pop	rdi                 /* dest */
-	pop	rcx                 /* m — from under dest; 1 B vs 3 B mov r8 */
+	pop	rcx                 /* m */
 	push	rcx
 	pop	rdx
 	call	.Lop3
@@ -436,32 +383,22 @@ fe_from_be:
 	loop	1b
 	ret
 
-/* cpy3: 12-qword copy.  Precondition rcx=0 (high bytes) — every caller
- * has rcx=0 from a prior fe_iszero/rep/fe_sub_raw.  mov cl,N = 2 B vs
- * push N;pop rcx = 3 B.  −1 B per site. */
+/* cpy3: 12-qword copy.  PRECONDITION rcx=0 (high bytes) — every
+ * caller has rcx=0 from a prior fe_iszero/rep loop exit.  mov cl
+ * is 2 B vs push;pop 3 B. */
 .macro	cpy3
 	mov	cl, 12
 	rep	movsq
 .endm
 
 /* ----------------------------------------------------------------------
- * pt_add_acc and pt_mul take the slot base in r14 (caller-provided).
- * Every caller already has r14 = slot base: verify sets it once at
- * entry and never clobbers it; bc_run (called from inside both of
- * these) pushes/pops r14.  So the old push-r14/mov-r14/pop-r14 frame
- * in pt_add_acc was reconstructing a value that was never lost, and
- * pt_mul's rbx = rdi copy was rbx = r14 by another name.
+ * pt_add_acc / pt_mul read the slot base from r14 directly — no frame.
+ * verify sets r14=rsp once; bc_run (called from inside these) push/
+ * pops r14 around its own reassignment, so it always comes back.
  *
- * With the frame gone, pt_add_acc's epilogue is just `ret`.  Two of
- * the three paths that ended in `jmp .Laa` become plain `ret` (−1 B
- * each), and the third — a call then fallthrough — becomes a tail
- * jump (−1 B).  pt_mul drops its rbx push/mov/pop (−5 B) and the
- * `mov rdi,rbx` arg to pt_add_acc (−3 B).  verify drops three
- * `mov rdi,r14` preambles (−9 B).  Net −24 B.
- *
- * Placed right before bcrun_r14 so the add2 path falls straight through
- * into bcrun_r14 (no jmp at all), and the dbl-path's jmp is rel8.  −5 B.
- * The `call bcrun_r14` mid-body is still rel32 (no short call on x86-64).
+ * Placed right before bcrun_r14: add2 path FALLS THROUGH (no jmp),
+ * dbl path's jmp is rel8.  x86-64 has no short call — the mid-body
+ * `call bcrun_r14` is still rel32.
  * -------------------------------------------------------------------- */
 pt_add_acc:
 	lea	rdi, [r14+64]
@@ -475,19 +412,15 @@ pt_add_acc:
 1:	push	obc_add1
 	pop	rdi
 	call	bcrun_r14
-	/* bc_add1's tail checkzero(slot3=H) sets CF iff H==0.
-	 * After bcrun_r14 rdi is clobbered — can't chain the old
-	 * sub-imm8 trick.  But r12 = slot4 (pt_mul's, preserved
-	 * through bc_run) → slot7 = r12+96, disp8.  r12 needs SIB
-	 * (same low bits as rsp) so 5 B vs 7 B disp32 from r14. */
+	/* bc_add1's tail checkzero(slot3=H) → CF=1 iff H==0.
+	 * r12 = &slot4 (pt_mul's, survives bc_run) → slot7 at
+	 * r12+96, disp8.  r12 needs SIB but still beats disp32. */
 	jnc	3f                  /* H ≠ 0 → bc_add2 */
 	lea	rdi, [r12+96]       /* slot 7 = Rr (slot4+96) */
 	call	fe_iszero           /* ZF ⇔ Rr == 0 */
 	jnz	.Lai
-	/* Tail-share: both this path and 3: end in `jmp bcrun_r14`.
-	 * Short-jmp past .Lai to the shared tail-jump. */
 	xor	edi, edi            /* obc_dbl = 0 */
-	jmp	bcrun_r14           /* rel8 forward — pt_add_acc sits right before bcrun_r14 */
+	jmp	bcrun_r14           /* rel8 — bcrun_r14 is just below */
 .Lai:	mov	rdi, r14
 	xor	eax, eax
 	/* rcx=0 on both paths here: fe_iszero's loop (pt_add_acc) and
@@ -502,10 +435,9 @@ pt_add_acc:
 /* ======================================================================
  * BYTECODE INTERPRETER
  * ====================================================================== */
-/* Callers pass rdi = byte offset into the bytecode block.  bcrun_off
- * resolves it; bcrun_r14 also supplies rsi = r14.  Seven sites each
- * drop a 7-byte rip-rel lea for a 2–3 byte offset load; we spend +10
- * here once. */
+/* rdi = byte offset from bc_dbl.  bcrun_off resolves; bcrun_r14 also
+ * supplies rsi = r14 (slot base).  Call sites use push imm8; pop rdi
+ * (2-3 B) instead of 7-B rip-rel lea. */
 bcrun_r14:
 	mov	rsi, r14
 bcrun_off:
@@ -520,15 +452,9 @@ bc_run:
 	push	rdi                 /* 2B push;pop vs 3B REX.W mov */
 	pop	rbx
 	mov	r12, rsi
-	/* Check accumulator in ebp: xor is 2 bytes (no REX), and since only
-	 * the low byte is ever OR'd with 0/1, `mov eax,ebp` (2 bytes) works
-	 * at exit — upper bytes stay zero.
-	 *
-	 * r13 is never read or written here (the decoder uses r12/r14,
-	 * handlers either don't touch r13 or push it themselves —
-	 * fe_mul_m does).  It was push/popped purely so verify could
-	 * share .Lepi5; now that verify has its own leave-based
-	 * epilogue, the push/pop is dead.  −4 B. */
+	/* Check accumulator in ebp (no REX).  Only bpl is ever OR'd
+	 * (with 0/1); upper bytes stay zero from this xor.  r13 not
+	 * push/popped: nothing in the dispatch tree touches it. */
 	xor	ebp, ebp
 	lea	r14, [rip+.Ljt]     /* Hoist: handlers are callee-saved, r14 lives. */
 .Lbc:
@@ -562,18 +488,17 @@ bc_run:
 	and	eax, 0xF            /* op — ah already dead */
 	movzx	eax, BYTE PTR [r14+rax]
 	add	rax, r14
-	/* Most handlers want rcx = &P; those that don't overwrite it.
-	 * +4 here, −4 in Fmul, −2 in Fadd.  Fadd now preserves it across
-	 * its own fe_sub_raw.  oP is a forward reference here, so gas
-	 * picks disp32 — hardcode and assert. */
+	/* Preload rcx = &P: most handlers want it (Fmul/Fsub/Fadd),
+	 * the rest overwrite it.  oP is a forward ref — gas picks
+	 * disp32 for those; hardcode + assert below. */
 .equ	oP_early, 106       /* .Ljt(10) + cGX/Y(64) + cN(32) */
 	lea	rcx, [r14+oP_early]
 	call	rax
 	jmp	.Lbc
 
-/* NEG sets CF=1 iff operand was nonzero.  pops/ret preserve flags,
- * so the bc_v1 caller branches on CF directly — other callers don't
- * care.  ebp is about to be popped anyway.  Same 2 bytes as mov. */
+/* NEG sets CF=1 iff operand was nonzero.  pops/ret preserve flags —
+ * callers branch on CF directly (jc=fail for bc_v1/v3, jnc for
+ * bc_add1's H-check).  ebp is about to be popped anyway. */
 .Lbce:	neg	ebp
 	pop	r14
 	pop	r12
@@ -582,43 +507,33 @@ bc_run:
 	pop	rbp
 	ret
 
-/* pt_mul: Shamir's simultaneous double-and-add.  Computes u1·G + u2·Q
- * into the accumulator (slots 0-2) in a single 256-bit walk — halves
- * the doublings vs running two independent pt_muls (256 vs 512).
+/* pt_mul: Shamir's simultaneous double-and-add.  One 256-bit walk
+ * computes u1·G + u2·Q into the accumulator (slots 0-2).
  *
- * Caller contract (verify sets this up just before the call):
- *   rsi    → &u1 (slot 13); u2 is at [rsi+32] (slot 14)
- *   slot 4-6: Q in Jacobian Montgomery form (z = Mont(1) in slot 6)
- *   slot 16-17: G.x, G.y in Montgomery form
- *   slot 18-19: backup of Q.x, Q.y (for restore after each G-add)
- *   slot 15 holds `one` throughout — bc_v3 reads it after pt_mul.
+ * Caller contract (verify):
+ *   rbx      → &u1 (slot 13); u2 at [rbx+32] (slot 14)
+ *   r14      → slot base (slot 0)
+ *   r15      → slot 2 (for &slot4 derivation below)
+ *   slot 4-5 : Q.x, Q.y   (z in slot 6 — see below)
+ *   slot 6   : 1          (shared z for G AND Q)
+ *   slot 16-17: G.x, G.y  (at rbx+96)
+ *   slot 18-19: Q.x, Q.y backup (for restore after each G-add)
  *
- * The z-coordinate trick: bc_add1/2 read slot 6 for the addend's z, and
- * slot 6 is NEVER written by bc_dbl/add1/add2.  Both G and Q have z =
- * Mont(1), so swapping only X,Y (8 qwords) suffices — slot 6 serves both.
+ * z-coordinate trick: bc_add1/2 read slot 6 for the addend's z but
+ * NEVER write it.  Both G and Q are affine (z=1), so the same slot
+ * 6 serves both — only X,Y (8 qwords) need swapping per G-branch.
  *
- * Per iteration: double; if u2 bit set, add (Q is already in 4-5); if
- * u1 bit set, swap G into 4-5, add, restore Q to 4-5.  u2 checked first
- * so Q is in place for it without a preceding restore.  After the
- * G-branch restores Q, the next iteration's u2 check finds Q in place.
+ * Per iteration: double; if u2 bit, add (Q already in 4-5); if u1
+ * bit, swap G into 4-5, add, restore Q.  u2 checked first so Q is
+ * in place without a preceding restore.
  *
- * Caller passes &u1 IN RBX (not rsi).  verify's rbx already holds
- * slot 13 from the earlier stockpile, so the old `mov rsi,rbx` in
- * verify + `push rbx; mov rbx,rsi` here was a round trip that
- * rebuilt the same value.  rbx is callee-saved everywhere pt_mul
- * reaches (bc_run pushes it; pt_add_acc's callees do too), so
- * pt_mul neither pushes nor writes it.  Verify doesn't read rbx
- * after pt_mul returns (next use is `lea rbx,[r14+96]`).  −7 B.
- *
- * Epilogue is now inline (pop rbp; ret) — no more .Lepi2 share
- * since there's no rbx to pop.  Same 6 B either way. */
+ * rbx is callee-saved everywhere pt_mul reaches (bc_run pushes it;
+ * pt_add_acc's callees do too), so pt_mul neither pushes nor writes
+ * it — verify's &slot13 survives end-to-end. */
 pt_mul:
 	push	rbp
 	push	r12
-	lea	r12, [r15+64]       /* &slot4 — r15 = verify's &slot2 (disp8) */
-	/* r13 was set once (lea [rbx+96]) and read once (mov rsi,r13).
-	 * rbx survives all callees (bc_run and pt_add_acc push/pop it)
-	 * — inline the lea at the use site, drop push/lea/pop.  −7 B. */
+	lea	r12, [r15+64]       /* &slot4 — r15 = &slot2 (disp8) */
 
 	call	.Lai
 	dec	al
@@ -638,12 +553,11 @@ pt_mul:
 	jnc	3f
 	mov	rdi, r12            /* &slot4 */
 	push	rdi                 /* stash for restore after pt_add_acc clobbers rdi */
-	lea	rsi, [rbx+96]       /* &slot16 = G (rbx=slot13, survives callees) */
-	/* rcx=0: bc_dbl (via bcrun_r14 above) ends in Fsub which leaves
-	 * rcx=0 (fe_sub_raw's dec-to-0 loop); pt_add_acc (u2 branch)
-	 * exits via bc_add2/dbl (same) or rep (rcx→0).  −1 B each. */
+	lea	rsi, [rbx+96]       /* &slot16 = G (rbx = &slot13) */
+	/* rcx=0: bc_dbl ends in Fsub → fe_sub_raw dec-to-0; pt_add_acc
+	 * (u2 branch) exits via bc_add2/dbl (same) or rep (rcx→0). */
 	mov	cl, 8
-	rep	movsq               /* G.xy → slot 4-5.  rsi now = r13+64 = &slot18. */
+	rep	movsq               /* G.xy → slot 4-5.  rsi landed at &slot18. */
 	push	rsi                 /* stash &Q-backup — it's where rsi landed */
 	call	pt_add_acc
 	pop	rsi                 /* &slot18 = Q backup */
@@ -658,15 +572,14 @@ pt_mul:
 	pop	rbp
 	ret
 
-/* .Ljt + constants.  cGX/cGY/cN/cP contiguous (in that order)
- * so verify's block copy does all four to slots 2-5 in one
- * 16-qword rep movsq.  G → 2,3; cN → 4; cP → 5.  bc_v1's
- * check ops read cN/cP from slots 4,5 (nibbles updated); its
- * Q-copy ops (7,8) then overwrite 4,5 with Qx,Qy — safe
- * because checks (ops 2-6) run first.  bc_dbl/add use slots
- * 8,9 as scratch (write-before-read), unchanged.  Handler
- * offsets shift +64 B (cGX/Y now between .Ljt and handlers);
- * .Lop8 lands at ~236/255.  −12 B in verify. */
+/* .Ljt + constants.  cGX→cGY→cN→cP contiguous in that order:
+ * verify copies all four to slots 2-5 in one 16-qword rep movsq
+ * (G → 2,3; cN → 4; cP → 5).  bc_v1's range/zero checks read
+ * cN/cP from 4,5 first, then its Q-copy ops overwrite 4,5 —
+ * safe because checks always run before the copy.
+ *
+ * cGX/cGY between .Ljt and handlers push handler offsets up by
+ * 64 B — .Lop8 is the furthest, asserted < 256 below. */
 .Ljt:
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
 	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
@@ -691,16 +604,13 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 .error "oP moved — update oP_early in bc_run"
 .endif
 .if (cN - cGX) - 64
-.error "cGX-cN offset changed — update lea rsi,[r12-64] in verify"
+.error "cGX..cN spacing changed — verify's 16-qword block copy depends on cGX,cGY,cN,cP contiguous"
 .endif
 /* .Lop8 overflow assertion is after .Lop8 definition (needs
  * backward ref for gas .if). */
 
-/* fe_geq inlined (sole caller after cond_sub_n was rewritten as a
- * .Lop3 stub).  Compare [rdi] to [rsi] limb-by-limb from the top;
- * loopz falls out on first mismatch with cmp's CF live.  +10 B in
- * the handler block (Fadd shifts from 225 to 235, still fits u8)
- * but the 16-B standalone fe_geq is gone.  Net −6 B. */
+/* fe_geq inlined.  Compare [rdi] ≥ [rsi] limb-by-limb from the
+ * top; loopz falls out on first mismatch with cmp's CF live. */
 .Lop5:	push	4
 	pop	rcx
 1:	mov	rax, [rdi+rcx*8-8]
@@ -714,36 +624,31 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 	xor	al, 1
 .Lor:	or	bpl, al
 	ret
-/* .Lop8 (INV) is fe_inv_m itself — moved to after .Lop3.  −5 B. */
-/* MULCN: Fmul with b = &cN (.text) instead of a slot.  bc_v3 uses
- * this to compute n·z² directly — diff2 = diff1 − n·z² (mod p) via
- * Fsub is the same as diff1 + (p−n)·z² via Fadd.  Drops verify's
- * 17-B native p−n compute.  rdx override, then short-jmp to Fmul
- * (rcx stays &cP from decoder).  6 B + 1 B table = 7 B.  Net −10. */
+/* MULCN: Fmul with b = &cN (.text) instead of a slot.  bc_v3
+ * uses this for n·z²; diff2 = diff1 − n·z² (mod p) via Fsub
+ * is equivalent to diff1 + (p−n)·z² via Fadd but needs no p−n.
+ * rcx = &cP untouched (mod-p).  rel8 to Fmul. */
 .Lop9:
 MULCN:	lea	rdx, [r14+oN]
-	jmp	Fmul                /* rel8; rcx=&cP (mod-p) untouched */
-/* No m0i → Nmul is just a rcx override, Fmul is just the jmp.
- * Decoder preloaded rcx = &cP; Nmul overwrites to &cN then falls
- * through.  −10 B (push 1;pop r8 + mov r8,[rcx-8] + jmp .Lmj). */
+	jmp	Fmul
+/* Nmul/Fmul differ only in modulus.  Decoder preloaded rcx = &cP;
+ * Nmul overwrites to &cN and falls through. */
 .Lop4:
 Nmul:	lea	rcx, [r14+oN]
 	/* FALLTHROUGH */
 .Lop0:
 Fmul:	jmp	fe_mul_m
-/* SQR bytecode now encodes s2=s1, so the decode loop has already
- * set rdx=rsi — SQR is just Fmul.  −5 bytes (old: mov rdx,rsi;jmp). */
+/* SQR = Fmul: bytecode encodes s2=s1, decoder already set rdx=rsi. */
 .equ .Lop1, .Lop0
-/* fe_sub_m + fe_add_raw both inlined (sole callers in chain).
- * fe_sub_raw's `neg eax` sets CF iff borrow; pops preserve flags,
- * so jnc replaces test+jz.  The add-back loop's first adc needs
- * CF=0: `xor ecx,ecx` clears it (we're on the CF=1 branch here
- * but mov+xor reset it).  −10 vs standalone fe_sub_m+fe_add_raw. */
-/* rcx = &P is supplied by the decoder.  Fadd also preserves it
- * across its fe_sub_raw call (push/pop around it, +2 B) and jumps to
- * .Lop3 directly — the old `Fsub: lea rcx,[r14+oP]` re-load is gone. */
-/* Fadd now BEFORE .Lop3 → falls through (drops 2-B jmp).  .Lop3's
- * table offset grows by ~20 B but stays u8.  */
+/* Fadd (dst = s1+s2 mod p): compute p−s2 into slot 3 (scratch),
+ * fall through to Fsub with rdx=&scratch so .Lop3 does s1−(p−s2).
+ * Fadd preserves rcx=&cP across fe_sub_raw (push/pop) so Fsub's
+ * add-back path gets the right modulus. */
+/* Fsub (.Lop3): dst = a−b; if borrow, add m back.  fe_sub_raw
+ * returns borrow in CF; pops preserve flags → jnc direct.  The
+ * add-back's first adc needs CF=0: clc (rcx=0 from fe_sub_raw's
+ * dec-to-0, but we're on the CF=1 path).  ALSO used by fe_mul_m
+ * for its final conditional subtract. */
 .Lop2:
 Fadd:	push	rdi
 	push	rsi
@@ -776,25 +681,23 @@ Fadd:	push	rdi
 	jnz	2b
 1:	ret
 
-/* .Lop8 = fe_inv_m (moved here to drop the 5-B jmp).  Offset
- * from .Ljt is ~170 B — fits u8.  fe_inv_m is mod-n only. */
+/* .Lop8 = fe_inv_m.  Placed here so its offset from .Ljt fits u8.
+ * Called only from bc_v1 (op 8), mod-n only — mod-p inversion was
+ * eliminated by the projective final check. */
 .Lop8:
-/* fe_inv_m.  Loop counter in rbx (callee-saved, survives fe_mul_m).
- * fe_mul_m now uses r10 internally for b, so r10 is not free here.
- * Push/pop rbx costs +2 bytes, but `mov ebx,imm` and `dec ebx` are
- * each 1 byte shorter than their r10d equivalents — net zero. */
-/* fe_inv_m WITHOUT EXPONENT BUFFER.  n and n−2 differ only in
- * bits 1-4 (low byte: 0x51 vs 0x4F — a four-bit borrow cascade;
- * no borrow into byte 1).  So: bt directly on cN in .text
- * (read-only, r14+oN) and special-case ebx<5.  ebx∈{0,1,2,3}
- * forces mul (n-2 bits 0-3 = 1111; n bit 0 is also 1 so the
- * force is redundant-but-correct there).  ebx==4 forces skip
- * (n bit4=1 but n-2 bit4=0).  ebx≥5: n and n-2 agree, bt on
- * cN is exact.
+/* fe_inv_m: r = a^(n-2) mod n (Fermat).  NO EXPONENT BUFFER.
  *
- * No enter/leave, no exponent copy, no sub [rsp],2.  dst in
- * r8 (survives .Lfm), src on stack at [rsp].  rdi/rsi are
- * still live at entry (push rsi doesn't clobber rsi).  −19 B. */
+ * n and n−2 differ only in bits 1-4 (low byte 0x51 vs 0x4F — a
+ * four-bit borrow cascade, no borrow into byte 1).  So: bt
+ * directly on cN in .text and special-case ebx<5.
+ *   ebx ∈ {0,1,2,3}: force mul (n−2 bits 0-3 = 1111; n bit 0 is
+ *                    also 1 so the ebx=0 force is redundant-correct)
+ *   ebx == 4:        force skip (n bit4=1 but n−2 bit4=0)
+ *   ebx ≥ 5:         n and n−2 agree — bt on cN is exact.
+ *
+ * Loop counter in rbx (callee-saved, survives .Lfm).  dst in r8
+ * (fe_mul_m doesn't touch it).  src pushed to [rsp].  r14 = .Ljt
+ * (bc_run's hoist — fe_mul_m doesn't touch that either). */
 fe_inv_m:
 	push	rbx
 	push	rsi                 /* src → [rsp] for the loop */
@@ -841,37 +744,28 @@ fe_inv_m:
 	.type	tv_ecdsa_p256_verify_asm, @function
 
 tv_ecdsa_p256_verify_asm:
-	/* enter 648,0 = push rbp; mov rbp,rsp; sub rsp,648 in 4 B
-	 * (vs 1+7=8 B).  r15 takes over as the slot-2 mid-pointer so
+	/* enter 648,0 = push rbp; mov rbp,rsp; sub rsp,648 in 4 B.
 	 * rbp stays a true frame pointer end-to-end → leave works at
-	 * exit.  Every callee either leaves rbp alone (fe_inv_m,
-	 * fe_mul_m, fe_from_be, cond_sub_n) or push/pops it (bc_run,
-	 * pt_mul).  r15 is preserved by the same set — fe_mul_m and
-	 * fe_inv_m push it; bc_run's handlers reach fe_mul_m only via
-	 * tail-jump so r15 round-trips.  pt_mul reads r15 once at
-	 * entry (for &slot4) and never writes it.
-	 *
-	 * rbp→r15 swap is size-neutral at every access (both need
-	 * REX in their [reg+disp8] / mov-to-rdi forms anyway).
-	 * Net: prologue −2, epilogue −1 (leave+pops vs add+jmp
-	 * .Lepi5).  enter is microcoded (~12 cyc) but runs once. */
+	 * exit.  Every callee either leaves rbp alone or push/pops it
+	 * (bc_run, pt_mul, fe_mul_m).  r15 is the slot-2 mid-pointer;
+	 * no callee writes it (pt_mul reads it once for &slot4).
+	 * enter is microcoded (~12 cyc) but runs once. */
 	push	rbx
-	push	r12
 	push	r14
 	push	r15
 	enter	648, 0
+	/* r12 not pushed: after MULCN dropped the p−n compute, verify's
+	 * only use of &cN was the block-copy source.  Direct rip-rel to
+	 * cGX (7B) replaces lea r12(7B) + lea rsi,[r12-64](5B).  pt_mul
+	 * push/pops its own r12 (slot4) — independent.  −9 B. */
 
-	/* r14 = rsp for the whole of verify.  r13 no longer used
-	 * (final check is projective — no `mov rdx,r13` for r).
-	 * Drop push/pop r13 and the lea; disp32 at the 2 use sites
-	 * is +7 B but −11 B from push+pop+lea.  −4 B net. */
+	/* r14 = slot base for the whole of verify.  r13 not used
+	 * anywhere. */
 	mov	r14, rsp
 
 	/* ABI args rdi (sig), rdx (pub), r8 (hash) all survive the
 	 * length checks (cmp-only on rsi/rcx/r9) and fe_from_be calls
-	 * (touch rsi/rdi/rcx/rax only — r8 untouched).  The old
-	 * `mov r12,rdi; mov rbx,r8` pair stashed values that were
-	 * never in danger.  −6 B. */
+	 * (touch rsi/rdi/rcx/rax only). */
 	cmp	rsi, 64
 	jne	.Lf2
 	cmp	rcx, 65
@@ -882,13 +776,13 @@ tv_ecdsa_p256_verify_asm:
 	cmp	r9, 32
 	ja	.Lf2
 	/* fe_from_be: stosq×4 advances rdi by 32; rsi index-read only.
-	 * Chain: rdi flows call→call; rsi bumped +32 in place.
-	 * rdi (sig ptr, ABI arg1) still live — nothing above touched it. */
+	 * Chain: rdi flows call→call; rsi bumped +32 in place by the
+	 * _next entry.  rdi (sig, ABI arg1) still live here. */
 	push	rdi                 /* 2B vs 3B REX.W mov */
 	pop	rsi
-	lea	rdi, [r14+12*32]    /* slot 12 (disp32; r13 gone) */
+	lea	rdi, [r14+12*32]    /* slot 12 (disp32) */
 	call	fe_from_be
-	call	fe_from_be_next     /* rsi+=32; rdi already r13+32 */
+	call	fe_from_be_next     /* rsi+=32; rdi flowed to slot 13 */
 
 	/* HASH DECODE here — rdi = slot 14 from sig-decode flowthrough.
 	 * Slot 13 (s) untouched so bc_v1 can check it AND invert it;
@@ -905,9 +799,9 @@ tv_ecdsa_p256_verify_asm:
 	xor	eax, eax
 	rep	stosq
 	inc	DWORD PTR [rdi-32]
-	/* rdi = slot 16; rbx stockpiled here for the whole of verify
-	 * (bc_run pushes/pops rbx, nothing else between here and
-	 * pt_mul writes it).  All Shamir/p−n leas are rbx-disp8. */
+	/* rdi = slot 16 now.  Stockpile rbx = &slot13 — survives to
+	 * pt_mul (bc_run push/pops rbx, nothing else writes it).
+	 * Shamir's slot16 lea uses it for disp8. */
 	lea	rbx, [rdi-96]       /* slot 13 */
 
 	cmp	BYTE PTR [rdx], 0x04
@@ -917,55 +811,44 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi flowed to r14+64 */
 	mov	r15, rdi            /* = slot 2; cheaper than lea from r14 */
-	lea	r12, [rip+cN]
 
 	/* ONE 16-qword copy: cGX,cGY,cN,cP → slots 2,3,4,5.  G → 2,3
-	 * (normal form, survives to Shamir — bc_v1 never writes them);
-	 * cN,cP → 4,5 (bc_v1's check ops read them, then ops 7-8
-	 * overwrite with Qx,Qy — checks run first so safe).  rdi
-	 * already at slot 2 from pub decode.  rcx=0.  −12 B. */
-	lea	rsi, [r12-64]       /* cGX = cN − 64 */
+	 * (survives to Shamir — bc_v1 never writes them).  cN,cP → 4,5
+	 * (bc_v1's check ops read them first, then Q-copy overwrites).
+	 * rdi already at slot 2 from pub decode.  rcx=0. */
+	lea	rsi, [rip+cGX]
 	mov	cl, 16
 	rep	movsq               /* rdi → slot 6, rcx → 0 */
 
 	push	obc_v1
 	pop	rdi
 	call	bcrun_r14
-	/* bc_v1 fail: fall through into .Lf2.  Every other fail-path
-	 * caller (length checks, 0x04 check, R.z=∞) reaches .Lf2 as
-	 * rel8 from here — the top jne is +98 fwd, jz after pt_mul is
-	 * −89 back.  .Lf2's own jmp to .Ld2 is +126 fwd: exactly at
-	 * the rel8 edge (any byte added between here and .Ld2 breaks
-	 * it).  The happy path falls through call fe_iszero straight
-	 * into .Ld2 — eax from fe_iszero IS the return value.  The
-	 * old 5 B rel32 trampoline + 2 B end-jmp are both gone; only
-	 * this 4 B xor+jmp is added.  −5 B. */
+	/* bc_v1 fail: fall through into .Lf2.  Every other fail
+	 * (length checks, 0x04 check) reaches .Lf2 as rel8 from
+	 * here.  .Lf2's own jmp to .Ld2 is near the rel8 edge —
+	 * a byte or two of growth between here and .Ld2 blows it. */
 	jnc	1f
 .Lf2:	xor	eax, eax
 	jmp	.Ld2
 1:
-	/* bc_v1 now also ran the two Nmuls (u1,u2 in 13,14).  Hash
-	 * decode was done pre-bc_v1 into slot 14.  rbx = &slot13
-	 * from the early stockpile — bc_run pushed/popped it.
-	 * NO cond_sub: e might be ≥ n but Nmul computes e·s⁻¹ mod n
-	 * regardless — (a·b) mod n is right for any a < 2^256. */
+	/* bc_v1 also ran INV + the two Nmuls (u1,u2 now in 13,14).
+	 * NO cond_sub of the hash: e might be ≥ n but Nmul computes
+	 * e·s⁻¹ mod n correctly for any a < 2^256. */
 
-	/* Shamir setup: G.xy → 16-17, Q.xy backup → 18-19.  slots
-	 * 2,3,4,5 are already G.x,G.y,Q.x,Q.y (Montgomery) — G was
-	 * loaded pre-bc_v1, Q was to-Mont'd by bc_v1, and nothing
-	 * since (inv_m/hash/cond_sub/bc_v2) has touched any of them.
-	 * Slots 16-19 are contiguous too.  One 16-qword copy.  −9 B.
-	 * rcx=0: bc_v1's last op is Nmul → fe_mul_m → fe_sub_raw dec-to-0. */
+	/* Shamir setup: slots 2-5 → slots 16-19 (G.xy + Q.xy backup).
+	 * Slots 2,3 hold G (block-copied pre-bc_v1, never written by
+	 * bc_v1); slots 4,5 hold Q (bc_v1's Fmul(x,1) copy ops).  One
+	 * 16-qword rep movsq.  rbx = &slot13 from the stockpile.
+	 * rcx=0: bc_v1's last op is Nmul → fe_mul_m → .Lop3 exit. */
 	lea	rdi, [rbx+96]       /* slot 16 = slot 13 + 96: disp8 */
 	mov	rsi, r15            /* slot 2 */
 	mov	cl, 16
 	rep	movsq               /* slots 2-5 → 16-19 in one go */
 
-	/* rbx = &slot13 already (stockpile) — pt_mul reads it directly. */
-	call	pt_mul              /* acc = u1·G + u2·Q */
+	/* rbx = &slot13 (stockpile) — pt_mul reads u1/u2 from it. */
+	call	pt_mul              /* acc (slots 0-2) = u1·G + u2·Q */
 
-	/* bc_v3 projective check.  diff2 = diff1 − n·z² via MULCN+Fsub
-	 * (same as diff1 + (p−n)·z² via Fadd but no native p−n). */
+	/* bc_v3: projective check.  See bc_v3 header. */
 	push	obc_v3
 	pop	rdi
 	call	bcrun_r14
@@ -974,7 +857,6 @@ tv_ecdsa_p256_verify_asm:
 .Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
 	pop	r15
 	pop	r14
-	pop	r12
 	pop	rbx
 	ret
 
