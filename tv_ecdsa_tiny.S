@@ -162,15 +162,42 @@ bc_add2:
 	.byte 0x03,0x38, 0x30,0x37, 0x93,0x13, 0x00,0x00
 
 /* Opcode renumbering after op4 (Fto_mont) was absorbed into Fmul:
- * R² is copied to slot 11 by verify's 16-qword block copy, so a to-
- * Montgomery conversion is just Fmul with s2=0xb.  op5/6/7/8 shift
- * down to 4/5/6/7; jump table drops one entry. */
+ * cBM removed (−32 B): B is derived from G at runtime.  G is a
+ * known point on the curve, so B = Gy² − Gx³ + 3·Gx (mod p) must
+ * equal the curve's B.  Seven ops (14 B) compute it into slot 10
+ * right after the to-Mont conversions.  G lives in slots 2,3 (loaded
+ * by verify just before the block copy) — both slots survive bc_v1
+ * unwritten (only 0,1,4,5,6 are dst slots here).
+ *
+ * Block copy is now 12 qwords: cN→8, cP→9, cR2P→10.  to-Mont ops
+ * use s2=0xa (R² in slot 10, was 0xb); after the 3 to-Mont ops
+ * R² is dead and slot 10 is reused for B. */
 bc_v1:
 	.byte 0x06,0xc0, 0x05,0xc8, 0x06,0xd0, 0x05,0xd8
-	.byte 0x05,0x09, 0x05,0x19, 0xb0,0x40, 0xb0,0x51
-	.byte 0xb0,0x6f, 0x51,0x05, 0x41,0x14, 0x40,0x11
-	.byte 0x43,0x11, 0x43,0x11, 0x43,0x11, 0xa2,0x11
-	.byte 0x13,0x00, 0x07,0x00, 0x00,0x00
+	.byte 0x05,0x09, 0x05,0x19, 0xa0,0x40, 0xa0,0x51
+	.byte 0xa0,0x6f
+	/* B-derive: slots 2=Gx, 3=Gy (Montgomery).  Fadd's handler
+	 * uses slot 3 as scratch — so no Fadd here, or Gy is trashed
+	 * before the Shamir copy reads it.  Factor as Gy² − (Gx³ − 3Gx)
+	 * using three Fsubs instead.  Fsub (.Lop3) writes only dst. */
+	.byte 0x21,0xa2            /* slot10 = Gx²           (SQR) */
+	.byte 0x20,0xaa            /* slot10 = Gx·slot10=Gx³ (Fmul)*/
+	.byte 0x23,0xaa            /* slot10 -= Gx           (Fsub)*/
+	.byte 0x23,0xaa            /* slot10 -= Gx           (Fsub)*/
+	.byte 0x23,0xaa            /* slot10 -= Gx  (= Gx³−3Gx)    */
+	.byte 0x31,0x73            /* slot7  = Gy²           (SQR) */
+	.byte 0xa3,0xa7            /* slot10 = Gy²−slot10 = B(Fsub)*/
+	/* Curve check: the original `0xa2,0x11` (slot1 += B, Fadd)
+	 * would clobber slot 3 via Fadd's scratch — but G.y is still
+	 * there for the Shamir copy.  Refactor as two Fsubs instead:
+	 *   slot0 = Qy² − B; slot0 = slot0 − (Qx³−3Qx)
+	 * = Qy² − B − Qx³ + 3Qx = −(curve residual).  Nonzero iff
+	 * off-curve, so the same op7 check works.  Fsub is safe. */
+	.byte 0x51,0x05, 0x41,0x14, 0x40,0x11
+	.byte 0x43,0x11, 0x43,0x11, 0x43,0x11
+	.byte 0xa3,0x00            /* slot0 = Qy² − B        (Fsub)*/
+	.byte 0x13,0x00            /* slot0 -= (Qx³−3Qx)     (Fsub)*/
+	.byte 0x07,0x00, 0x00,0x00
 
 .equ obc_dbl,  0
 .equ obc_v2,   bc_v2   - bc_dbl
@@ -618,7 +645,7 @@ cGYM:	.quad 0xddf25357ce95560a, 0x8b4ab8e4ba19e45c
 /* .Ljt + constants in one block so handlers can address constants via
  * [r14+disp8] instead of 7-byte rip-relative leas.  r14 = .Ljt inside
  * bc_run; handlers run before fe_mul_m's push r14 overwrites it.
- * cN→cP→cBM→cR2P adjacency is load-bearing (verify's rep movsq). */
+ * cN→cP→cR2P adjacency is load-bearing (verify's 12-qword rep movsq). */
 /* 8 entries.  The old Fto_mont opcode was just Fmul with a hardcoded
  * s2 = &R²; now that verify copies R² into slot 11, Fto_mont is
  * literally Fmul with s2=0xb in the bytecode and needs no handler.
@@ -634,8 +661,6 @@ cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
 	.quad 0xffffffffffffffff, 0xffffffff00000000
 cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 	.quad 0x0000000000000000, 0xffffffff00000001
-cBM:	.quad 0xd89cdf6229c4bddf, 0xacf005cd78843090
-	.quad 0xe5a220abf7212ed6, 0xdc30061d04874834
 cR2P:	.quad 0x0000000000000003, 0xfffffffbffffffff
 	.quad 0xfffffffffffffffe, 0x00000004fffffffd
 
@@ -808,14 +833,19 @@ tv_ecdsa_p256_verify_asm:
 	mov	r15, rdi            /* = slot 2; cheaper than lea from r14 */
 	lea	r12, [rip+cN]
 
-	lea	rdi, [r13-128]       /* slot 8 via r13: disp8 */
+	/* G → slots 2,3 (rdi already there).  bc_v1 reads these to
+	 * derive B; it never writes slot 2 or 3 so G survives to the
+	 * Shamir setup, where it's copied to slots 16-17 from here
+	 * instead of from cGXM.  rcx=0 from fe_from_be.  +10 B. */
+	lea	rsi, [r12-80]       /* cGXM */
+	mov	cl, 8
+	rep	movsq               /* rdi → slot 4, rcx → 0 */
+
+	sub	rdi, -128           /* slot 4 + 128 = slot 8 */
 	mov	rsi, r12
-	/* 16-qword copy: cN→slot8, cP→slot9, cBM→slot10, cR2P→slot11.
-	 * Slot 11 is never read during bc_v1 (only written later by
-	 * bc_dbl), so the R² living there lets the to-Montgomery ops
-	 * be plain Fmul with s2=0xb — no Fto_mont handler.
-	 * rcx=0 from fe_from_be_next above (loop counts to 0).  −1 B. */
-	mov	cl, 16
+	/* 12-qword copy: cN→8, cP→9, cR2P→10.  cBM is gone — B is
+	 * derived in bc_v1 from G.  to-Mont ops use s2=0xa now. */
+	mov	cl, 12
 	rep	movsq
 
 	push	obc_v1
@@ -866,9 +896,11 @@ tv_ecdsa_p256_verify_asm:
 	 * slot 6 = Mont(1) is never written by bc_dbl/add — it serves as
 	 * z for BOTH G and Q, so only X,Y (8 qwords) need swapping.
 	 * slot 15 must stay untouched (bc_v3 reads it as `one`).
-	 * rcx=0: bc_v2 ends in Nmul → fe_mul_m → fe_sub_raw dec-to-0. */
+	 * rcx=0: bc_v2 ends in Nmul → fe_mul_m → fe_sub_raw dec-to-0.
+	 * G source is slot 2 (=r15) — it was loaded pre-bc_v1 and
+	 * nothing since has touched slots 2,3.  −2 B vs [r12-80]. */
 	lea	rdi, [rbx+96]       /* slot 16 = slot 13 + 96: disp8 now */
-	lea	rsi, [r12-80]       /* cGXM */
+	mov	rsi, r15            /* slot 2 = G (loaded before bc_v1) */
 	mov	cl, 8
 	rep	movsq               /* G.xy → slot 16-17; rdi now &slot18, rcx=0 */
 	lea	rsi, [r15+64]       /* slot 4 = Q.xy */
