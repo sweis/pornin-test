@@ -316,16 +316,19 @@ fe_mul_m:
 	add	r11, 4
 	jnz	.Lm
 
-	lea	r9, [rsp+32]        /* &t[8] */
-.Lr:	mov	ebx, [r9+32]        /* q = t[j+8] — NOT cleared */
+	/* rdi as window pointer (no REX on [rdi+32]); push/pop around
+	 * mul8's +32 advance.  −2 B vs r9.  */
+	lea	rdi, [rsp+32]       /* &t[8] */
+.Lr:	mov	ebx, [rdi+32]       /* q = t[j+8] — NOT cleared */
 	test	ebx, ebx
 	jz	4f
-	mov	rdi, r9
+	push	rdi
 	mov	rsi, r8             /* m */
-	mul8	sub                 /* t[j..j+8] -= q·m */
+	mul8	sub                 /* t[j..j+8] -= q·m; rdi += 32 */
+	pop	rdi
 	jmp	.Lr
-4:	sub	r9, 4
-	cmp	r9, rsp
+4:	sub	rdi, 4
+	cmp	rdi, rsp
 	jae	.Lr
 	/* t[0..7] < 2^256, possibly ≥ m.  t[8] = 0. */
 
