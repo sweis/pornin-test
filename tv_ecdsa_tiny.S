@@ -27,8 +27,7 @@
  *   stack slots × 32 B.  Interpreter hoists &cP into rcx and &.Ljt
  *   into r14; handlers address constants at [r14+disp8] instead of
  *   7-B rip-relative.  Jump-table offsets stored as single bytes
- *   — assert every handler is within 255 B of .Ljt (see .if
- *   after .Lop8).
+ *   — every handler must be within 255 B of .Ljt (.Lop8 is last).
  *
  *   Shamir's trick: one 256-bit walk computes u1·G + u2·Q.  Per
  *   iteration: double; if u2 bit, add Q (resident in slot 4-5);
@@ -579,11 +578,11 @@ pt_mul:
  * safe because checks always run before the copy.
  *
  * cGX/cGY between .Ljt and handlers push handler offsets up by
- * 64 B — .Lop8 is the furthest, asserted < 256 below. */
+ * 64 B — .Lop8 (fe_inv_m) is the furthest. */
 .Ljt:
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
 	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
-	.byte	.Lop8-.Ljt  /* INV (slot-based, only mod-n now) */
+	.byte	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only */
 	.byte	.Lop9-.Ljt  /* MULCN: Fmul with b = cN (.text) */
 
 cGX:	.quad 0xf4a13945d898c296, 0x77037d812deb33a0
@@ -606,8 +605,9 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 .if (cN - cGX) - 64
 .error "cGX..cN spacing changed — verify's 16-qword block copy depends on cGX,cGY,cN,cP contiguous"
 .endif
-/* .Lop8 overflow assertion is after .Lop8 definition (needs
- * backward ref for gas .if). */
+/* Jump-table offsets fit in u8: .Lop8 is furthest; no assert
+ * (gas .if can't forward-ref) — `.byte` truncation at .Ljt will
+ * produce wrong bytes, not a build error, if it ever overflows. */
 
 /* fe_geq inlined.  Compare [rdi] ≥ [rsi] limb-by-limb from the
  * top; loopz falls out on first mismatch with cmp's CF live. */
