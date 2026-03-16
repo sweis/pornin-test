@@ -249,9 +249,10 @@ muladd4:
 	adc	QWORD PTR [r9+40], 0
 	ret
 
-/* .Lfm falls through into fe_mul_m. */
+/* .Lfm falls through into fe_mul_m.  r8 (m0i) is set once by
+ * fe_inv_m at entry and survives every fe_mul_m call (looped
+ * muladd4 never touches r8; fe_mul_m's body only reads it). */
 .Lfm:	mov	rcx, r14
-	mov	r8, r15
 	/* FALLTHROUGH */
 /* fe_mul_m(r,a,b,m,m0i): Montgomery mul, CIOS — advancing-pointer form.
  *
@@ -265,13 +266,14 @@ fe_mul_m:
 	push	r12
 	push	r13
 	push	r14
-	push	r15
 
 	mov	r12, rdi            /* r */
 	mov	r10, rdx            /* b — stays in reg */
 	mov	r13, rcx            /* m */
-	mov	r14, r8             /* m0i */
-	mov	r15, rsi            /* a */
+	/* m0i stays in r8 — looped muladd4 doesn't touch it.  `a` in
+	 * r14 (was r15; r15 now unused in both fe_mul_m and fe_inv_m
+	 * so .Lepi4 drops one pop: −6 B combined). */
+	mov	r14, rsi            /* a */
 
 	/* Allocate + zero t[0..8] in one go: push rax×9 decrements rsp
 	 * by 72 and writes zeros.  11 B vs 18 B for sub + dec-loop.
@@ -287,11 +289,11 @@ fe_mul_m:
 	mov	r9, rsp
 	push	-32
 	pop	r11
-.Lm:	mov	rdx, [r15+r11+32]
+.Lm:	mov	rdx, [r14+r11+32]
 	mov	rsi, r10
 	call	muladd4
 	mov	rdx, [r9]           /* t[0] — muladd4 wrote it */
-	imul	rdx, r14
+	imul	rdx, r8
 	mov	rsi, r13
 	call	muladd4             /* r8 = 0 by CIOS — discarded */
 	add	r9, 8               /* advance: old t[1] is new t[0] */
@@ -316,7 +318,6 @@ fe_mul_m:
 2:
 	add	rsp, 72
 .Lepi4:
-	pop	r15
 	pop	r14
 	pop	r13
 	pop	r12
@@ -330,7 +331,6 @@ fe_inv_m:
 	push	r12
 	push	r13
 	push	r14
-	push	r15
 	push	rbx
 	/* enter 32,0 pushes rbp too (−3 B at epilogue via leave; +0 B
 	 * here — 4 B vs sub rsp,32's 4 B).  rbp is never read in the
@@ -341,7 +341,7 @@ fe_inv_m:
 	mov	r12, rdi
 	mov	r13, rsi
 	mov	r14, rdx
-	mov	r15, rcx
+	mov	r8, rcx             /* m0i — survives fe_mul_m; r15 now unused here */
 
 	mov	rdi, rsp
 	mov	rsi, r14
