@@ -84,7 +84,7 @@ FAST = [
     (1140, 6300, None),   # H-check bytecode
     (1136, 6300, None),   # push/pop
     (1124, 6300, None),   # cGX block merge
-    (1105, 6186, "SIZE FLOOR\n1105B (SMALL_MUL8)"),  # bt-on-cN, loop+scasd
+    (1105, 6186, None),   # SMALL_MUL8 — dominated by Thomas v2 now
     # --- Pareto pivot: loop→dec+jnz in mul8. +12B but halves cycles.
     # This point DOMINATES THOMAS on both axes. ---
     (1117, 2996, None),   # 3049/1883*1850 — CLAUDE star
@@ -99,15 +99,15 @@ def pareto(pts):
     front.sort(key=lambda i: pts[i][0])
     return front
 
-# External reference — DOMINATED by (1117, 2996) on both axes.
-# Still drawn as a reference marker but no longer on the frontier.
-THOMAS = (1156, 3600, "Thomas\n1156B, 1.95")
-CLAUDE = (1117, 2996, "Claude\n1117B, 1.62")  # dominates Thomas
-TARGET = 1024
+# Thomas v1 (1156B/1.95) is dominated by OUR 1117B AND by his own v2.
+# Thomas v2 (1046B/3.99M) dominates our SMALL_MUL8 (1105B/6.19M) —
+# he reclaimed the size corner.  But our 1117B stays Pareto: faster.
+THOMAS_V1 = (1156, 3600, "Thomas v1\n1156B, 1.95")
+THOMAS    = (1046, 3990, "Thomas v2\n1046B, 2.16")   # new size record
+CLAUDE    = (1117, 2996, "Claude\n1117B, 1.62")       # Pareto: faster
+TARGET    = 1024
 
-# Frontier: compute over OUR points only now — Thomas is dominated.
-
-ALL_PTS = FAST + [THOMAS]
+ALL_PTS = FAST + [THOMAS, THOMAS_V1]
 FRONT = pareto(ALL_PTS)
 
 # ======================================================================
@@ -139,24 +139,31 @@ ax.plot(px, py, '-', color='#c41e3a', linewidth=2.5, zorder=4,
 ax.scatter(px, py, c='#c41e3a', s=120, marker='D',
            edgecolors='#7a1225', linewidths=1.2, zorder=5)
 
-# Thomas marker (star overlays the frontier diamond)
+# Thomas v2 marker — holds the size corner now.
 tb, tc, _ = THOMAS
 ax.scatter([tb], [tc], c='#2e8b57', s=250, marker='*',
            edgecolors='#1a5235', linewidths=1.5, zorder=6,
-           label=f'Thomas ({tb}B, {tc/1000:.1f}M cyc)')
-ax.annotate(f'Thomas\n{tb}B, ratio {tc/1850:.2f}\n(dominated)',
+           label=f'Thomas v2 ({tb}B, {tc/1000:.1f}M cyc)')
+ax.annotate(f'Thomas v2\n{tb}B, ratio {tc/1850:.2f}',
             (tb, tc), textcoords="offset points", xytext=(14, -6),
             fontsize=10, fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.4', fc='#e8f0e8',
-                      ec='#888', lw=1))
+            bbox=dict(boxstyle='round,pad=0.4', fc='#d4f4dd',
+                      ec='#2e8b57', lw=1))
+# Thomas v1 — dominated by both v2 and our 1117B.  Small gray marker.
+t1b, t1c, _ = THOMAS_V1
+ax.scatter([t1b], [t1c], c='#aaa', s=80, marker='*', zorder=3)
+ax.annotate(f'Thomas v1\n(dominated)', (t1b, t1c),
+            textcoords="offset points", xytext=(10, 4), fontsize=8,
+            color='#888')
 
-# Claude marker — DOMINATES Thomas (smaller AND faster).
+# Claude marker — Pareto-optimal: faster than Thomas v2, but v2 is
+# smaller.  Neither dominates.
 cb, cc, _ = CLAUDE
 ax.scatter([cb], [cc], c='#e07000', s=250, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
            label=f'Claude ({cb}B, {cc/1000:.1f}M cyc)')
-ax.annotate(f'Claude\n{cb}B, ratio {cc/1850:.2f}\nDOMINATES Thomas',
-            (cb, cc), textcoords="offset points", xytext=(-150, -8),
+ax.annotate(f'Claude\n{cb}B, ratio {cc/1850:.2f}',
+            (cb, cc), textcoords="offset points", xytext=(14, -22),
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.4', fc='#ffe4c4',
                       ec='#e07000', lw=1))
