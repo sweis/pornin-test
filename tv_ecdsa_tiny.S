@@ -1,7 +1,7 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 999 B default build; 979 B with -DSMALL_MUL8 (~2× cycles).
+ * 989 B default build; 969 B with -DSMALL_MUL8 (~2× cycles).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -38,7 +38,7 @@
  *   in a u8 jump table right before the constants — &cP and &cN
  *   are disp8-reachable from r14 (= &.Ljt).  .Lop8 (fe_inv_m, the
  *   biggest handler) lands at offset 255/255 — zero headroom, but
- *   it fits.  Three streams: bc_rcb (88B), bc_v3 (16B), bc_v1 (58B).
+ *   it fits.  Three streams: bc_rcb (88B), bc_v3 (16B), bc_v1 (60B).
  *
  * KEY INVARIANTS
  *
@@ -199,6 +199,12 @@ bc_v1:
 	.byte 0xf0,0x50            /* slot5 = Qx·1 = Qx             */
 	.byte 0xf0,0x61            /* slot6 = Qy·1 = Qy             */
 	.byte 0xf0,0x7f            /* slot7 = 1·1 = 1  (Q-backup Z) */
+	/* slot0 = 1 for fe_inv_m: loop starts r=1 at bit 255 instead
+	 * of r=a at bit 254 (bit 255 of n−2 is 1, so first iter gives
+	 * r=1²·a=a — same state, one iter later).  +2 B here; drops
+	 * rep movsq + r8 save/restore in fe_inv_m = −12 B.  Qx already
+	 * safe in slot5. */
+	.byte 0xf0,0x0f            /* slot0 = 1·1 = 1  (fe_inv_m seed) */
 	.byte 0x07,0x0d            /* INV (op7): slot0 = s⁻¹ mod n    */
 	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
 	.byte 0x04,0xec            /* slot14 = slot12·slot0 = r·s⁻¹ = u2 */
@@ -664,42 +670,37 @@ Fadd:	push	rdi
  * Called only from bc_v1 (op 8), mod-n only — mod-p inversion was
  * eliminated by the projective final check. */
 .Lop8:
-/* fe_inv_m: r = a^(n-2) mod n (Fermat).  NO EXPONENT BUFFER.
+/* fe_inv_m: r = a^(n-2) mod n (Fermat).  NO EXPONENT BUFFER, NO
+ * SEED COPY.  Caller (bc_v1) puts 1 in dst first; loop starts at
+ * bit 255 instead of 254 — bit 255 of n−2 is 1 (top byte 0xFF),
+ * so first iter gives r = 1² · a = a, identical to the old start
+ * state one iteration later.  Drops rep movsq (9 B) + the r8
+ * save/restore pair (6 B): fe_mul_m does NOT preserve rdi (.Lop3's
+ * add-back path advances it), so each call is bracketed by push
+ * rdi/pop rdi instead — 2 B per bracket, already present at .Le,
+ * +2 B at .Lmul.  Net −12 B.
  *
  * n and n−2 differ only in bits 1-4 (low byte 0x51 vs 0x4F — a
- * four-bit borrow cascade, no borrow into byte 1).  So: bt
- * directly on cN in .text and special-case ebx<5.
- *   ebx ∈ {0,1,2,3}: force mul (n−2 bits 0-3 = 1111; n bit 0 is
- *                    also 1 so the ebx=0 force is redundant-correct)
+ * four-bit borrow cascade, no borrow into byte 1).  bt directly
+ * on cN in .text and special-case ebx<5:
+ *   ebx ∈ {0,1,2,3}: force mul (n−2 bits 0-3 = 1111)
  *   ebx == 4:        force skip (n bit4=1 but n−2 bit4=0)
  *   ebx ≥ 5:         n and n−2 agree — bt on cN is exact.
  *
- * Loop counter in rbx (callee-saved, survives .Lfm).  dst in r8
- * (fe_mul_m doesn't touch it).  src pushed to [rsp].  r14 = .Ljt
- * (bc_run's hoist — fe_mul_m doesn't touch that either). */
+ * Loop counter in rbx (callee-saved, survives .Lfm).  src at
+ * [rsp].  r14 = .Ljt (bc_run's hoist — fe_mul_m doesn't touch). */
 fe_inv_m:
 	push	rbx
-	push	rsi                 /* src → [rsp] for the loop */
-	mov	r8, rdi             /* dst — survives fe_mul_m */
-
-	/* rdi,rsi still hold dst,src.  rcx = &cP (decoder preload),
-	 * not 0, so push/pop not mov cl. */
-	push	4
-	pop	rcx
-	rep	movsq               /* dst ← src.  rcx=0 after. */
-
+	push	rsi                 /* src → [rsp] */
 	xor	ebx, ebx
-	mov	bl, 254
-.Le:	mov	rdi, r8
-	push	rdi                 /* stash across .Lfm (balances stack too) */
+	mov	bl, 255
+.Le:	push	rdi
 	push	rdi
-	push	rdi
+	push	rdi                 /* 3rd push = rdi-preserve across .Lfm */
 	pop	rdx
 	pop	rsi
 	call	.Lfm
-	pop	rdi
-	/* Bits 0-4 special: n=…10001, n-2=…01111 in the low nibble+1.
-	 * jb catches 0-3 (force mul), je catches 4 (force skip). */
+	pop	rdi                 /* fe_mul_m may leave rdi at dst+32 */
 	cmp	ebx, 4
 	jb	.Lmul
 	je	.Lnx
@@ -707,11 +708,13 @@ fe_inv_m:
 	jnc	.Lnx
 .Lmul:	push	rdi
 	pop	rsi
-	mov	rdx, [rsp]          /* src; rsp stable between iterations */
+	pop	rdx                 /* src from prologue push; 2B vs 4B mov[rsp] */
+	push	rdx                 /* keep it there for next iter */
+	push	rdi                 /* preserve rdi across this .Lfm too */
 	call	.Lfm
+	pop	rdi
 .Lnx:	dec	ebx
 	jns	.Le
-
 	pop	rcx                 /* discard src */
 	pop	rbx
 	ret
