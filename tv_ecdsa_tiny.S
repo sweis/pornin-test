@@ -1,7 +1,7 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 1032 B default build; 1012 B with -DSMALL_MUL8 (~2× cycles).
+ * 1005 B default build; 985 B with -DSMALL_MUL8 (~2× cycles).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -42,8 +42,8 @@
  *
  * KEY INVARIANTS
  *
- *   RCB NEVER WRITES slots 4,5,6,10.  pt_mul relies on this: the
- *   addend (4-6) stays put across the call (no Q-restore needed),
+ *   RCB NEVER WRITES slots 5,6,7,10.  pt_mul relies on this: the
+ *   addend (5-7) stays put across the call (no Q-restore needed),
  *   and b (slot 10, derived by bc_v1) survives all 256 iterations.
  *
  *   ∞ = (0:1:0), NOT (0:0:0).  RCB on (0:0:0)+Q gives (0:0:0),
@@ -101,13 +101,20 @@
  * operation — just copy acc into the addend slots first.
  *
  * SLOT LAYOUT:
- *   Inputs:   P=(X1,Y1,Z1) in 0,1,2.  Q=(X2,Y2,Z2) in 4,5,6.
+ *   Inputs:   P=(X1,Y1,Z1) in 0,1,2.  Q=(X2,Y2,Z2) in 5,6,7.
  *             b (curve constant) in slot 10.
  *   Output:   P+Q in slots 0,1,2.
- *   READ-ONLY: slots 4,5,6,10.  Load-bearing — pt_mul relies on
+ *   READ-ONLY: slots 5,6,7,10.  Load-bearing — pt_mul relies on
  *             Q/G being preserved across the call, and b must
  *             survive 256 iterations.
- *   Scratch:  7,8,9,11,15 (permanent) + 3 (transient).
+ *   Scratch:  4,8,9,11,15 (permanent) + 3 (transient).
+ *
+ * WHY 5,6,7 NOT 4,5,6:  bc_v1 lays out slots 2..7 as Gx,Gy,1,Qx,
+ * Qy,1 — so verify's Shamir backup is ONE 24-qword rep movsq
+ * (slots 2-7 → 16-21) instead of three separate copies.  The
+ * addend slot shift is a pure nibble relabeling (4→5,5→6,6→7,7→4
+ * cycle); t0 moves from slot 7 to slot 4.  Zero byte cost here;
+ * Shamir setup drops 18 B.
  *
  * The slot-3 trick: the formula needs 6 live temporaries at once
  * (step 10), but we only have 5 permanent scratch slots.  Slot 3
@@ -119,15 +126,15 @@
  * clobber.  Tight but verified by exhaustive Python simulation
  * against the affine reference for all edge cases. */
 bc_rcb:
-	.byte 0x40,0x70, 0x50,0x81, 0x60,0x92, 0x12,0xb0, 0x52,0xf4
-	.byte 0xf0,0xbb, 0x82,0xf7, 0xf3,0xbb, 0x22,0xf1, 0x62,0x35
-	.byte 0x30,0xff, 0x92,0x38, 0x33,0xff, 0x62,0x14, 0x22,0x30
-	.byte 0x10,0x03, 0x92,0x17, 0x13,0x10, 0xa0,0x29, 0x23,0x01
+	.byte 0x50,0x40, 0x60,0x81, 0x70,0x92, 0x12,0xb0, 0x62,0xf5
+	.byte 0xf0,0xbb, 0x82,0xf4, 0xf3,0xbb, 0x22,0xf1, 0x72,0x36
+	.byte 0x30,0xff, 0x92,0x38, 0x33,0xff, 0x72,0x15, 0x22,0x30
+	.byte 0x10,0x03, 0x92,0x14, 0x13,0x10, 0xa0,0x29, 0x23,0x01
 	.byte 0x02,0x20, 0x22,0x00, 0x03,0x28, 0x02,0x08, 0xa0,0x11
-	.byte 0x92,0x89, 0x92,0x98, 0x93,0x11, 0x73,0x11, 0x12,0x81
-	.byte 0x12,0x18, 0x72,0x87, 0x72,0x78, 0x93,0x77, 0x10,0x8f
-	.byte 0x10,0x97, 0x20,0x10, 0x92,0x11, 0x00,0x0b, 0x83,0x00
-	.byte 0x20,0x2f, 0x70,0x8b, 0x82,0x22
+	.byte 0x92,0x89, 0x92,0x98, 0x93,0x11, 0x43,0x11, 0x12,0x81
+	.byte 0x12,0x18, 0x42,0x84, 0x42,0x48, 0x93,0x44, 0x10,0x8f
+	.byte 0x10,0x94, 0x20,0x10, 0x92,0x11, 0x00,0x0b, 0x83,0x00
+	.byte 0x20,0x2f, 0x40,0x8b, 0x82,0x22
 	.byte 0x00,0x00
 
 /* bc_v3: PROJECTIVE CHECK — homogeneous coords (x=X/Z, not X/Z²).
@@ -144,27 +151,27 @@ bc_v3:
 	.byte 0x16,0x30            /* check slot3 nonzero (op6 s2=1)  */
 	.byte 0x00,0x00
 
-/* bc_v1: range checks + curve check + s⁻¹ + u1,u2.
+/* bc_v1: range checks + curve check + Shamir staging + s⁻¹ + u1,u2.
  *
  * Q in slots 0,1; G in slots 2,3; cN,cP temporarily in 4,5
- * (block-copied, read by the checks, then overwritten by Q-copy).
- *
- * Slots 4,5 get Qx,Qy via Fmul(x, slot15=1) = x — a 2-B copy.
- * Slot 6 = 1 via 1·1 (addend's Z for RCB).
+ * (block-copied, read by the checks, overwritten later).
  *
  * Curve constant b is derived from G (b = Gy² − Gx³ + 3·Gx).
  * slot 10 holds b THROUGHOUT pt_mul — RCB reads it, never writes.
- * Curve check uses slots 7,11 as scratch so 0,1,4,5 survive for
- * the Shamir copy.  No Fadd anywhere — Fadd clobbers slot 3 (Gy). */
+ * No Fadd anywhere — Fadd clobbers slot 3 (Gy).
+ *
+ * SHAMIR STAGING (runs after curve check, before INV): four copy
+ * ops lay slots 4-7 out as  1, Qx, Qy, 1.  Combined with G at
+ * slots 2,3, verify sees slots 2-7 = Gx,Gy,1,Qx,Qy,1 — exactly
+ * the backup layout pt_mul wants.  One 24-qword rep movsq.
+ * Must run AFTER curve check (which clobbers slot 7) and BEFORE
+ * INV (which clobbers slot 0 = Qx). */
 bc_v1:
 	/* Range/zero checks.  cN/cP in slots 4,5 (block-copied). */
 	/* checkzero-s DROPPED: s=0 → INV gives 0 → u1=u2=0 → ladder
 	 * never adds → R=∞ → bc_v3's checkzero(Z) catches it.  −2 B. */
 	.byte 0x06,0xc0, 0x05,0xc4,            0x05,0xd4
 	.byte 0x05,0x05, 0x05,0x15
-	.byte 0xf0,0x40            /* slot4 = Qx·1 = Qx  (copy)    */
-	.byte 0xf0,0x51            /* slot5 = Qy·1 = Qy  (copy)    */
-	.byte 0xf0,0x6f            /* slot6 = 1·1 = 1    (addend Z)*/
 	/* b-derive: G in 2,3.  slot10 = b (survives pt_mul — RCB
 	 * reads slot 10 for the b multiplications, never writes). */
 	.byte 0x21,0xa2            /* slot10 = Gx²           (SQR) */
@@ -174,8 +181,8 @@ bc_v1:
 	.byte 0x23,0xaa            /* slot10 -= Gx (=Gx³−3Gx)      */
 	.byte 0x31,0x73            /* slot7  = Gy²           (SQR) */
 	.byte 0xa3,0xa7            /* slot10 = Gy²−slot10 = b(Fsub)*/
-	/* Curve check: scratch in 7,11 so Q(0,1,4,5) and G(2,3)
-	 * survive.  slot7 = Qy²−b−(Qx³−3Qx); nonzero ⇔ off-curve. */
+	/* Curve check: scratch in 7,11 so Q(0,1) and G(2,3) survive.
+	 * slot7 = Qy²−b−(Qx³−3Qx); nonzero ⇔ off-curve. */
 	.byte 0x01,0xb0            /* slot11 = Qx²           (SQR) */
 	.byte 0x00,0xbb            /* slot11 = Qx³           (Fmul)*/
 	.byte 0x03,0xbb            /* slot11 -= Qx           (Fsub)*/
@@ -185,6 +192,13 @@ bc_v1:
 	.byte 0xa3,0x77            /* slot7 -= b             (Fsub)*/
 	.byte 0xb3,0x77            /* slot7 -= slot11        (Fsub)*/
 	.byte 0x16,0x70            /* check slot7 nonzero (op6 s2=1)  */
+	/* Shamir staging: slots 4-7 ← 1,Qx,Qy,1 via Fmul(·, slot15=1).
+	 * Runs after curve check (slot7 now free), before INV (slot0
+	 * still Qx).  This +2 B here saves 18 B in verify.  −16 net. */
+	.byte 0xf0,0x4f            /* slot4 = 1·1 = 1  (G-backup Z) */
+	.byte 0xf0,0x50            /* slot5 = Qx·1 = Qx             */
+	.byte 0xf0,0x61            /* slot6 = Qy·1 = Qy             */
+	.byte 0xf0,0x7f            /* slot7 = 1·1 = 1  (Q-backup Z) */
 	.byte 0x07,0x0d            /* INV (op7): slot0 = s⁻¹ mod n    */
 	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
 	.byte 0x04,0xec            /* slot14 = slot12·slot0 = r·s⁻¹ = u2 */
@@ -388,13 +402,13 @@ fe_from_be:
  * `call bcrun_r14` is still rel32.
  * -------------------------------------------------------------------- */
 /* RCB complete addition handles P+Q, 2P, P−P=∞, ∞+Q uniformly.
- * pt_mul's helper copies src → addend slots (4-6), then dispatches
+ * pt_mul's helper copies src → addend slots (5-7), then dispatches
  * bc_rcb.  Doubling = self-add (src=r14=acc); Q/G adds use 3-slot
  * backups (X,Y,Z=1).  rsi set by caller; rcx=0 on entry (every
  * path: rep movsq above or bc_run epilogue's neg+pops).  rel8 to
  * bcrun_r14 just below. */
 .Lcadd:
-	lea	rdi, [r15+64]       /* addend = slot4 */
+	lea	rdi, [r15+96]       /* addend = slot5 */
 	mov	cl, 12
 	rep	movsq
 	xor	edi, edi            /* obc_rcb = 0 */
@@ -800,21 +814,16 @@ tv_ecdsa_p256_verify_asm:
 	 * NO cond_sub of the hash: e might be ≥ n but Nmul computes
 	 * e·s⁻¹ mod n correctly for any a < 2^256. */
 
-	/* Shamir setup: 3-slot backups for RCB (X,Y,Z=1 each).
-	 * G at slots 16-18, Q at 19-21.  G.xy in slots 2,3 (block
-	 * copy), Q.xyz in slots 4,5,6 (bc_v1 copies + slot6=1).
-	 * G's Z borrowed from slot6.  rcx=0 from bc_v1's last Nmul. */
+	/* Shamir backups: bc_v1 staged slots 2-7 as Gx,Gy,1,Qx,Qy,1
+	 * — exactly the layout pt_mul wants at 16-21.  ONE rep movsq.
+	 * The 3-copy chain (G.xy, borrow G.z, Q.xyz) is gone: the RCB
+	 * addend slot shift (4,5,6 → 5,6,7, free) plus one extra bc_v1
+	 * copy op (+2 B) buys this 18 B drop.  rcx=0 from last Nmul. */
 	push	rbx
 	pop	rdi                 /* slot 16 — 2B vs 3B mov */
 	mov	rsi, r15            /* slot 2 */
-	mov	cl, 8
-	rep	movsq               /* G.xy → 16,17.  rdi=slot18, rsi=slot4. */
-	lea	rsi, [rsi+64]       /* slot6 (slot4+64) */
-	mov	cl, 4
-	rep	movsq               /* slot6 → slot18 (G.z=1).  rdi=slot19. */
-	lea	rsi, [r15+64]       /* slot4 */
-	mov	cl, 12
-	rep	movsq               /* Q.xyz (4,5,6) → 19,20,21. */
+	mov	cl, 24
+	rep	movsq               /* slots 2-7 → 16-21.  rcx → 0. */
 
 	/* rbx = &slot13 (stockpile) — pt_mul reads u1/u2 from it. */
 	call	pt_mul              /* acc (slots 0-2) = u1·G + u2·Q */
