@@ -153,18 +153,16 @@ bc_dbl:
 /* bc_v3: PROJECTIVE CHECK — no mod-p inversion.  Valid iff
  * x mod n == r ⇔ X ≡ r·Z² (mod p) OR X ≡ (r+n)·Z² (mod p).  p is
  * prime → (diff1·diff2 ≡ 0) ⇔ (either ≡ 0).  diff2 = diff1 − n·Z²
- * and n·Z² ≡ −(p−n)·Z² (mod p) so diff2 = diff1 + (p−n)·Z².
- * slot 11 = p−n (native compute post-pt_mul, rbx-64 disp8).
- * slot 7 holds z² (survives Fadd's slot-3 scratch).  First op:
- * R.z==0 (∞) → fail.  Fadd at op 6 has dst=scratch=slot 3 — the
- * write overlays the scratch, works (read-before-write per limb). */
+ * directly via MULCN (b=cN from .text) + Fsub — same result as
+ * diff1 + (p−n)·Z² via Fadd but no native p−n compute (−17 B).
+ * slot 7 holds z².  First op: R.z==0 (∞) → fail. */
 bc_v3:
 	.byte 0x06,0x20            /* checkzero slot2 (R.z): ∞ → fail */
 	.byte 0x21,0x72            /* slot7  = z²                     */
 	.byte 0x70,0xac            /* slot10 = r·z²  (r=slot12)       */
 	.byte 0xa3,0xa0            /* slot10 = X − r·z²       = diff1 */
-	.byte 0x70,0x3b            /* slot3  = (p−n)·z²  (p−n=slot11) */
-	.byte 0x32,0x3a            /* slot3  = diff1 + (p−n)z² = diff2*/
+	.byte 0x09,0x37            /* slot3  = n·z²  (MULCN: b=cN, mod p)*/
+	.byte 0x33,0x3a            /* slot3  = diff1 − n·z² = diff2 (Fsub)*/
 	.byte 0x30,0x3a            /* slot3  = diff1·diff2            */
 	.byte 0x07,0x30            /* check slot3 nonzero → fail      */
 	.byte 0x00,0x00
@@ -312,7 +310,7 @@ fe_sub_raw:
  * (mod-p inversion gone via projective check).  r14 in bc_run
  * context = .Ljt; cN is at r14+9 (9-entry table).  Hardcode the
  * 9 — gas won't pick disp8 for forward-ref oN. */
-.equ	oN_early, 73
+.equ	oN_early, 74
 .Lfm:	lea	rcx, [r14+oN_early]
 	/* FALLTHROUGH */
 /* fe_mul_m(r=rdi, a=rsi, b=rdx, m=rcx).  r = a·b mod m.  32-bit limbs.
@@ -568,7 +566,7 @@ bc_run:
 	 * +4 here, −4 in Fmul, −2 in Fadd.  Fadd now preserves it across
 	 * its own fe_sub_raw.  oP is a forward reference here, so gas
 	 * picks disp32 — hardcode and assert. */
-.equ	oP_early, 105       /* .Ljt(9) + cGX/Y(64) + cN(32) */
+.equ	oP_early, 106       /* .Ljt(10) + cGX/Y(64) + cN(32) */
 	lea	rcx, [r14+oP_early]
 	call	rax
 	jmp	.Lbc
@@ -673,6 +671,7 @@ pt_mul:
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
 	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
 	.byte	.Lop8-.Ljt  /* INV (slot-based, only mod-n now) */
+	.byte	.Lop9-.Ljt  /* MULCN: Fmul with b = cN (.text) */
 
 cGX:	.quad 0xf4a13945d898c296, 0x77037d812deb33a0
 	.quad 0xf8bce6e563a440f2, 0x6b17d1f2e12c4247
@@ -716,6 +715,14 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 .Lor:	or	bpl, al
 	ret
 /* .Lop8 (INV) is fe_inv_m itself — moved to after .Lop3.  −5 B. */
+/* MULCN: Fmul with b = &cN (.text) instead of a slot.  bc_v3 uses
+ * this to compute n·z² directly — diff2 = diff1 − n·z² (mod p) via
+ * Fsub is the same as diff1 + (p−n)·z² via Fadd.  Drops verify's
+ * 17-B native p−n compute.  rdx override, then short-jmp to Fmul
+ * (rcx stays &cP from decoder).  6 B + 1 B table = 7 B.  Net −10. */
+.Lop9:
+MULCN:	lea	rdx, [r14+oN]
+	jmp	Fmul                /* rel8; rcx=&cP (mod-p) untouched */
 /* No m0i → Nmul is just a rcx override, Fmul is just the jmp.
  * Decoder preloaded rcx = &cP; Nmul overwrites to &cN then falls
  * through.  −10 B (push 1;pop r8 + mov r8,[rcx-8] + jmp .Lmj). */
@@ -957,18 +964,8 @@ tv_ecdsa_p256_verify_asm:
 	/* rbx = &slot13 already (stockpile) — pt_mul reads it directly. */
 	call	pt_mul              /* acc = u1·G + u2·Q */
 
-	/* p−n into slot 11 natively (no survivor slot through pt_mul —
-	 * 4,5,6 are Q/1, 7 is add1→add2 handoff).  rbx = slot 13 from
-	 * stockpile; slot 11 = rbx−64 disp8.  cP = r12+32, cN = r12. */
-	lea	rdi, [rbx-64]       /* slot 11 */
-	lea	rsi, [r12+32]       /* &cP */
-	mov	rdx, r12            /* &cN */
-	call	fe_sub_raw          /* slot11 = p − n */
-
-	/* bc_v3: projective check — NO mod-p inversion.  ∞-check,
-	 * diff1·diff2 ≡ 0 (mod p) ⇔ valid (p prime → field).  Drops
-	 * native ∞-check (10 B), lea rbx (4 B), 35 B final block.
-	 * Adds 20 B p−n compute + 4 B CF→eax.  Net ~−25 B. */
+	/* bc_v3 projective check.  diff2 = diff1 − n·z² via MULCN+Fsub
+	 * (same as diff1 + (p−n)·z² via Fadd but no native p−n). */
 	push	obc_v3
 	pop	rdi
 	call	bcrun_r14
