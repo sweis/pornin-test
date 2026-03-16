@@ -323,9 +323,15 @@ fe_mul_m:
 	jnz	.Lm
 #endif
 
-	/* REDUCE.  rdi = window pointer (no REX on [rdi+32]).  mul8
-	 * advances rdi — push/pop around it. */
-	lea	rdi, [rsp+32]       /* &t[8] */
+	/* REDUCE.  rdi flowed out of the schoolbook loop at rsp+60
+	 * (SMALL_MUL8: last iter lea=rsp+28, mul8 +32) or rsp+56
+	 * (default: lea=rsp+24, 4×lea+8=+32).  Want rsp+32 = &t[8].
+	 * sub is 4 B vs 5 B for a fresh lea [rsp+32]. */
+#ifdef SMALL_MUL8
+	sub	rdi, 28
+#else
+	sub	rdi, 24
+#endif
 .Lr:	mov	ebx, [rdi+32]       /* q = t[j+8] — NOT cleared */
 	test	ebx, ebx
 	jz	4f
