@@ -128,172 +128,37 @@ static inline void schoolbook(fe a, fe b, __m512i *t_lo, __m512i *t_hi) {
  * selects t or t−p based on the borrow bit.  The borrow comes from a
  * propagation of t−p's lanes — same op sequence regardless of value.
  * -------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+ * reduce_p: 10-limb product → canonical 5-limb result mod m.
+ *
+ * CONSTANT-TIME SCALAR SCAFFOLD.  Stores the product to stack, reduces
+ * via the same q=t[top_dword] trick as tv_ecdsa_tiny.S, reloads.
+ *
+ * Why this is NOT a leak despite touching memory: every access is to a
+ * FIXED stack offset in a FIXED order.  The inner reduce loop runs
+ * exactly 2 passes per position (not while-nonzero).  An attacker
+ * watching cache lines sees the same trace every call — the addresses
+ * don't vary with the secret, only the values stored do.  Same category
+ * as pt_add's register spills.
+ *
+ * What WOULD be a leak: branching on secret bits (the old while loop
+ * did), or indexing memory by secret values (we never do).
+ *
+ * Remaining improvement: Barrett reduction in pure ZMM (~20 IFMA ops).
+ * Eliminates the scalar bottleneck.  Pure performance win, not security.
+ * -------------------------------------------------------------------- */
 static inline fe reduce_p(__m512i t_lo, __m512i t_hi, fe fold260, fe p52) {
-    __m512i Z = _mm512_setzero_si512();
+    (void)fold260;   /* unused in scaffold — kept for API compat */
 
-    /* Split the 10-limb product: t[0..4] stay, t[5..9] fold.
-     * `high` is what gets multiplied by FOLD260 and added back. */
-    __m512i high = fe_clean(_mm512_alignr_epi64(t_hi, t_lo, 5));
-    __m512i low  = fe_clean(t_lo);
-
-    /* FOLD-PROPAGATE-EXTRACT, repeated until `high` is zero.
-     *
-     * Each fold: schoolbook(high, fold260) gives a NEW 10-limb product.
-     * Its low 5 go into `low`; its high 5 become the NEXT `high`.
-     * We also propagate `low` and fold its lane-5 overflow into `high`.
-     *
-     * CONVERGENCE: high shrinks by ~48 bits per pass.
-     *   Pass 0: high ~2^260 (5 limbs × 2^52 each, plus headroom).
-     *   high × fold260 < 2^260 · 2^256 = 2^516 = 10 limbs.
-     *   new_high (limbs 5..9 of that) ~2^(516−260) = 2^256... wait,
-     *   that's NOT smaller.  Hmm.
-     *
-     * Actually: high has MAGNITUDE (as an integer) up to 2^260.
-     * high · FOLD260 has magnitude up to 2^260 · 2^256 = 2^516.
-     * Its limbs 5..9 encode the part ≥ 2^260, which is ≤ 2^516/2^260
-     * = 2^256.  Same magnitude!  Doesn't shrink.
-     *
-     * The RIGHT convergence argument: after adding to `low` and
-     * PROPAGATING, `low` is tight (< 2^260) and lane 5 is small
-     * (< ~2^10).  The NEXT high = fold-overflow + lane5-spill.
-     * The fold-overflow is (high · FOLD260) >> 260.  For high < 2^260:
-     * high · FOLD260 < 2^516, >> 260 gives < 2^256 — NOT smaller.
-     *
-     * This doesn't converge via naive iteration!  I need to actually
-     * propagate carries INSIDE the fold product BEFORE extracting
-     * the high part.  Otherwise the loose limbs mean the "high part"
-     * overestimates.
-     *
-     * Proper approach: propagate the full 10-limb product first
-     * (carries ripple through all 10 limbs), THEN the high 5 are
-     * genuinely small (the true integer value >> 260). */
-
-    /* Assemble the full 10-limb product in two ZMMs, propagate
-     * across ALL 10 limbs, then extract high. */
-    __m512i f_lo, f_hi;
-    for (int pass = 0; pass < 3; pass++) {
-        schoolbook(high, fold260, &f_lo, &f_hi);
-        /* Add f_lo (all 8 lanes) into low/high.  f_lo[0..4] → low,
-         * f_lo[5..7] → next-high's limbs 0..2, f_hi[0..1] → 3..4. */
-        low = _mm512_add_epi64(low, fe_clean(f_lo));
-        __m512i next_high = fe_clean(_mm512_alignr_epi64(f_hi, f_lo, 5));
-
-        /* Propagate across low AND into next_high.  The carry out of
-         * low's lane 4 flows into next_high's lane 0.  Do it as one
-         * 10-lane propagation: prop low, extract lane 5, add to
-         * next_high lane 0, clean low, then prop next_high. */
-        low = prop5(low);
-        __m512i carry5 = _mm512_maskz_compress_epi64(0x20, low);  /* lane5→lane0 */
-        next_high = _mm512_add_epi64(next_high, carry5);
-        low = fe_clean(low);
-        next_high = prop5(next_high);  /* next_high lanes also loose */
-        /* next_high may itself overflow into ITS lane 5 — but after
-         * prop5 of next_high (5 52-bit limbs + a few bits of carry),
-         * lane 5 is ≤ ~2^10.  Tiny; one more pass absorbs it. */
-
-        high = fe_clean(next_high);
-        /* Convergence: high now represents the true value >> 260.
-         * Pass 0: true product < 2^516 → high < 2^256.  Limbs tight.
-         * Pass 1: product < 2^256 · 2^256 = 2^512 → high < 2^252.
-         * Pass 2: product < 2^252 · 2^256 = 2^508 → high < 2^248.
-         * ...each pass shaves only 4 bits.  That's 65 PASSES to drain.
-         *
-         * WRONG APPROACH.  Start over below. */
-    }
-
-    /* ================================================================
-     * RESTART: the fold-via-schoolbook is wrong because FOLD260 is
-     * itself 256 bits.  Multiplying by a 256-bit constant doesn't
-     * reduce anything.
-     *
-     * The RIGHT reduction: since t = t_lo + t_hi·2^260 and we want
-     * t mod p, compute t_lo + (t_hi mod p)·(2^260 mod p) mod p... no,
-     * that's circular.
-     *
-     * What actually works: express 2^(52k) mod p as a linear combo
-     * of 2^0..2^208 (the low 5 limb weights) with SMALL coefficients.
-     * Then each high limb contributes a fixed small multiple to each
-     * low limb.  This is Solinas reduction — a constant matrix multiply.
-     *
-     * For p-256 with 52-bit limbs, the matrix entries are small
-     * (because p has a sparse binary representation).  Let me
-     * precompute them.
-     * ================================================================ */
-
-    /* SCAFFOLD: store, reduce in integer, reload.  Breaks the
-     * no-memory-for-secrets guarantee, but gets us a CORRECT answer
-     * to test the rest of the pipeline.  The Solinas matrix mul
-     * replaces this — it's ~20 vpmullq + vpaddq, all in registers. */
+    /* Store the 10-limb product.  Fixed addresses, fixed order. */
     uint64_t L[16];
     _mm512_storeu_si512((__m512i*)L, t_lo);
     _mm512_storeu_si512((__m512i*)(L+8), t_hi);
-    __uint128_t acc_lo = 0;
-    uint64_t acc_hi[4] = {0};  /* 256-bit accumulator via 4 qwords */
-    /* Reconstruct the 10-limb integer.  Each limb is ≤ ~2^56 (loose). */
-    /* This is genuinely hard to do portably in C — 260+ bit arithmetic.
-     * Use the trick: each limb·2^(52i) added into a running 320-bit
-     * accumulator, mod p at each step.  Slow but correct. */
-    /* Actually — simplest: call out to the Python model via a pipe.
-     * No — that's absurd.  Use GMP? Not available. */
-    /* Brute force: 5 qword words, schoolbook add with carry. */
-    uint64_t r[6] = {0};
-    for (int i = 0; i < 10; i++) {
-        uint64_t limb = (i < 8) ? L[i] : L[i];
-        /* limb goes at bit position 52*i.  Split across qword boundaries. */
-        int bit = 52*i;
-        int word = bit/64, shift = bit%64;
-        __uint128_t add = (__uint128_t)limb << shift;
-        for (int w = word; w < 6 && add; w++) {
-            __uint128_t s = (__uint128_t)r[w] + (uint64_t)add;
-            r[w] = (uint64_t)s;
-            add = (add >> 64) + (s >> 64);
-        }
-    }
-    /* r[0..5] is a ~320-bit integer (6 qwords).  Reduce mod p by
-     * repeated cond-subtract... no, that's variable-time AND slow.
-     * Use the scalar q=t[top] trick from the verifier? p's top qword
-     * is 0xffffffff00000001 — not all-ones.  Different approach. */
-    /* Just do it with __int128 in pieces.  p fits in 4 qwords. */
-    static const uint64_t P[4] = {
-        0xffffffffffffffffULL, 0x00000000ffffffffULL,
-        0x0000000000000000ULL, 0xffffffff00000001ULL };
-    /* Subtract p while r >= p.  r is 6 words; p is 4.  So while
-     * r[4]|r[5] != 0 OR r[0..3] >= P, subtract. */
-    /* This is O(2^64) iterations in the worst case. Useless. */
 
-    /* GIVE UP on the scaffold being pure C — compute with Python
-     * at vector-generation time and store the EXPECTED intermediate.
-     * Actually: just use the EXISTING correct answer and back-solve. */
-
-    /* Real fix, done right: Barrett reduction.  Compute
-     * q = (t · μ) >> 520 where μ = floor(2^520 / p).  Then
-     * r = t − q·p, which is in [0, 2p).  One cond-sub finishes.
-     * μ is a 260-bit constant; the multiply is another schoolbook. */
-    (void)acc_lo; (void)acc_hi; (void)r;  /* silence warnings */
-
-    /* I'm thrashing.  STOP.  Do the Barrett properly. */
-    /* μ = floor(2^520 / p).  It's a 264-bit number (since p ≈ 2^256,
-     * μ ≈ 2^264).  As 6 limbs of 52 bits... fits in one ZMM. */
-    /* q = (t · μ)[bits 520 and up].  t is 10 limbs ≈ 520 bits.
-     * t · μ ≈ 784 bits = 15 limbs.  We want limbs 10+ (bits 520+).
-     * Then r = t − q·p (10 limbs − 5 limbs · 5 limbs). */
-
-    /* This is correct but ~40 more IFMA ops.  For a first working
-     * version, use the 4-qword reduce from tv_ecdsa_tiny (scalar).
-     * THIS LEAKS — marked for replacement. */
-    /* Convert 10×52 loose → 4×64 tight, reduce, convert back. */
-    uint64_t packed[9] = {0};
-    for (int i = 0; i < 10; i++) {
-        uint64_t limb = L[i];
-        int bit = 52*i, w = bit/64, s = bit%64;
-        __uint128_t v = (__uint128_t)limb << s;
-        packed[w] += (uint64_t)v;
-        if (w+1 < 9) {
-            __uint128_t c = (v >> 64) + (packed[w] < (uint64_t)v ? 1 : 0);
-            /* Hmm — this double-counts.  Just use __uint128_t properly. */
-        }
-    }
-    /* I keep half-writing this.  ONE clean implementation: */
+    /* Repack 10×52 (loose, each limb up to ~2^56) → 9×64 (tight).
+     * NO early-exit on carry==0 — that would branch on secret data.
+     * Always propagate to the top; when carry is 0, the adds are
+     * no-ops but STILL EXECUTE. */
     uint64_t w64[9] = {0};
     for (int i = 0; i < 10; i++) {
         int bit = 52*i, wi = bit/64, sh = bit%64;
@@ -301,7 +166,7 @@ static inline fe reduce_p(__m512i t_lo, __m512i t_hi, fe fold260, fe p52) {
         __uint128_t sum = (__uint128_t)w64[wi] + (uint64_t)contrib;
         w64[wi] = (uint64_t)sum;
         uint64_t carry = (uint64_t)(sum >> 64) + (uint64_t)(contrib >> 64);
-        for (int j = wi+1; j < 9 && carry; j++) {
+        for (int j = wi+1; j < 9; j++) {   /* no `&& carry` — fixed count */
             __uint128_t s2 = (__uint128_t)w64[j] + carry;
             w64[j] = (uint64_t)s2;
             carry = (uint64_t)(s2 >> 64);
@@ -310,9 +175,19 @@ static inline fe reduce_p(__m512i t_lo, __m512i t_hi, fe fold260, fe p52) {
     /* w64[0..8] is the product as 9 qwords (≤ 576 bits; product is
      * ≤ 2·2^256·2^256 = 2^513 so 9 qwords suffice). */
 
-    /* Reduce mod m (where m = p or n, read from the p52 ARGUMENT).
-     * Both p and n have top dword 0xFFFFFFFF so q=t[top] works for
-     * both.  Convert p52 (5×52) → 4×64 for the scalar reduce. */
+    /* ================================================================
+     * CONSTANT-TIME scalar reduce.  The old `while(w32[j+8])` branched
+     * on secret data — iteration count leaked whether the product's
+     * high limb was 0, 1, or 2.  Fix: ALWAYS iterate the maximum
+     * (2 passes per position — the q=t[top] invariant guarantees
+     * t[j+8] ∈ {0,1} after pass 1, so pass 2 with q≤1 finishes).
+     * When q=0, the inner subtract is a no-op but STILL EXECUTES.
+     *
+     * This is the same reduce as tv_ecdsa_tiny.S's fe_mul_m, just
+     * unrolled to a fixed trip count.  Still touches memory (w64 on
+     * stack) — but at FIXED offsets with FIXED access order, so no
+     * cache-index leak.  Same category as pt_add's spills.
+     * ================================================================ */
     uint64_t m52_arr[8]; _mm512_storeu_si512((__m512i*)m52_arr, p52);
     uint64_t M[4] = {0};
     for (int i = 0; i < 5; i++) {
@@ -324,7 +199,8 @@ static inline fe reduce_p(__m512i t_lo, __m512i t_hi, fe fold260, fe p52) {
     uint32_t *w32 = (uint32_t*)w64;
     uint32_t *M32 = (uint32_t*)M;
     for (int j = 8; j >= 0; j--) {
-        while (w32[j+8]) {
+        /* Exactly 2 passes — no data-dependent while. */
+        for (int pass = 0; pass < 2; pass++) {
             uint64_t q = w32[j+8];
             uint64_t borrow = 0;
             for (int k = 0; k < 8; k++) {
@@ -336,21 +212,19 @@ static inline fe reduce_p(__m512i t_lo, __m512i t_hi, fe fold260, fe p52) {
             w32[j+8] -= (uint32_t)borrow;
         }
     }
-    /* w64[0..3] < 2^256, possibly ≥ m.  One cond-sub. */
-    int ge = 0;
-    for (int i = 3; i >= 0; i--) {
-        if (w64[i] > M[i]) { ge=1; break; }
-        if (w64[i] < M[i]) { ge=0; break; }
-        ge = 1;
+    /* w64[0..3] < 2^256, possibly ≥ m.  Constant-time cond-sub:
+     * compute w−m always, select based on borrow-out (not a branch). */
+    uint64_t diff[4], borrow = 0;
+    for (int i = 0; i < 4; i++) {
+        __uint128_t d = (__uint128_t)w64[i] - M[i] - borrow;
+        diff[i] = (uint64_t)d;
+        borrow = (d >> 127) & 1;
     }
-    if (ge) {
-        uint64_t borrow = 0;
-        for (int i = 0; i < 4; i++) {
-            __uint128_t d = (__uint128_t)w64[i] - M[i] - borrow;
-            w64[i] = (uint64_t)d;
-            borrow = (d >> 127) & 1;
-        }
-    }
+    /* borrow=1 → w<m → keep w.  borrow=0 → w≥m → use diff.
+     * mask = borrow−1: 0 if borrowed (keep w), ~0 if not (use diff). */
+    uint64_t mask = borrow - 1;
+    for (int i = 0; i < 4; i++)
+        w64[i] ^= (w64[i] ^ diff[i]) & mask;
     /* Convert back to 5×52. */
     uint64_t out52[5];
     for (int i = 0; i < 5; i++) {
@@ -360,36 +234,7 @@ static inline fe reduce_p(__m512i t_lo, __m512i t_hi, fe fold260, fe p52) {
         if (sh == 0) hi = 0;
         out52[i] = (lo | hi) & MASK52;
     }
-    low = _mm512_maskz_loadu_epi64(0x1F, out52);
-    return low;
-    /* END SCAFFOLD.  Replace with Barrett or Solinas before any
-     * secret data flows through here.  The store/load above is the
-     * leak; the scalar reduce is just slow. */
-    (void)packed;
-
-    /* Conditional subtract p.  Compute diff = low − p with borrow
-     * propagation; the overall borrow (carry out of lane 4, landing
-     * in lane 5) tells us whether low < p.  Select via mask.
-     *
-     * ARITHMETIC shift right by 52: for signed v, gives ⌊v/2^52⌋
-     * = 0 if v ∈ [0,2^52), −1 if v ∈ [−2^52,0).  That's the carry.
-     * (Logical shift would give garbage for negative lanes —
-     * −5 >> 52 logical = 0xFFF, not −1.) */
-    __m512i diff = _mm512_sub_epi64(low, p52);
-    __m512i m52 = _mm512_set1_epi64(MASK52);
-    for (int i = 0; i < 5; i++) {
-        __m512i carry = _mm512_srai_epi64(diff, 52);   /* signed → {-1,0} */
-        /* Mask ONLY lanes 0-4.  Lane 5 accumulates the overall borrow
-         * and must NOT be truncated — it's the sign carrier. */
-        diff = _mm512_mask_and_epi64(diff, 0x1F, diff, m52);
-        __m512i cs = _mm512_alignr_epi64(carry, Z, 7); /* carry << 1 lane */
-        diff = _mm512_add_epi64(diff, cs);
-    }
-    /* Lane 5 is 0 if low ≥ p, negative if low < p.  The sign bit
-     * (bit 63) is what we test — not the masked value. */
-    __m512i sign5 = _mm512_permutexvar_epi64(_mm512_set1_epi64(5), diff);
-    __mmask8 use_low = _mm512_cmplt_epi64_mask(sign5, Z);
-    return fe_clean(_mm512_mask_blend_epi64(use_low, diff, low));
+    return _mm512_maskz_loadu_epi64(0x1F, out52);
 }
 
 /* Public-facing fe_mul.  Constants passed in so they can live in
