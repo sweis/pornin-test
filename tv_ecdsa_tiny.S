@@ -233,10 +233,12 @@ bc_v1:
  * 256-bit primitives (4 × u64 limbs, little-endian).
  * -------------------------------------------------------------------- */
 
-/* fe_iszero(a=rdi) -> eax=1 iff zero.  OR accumulates into rax; the
- * last OR's ZF reflects the full OR (rax is cumulative).  loop/sete/
- * movzx/ret all preserve flags: callers may branch on ZF directly.
- * Looped: 19 bytes vs 22 unrolled. ~260 calls × ~16cyc = <0.4% cost. */
+/* fe_iszero(a=rdi) -> al=1 iff zero, ZF set iff zero.  OR
+ * accumulates into rax; the last OR's ZF reflects the full OR.
+ * loop/sete/ret all preserve flags: pt_add_acc branches on ZF
+ * directly, .Lop6/7 OR al into bpl (low byte only — high bytes
+ * of rax are garbage from the OR loop but nobody reads them).
+ * movzx was dead code.  −3 B. */
 fe_iszero:
 	push	4
 	pop	rcx
@@ -244,7 +246,6 @@ fe_iszero:
 1:	or	rax, [rdi+rcx*8-8]
 	loop	1b
 	sete	al
-	movzx	eax, al
 	ret
 
 /* fe_sub_raw(dst=rdi, a=rsi, b=rdx) -> borrow in eax.
@@ -313,10 +314,12 @@ fe_mul_m:
 
 	mov	r9, rdx             /* b */
 	mov	r10, rsi            /* a */
-	mov	r8, rcx             /* m — reduce AND cond-sub use it directly */
-	/* dest (rdi) goes on the stack under t — popped after t is
-	 * released.  r12 no longer pushed/used; .Lepi4 shrinks. */
-	push	rdi
+	/* m on stack under dest: push is 1 B vs mov r8,rcx (3 B);
+	 * tail pops it straight into rcx for the cond-sub (−2 B vs
+	 * mov rcx,r8).  Reduce loop reads it at [rsp+88] (+2 B vs
+	 * reg).  Net −2 B.  r8 dead. */
+	push	rcx                 /* m → [rsp+80] after zero-loop */
+	push	rdi                 /* dest → [rsp+72] */
 
 	/* Frame: just t[0..17] = 72 B.  mulsub subtracts q·m directly,
 	 * so no neg_m needed.  Push-zero 9 qwords (72 B). */
@@ -347,7 +350,7 @@ fe_mul_m:
 	test	ebx, ebx
 	jz	4f
 	push	rdi
-	mov	rsi, r8             /* m */
+	mov	rsi, [rsp+88]       /* m (72 t + 8 dest + 8 pushrdi) */
 	mul8	sub                 /* t[j..j+8] -= q·m; rdi += 32 */
 	pop	rdi
 	jmp	.Lr
@@ -363,10 +366,10 @@ fe_mul_m:
 	push	rsp
 	pop	rsi
 	add	rsp, 72
-	pop	rdi                 /* dest (pushed before push-loop) */
-	mov	rcx, r8             /* m */
+	pop	rdi                 /* dest */
+	pop	rcx                 /* m — from under dest; 1 B vs 3 B mov r8 */
 	push	rcx
-	pop	rdx                 /* 5 B total vs 2×mov r8 (6 B) */
+	pop	rdx
 	call	.Lop3
 
 	pop	rbp
