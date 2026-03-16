@@ -617,9 +617,10 @@ bc_run:
 pt_mul:
 	push	rbp
 	push	r12
-	push	r13
-	lea	r12, [r15+64]       /* &slot4 — r15 = verify's &slot2 here (disp8) */
-	lea	r13, [rbx+96]       /* &slot16 (= slot13+96).  G at [r13], Q-backup at [r13+64]. */
+	lea	r12, [r15+64]       /* &slot4 — r15 = verify's &slot2 (disp8) */
+	/* r13 was set once (lea [rbx+96]) and read once (mov rsi,r13).
+	 * rbx survives all callees (bc_run and pt_add_acc push/pop it)
+	 * — inline the lea at the use site, drop push/lea/pop.  −7 B. */
 
 	call	.Lai
 	dec	al
@@ -639,7 +640,7 @@ pt_mul:
 	jnc	3f
 	mov	rdi, r12            /* &slot4 */
 	push	rdi                 /* stash for restore after pt_add_acc clobbers rdi */
-	mov	rsi, r13            /* &slot16 = G */
+	lea	rsi, [rbx+96]       /* &slot16 = G (rbx=slot13, survives callees) */
 	/* rcx=0: bc_dbl (via bcrun_r14 above) ends in Fsub which leaves
 	 * rcx=0 (fe_sub_raw's dec-to-0 loop); pt_add_acc (u2 branch)
 	 * exits via bc_add2/dbl (same) or rep (rcx→0).  −1 B each. */
@@ -655,7 +656,6 @@ pt_mul:
 	dec	ebp
 	jns	.Lpm
 
-	pop	r13
 	pop	r12
 	pop	rbp
 	ret
