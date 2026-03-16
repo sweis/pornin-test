@@ -75,7 +75,12 @@ TRAIL = [
     (980,  3540, None),
     (960,  8120, None),
     (977,  3520, None),
-    (957,  8060, "fe_inv_m + layout\n957B — size corner"),
+    (957,  8060, None),
+    # --- Unrolled push-zero: +3/+1 B for ~3%/2% cycles.  Kills an
+    #   #ifdef; xor ecx does three jobs (zero for push, zero for
+    #   mul8's mov cl,N, eax no longer needed).  960B dominates 969B.
+    (978,  3450, None),
+    (960,  7845, "957/960B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).
@@ -84,7 +89,7 @@ TRAIL = [
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
                 (989, 4150)]
 THOMAS    = (989, 4150)     # latest — still dominated
-CLAUDE    = (957, 8060)     # size corner — 32 B under Thomas v5
+CLAUDE    = (960, 7845)     # current build — dominates old 969B checkpoint
 
 def pareto(pts):
     front = []
@@ -140,7 +145,7 @@ ax.annotate(f'Thomas v5 — {THOMAS[0]}B', THOMAS,
 ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=260, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
            label=f'Claude {CLAUDE[0]}B')
-ax.annotate(f'Claude — {CLAUDE[0]}B',
+ax.annotate(f'Claude — 957/960B',
             CLAUDE, textcoords="offset points", xytext=(14, -4),
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.35', fc='#ffe4c4',

@@ -20,21 +20,21 @@ make size      test      wp          # portable C reference
 
 | Implementation | text+rodata | Cycles | Requires | Notes |
 |---|---:|---:|---|---|
-| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **957 B** | ~8.1M | MOVBE | 32-bit schoolbook, size floor |
-| **`tv_ecdsa_tiny.S`** (default) | **977 B** | **~3.5M** | MOVBE | 64-bit schoolbook |
+| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **960 B** | ~7.8M | MOVBE | 32-bit schoolbook, size floor |
+| **`tv_ecdsa_tiny.S`** (default) | **978 B** | **~3.45M** | MOVBE | 64-bit schoolbook |
 | `tv_ecdsa_fast.S` | 1397 B | ~0.65M | BMI2+MOVBE | Montgomery+mulx, predecessor |
 | `tv_ecdsa_bc.S` | 1712 B | ~1.85M | — | first bytecode version |
 | `tv_ecdsa.c` (Cortex-M4) | 2082 B | — | — | realistic boot-ROM target |
 | `tv_ecdsa.c` (x86-64, gcc `-Os`) | 3076 B | — | — | portable C reference |
 
-**One source, two Pareto-optimal builds.** The default (977 B) uses
+**One source, two Pareto-optimal builds.** The default (978 B) uses
 64-bit schoolbook for the 512-bit product; `-DSMALL_MUL8` swaps in a
 32-bit schoolbook (−20 B) that uses `loop`+`scasd` in the hot loop —
 both microcoded, ~950K iterations/verify, ~4M extra cycles. Same reduce
 step either way.
 
 **vs Thomas** (external competing implementation): v5 at 989 B / ~4.15M
-cycles. Our default (977 B / ~3.5M) DOMINATES it on both axes —
+cycles. Our default (978 B / ~3.45M) DOMINATES it on both axes —
 Thomas is fully off the Pareto frontier. Full chart at
 [`docs/progress.png`](docs/progress.png).
 
@@ -94,6 +94,7 @@ What changed from fast.S to drop ~290 bytes:
 | 979 | imul edi,esi,6 for slot12; drop r15; lodsb for 0x04 (−6) |
 | 969 | **fe_inv_m: no seed copy** — bytecode sets dst=1, bit 255 (−10) |
 | 957 | .Lfm = Nmul; layout reorders for rel8 jmps (−12) |
+| 960 | push-zero unrolled: +3 B kills 220K cyc of `loop` penalty |
 
 ## Earlier implementations
 
