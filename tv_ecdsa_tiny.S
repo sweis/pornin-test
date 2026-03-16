@@ -275,13 +275,20 @@ fe_sub_raw:
 	ret
 
 /* mul8 OP: dst[0..8] OP= ebx·src[0..7], 32-bit limbs.  INLINED at
- * both call sites (schoolbook=add, reduce=sub).  25 B macro body ×
- * 2 sites = 50 B vs 51 B shared function + 10 B calls = 61 B.  −11.
+ * both call sites (schoolbook=add, reduce=sub).
+ *
+ * SPEED OVER SIZE: `loop` and `scasd` are microcoded on every
+ * modern x86 (~7 cyc and ~3 cyc respectively).  This is the
+ * HOTTEST loop — ~950K iterations per verify.  Using `dec+jnz`
+ * and `lea` costs +5 B × 2 sites = +10 B but cuts measured
+ * cycles from 6.25M to 3.20M — enough to dominate Thomas
+ * (1156 B / 3.6M) on BOTH axes.  The −10 B variant
+ * (1105 B / 6.25M) is available via -DSMALL_MUL8 for the
+ * absolute size floor.
+ *
  * Clobbers: ebp (prev_hi), rcx→0, eax/edx, rsi/rdi advance +32. */
 .macro	mul8 op
-	/* rcx=0 always here: push-loop's `loop` (first schoolbook),
-	 * or prior mul8's `loop` (all subsequent).  −1 B × 2 sites. */
-	mov	cl, 8
+	mov	cl, 8               /* rcx=0 on entry (prior mul8 or push-loop) */
 	xor	ebp, ebp
 7:	lodsd
 	mul	ebx
@@ -290,8 +297,14 @@ fe_sub_raw:
 	\op	[rdi], eax
 	adc	edx, 0
 	mov	ebp, edx
-	scasd
-	loop	7b
+#ifdef SMALL_MUL8
+	scasd                       /* 1 B, ~3 cyc microcoded */
+	loop	7b                  /* 2 B, ~7 cyc microcoded */
+#else
+	lea	rdi, [rdi+4]        /* 4 B, 1 cyc — +3 B */
+	dec	ecx
+	jnz	7b                  /* 4 B, 1 cyc — +2 B */
+#endif
 	\op	[rdi], ebp
 .endm
 
@@ -334,7 +347,12 @@ fe_mul_m:
 	push	9
 	pop	rcx
 2:	push	rax
+#ifdef SMALL_MUL8
 	loop	2b
+#else
+	dec	ecx                 /* +2 B; 9 iter × ~6K calls = ~0.3M cyc */
+	jnz	2b
+#endif
 	/* rsp → t[0].  rcx=0. */
 
 	/* Schoolbook then reduce (separate — merged reverse-order has

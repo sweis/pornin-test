@@ -119,10 +119,13 @@ test-tiny: test_ecdsa_tiny
 	./test_ecdsa_tiny
 
 size-tiny: tv_ecdsa_tiny.o
-	@echo "=== size of tv_ecdsa_tiny.S (size-only, speed traded) ==="
+	@echo "=== tv_ecdsa_tiny.S default (dominates Thomas on both axes) ==="
 	@size $<
 	@echo ""
 	@size -A $< | grep -E '^\.(text|rodata|data|bss)' || true
+	@echo ""
+	@echo "=== with -DSMALL_MUL8 (absolute size floor, ~2x cycles) ==="
+	@$(CC) -c -DSMALL_MUL8 -o /tmp/_tiny_small.o tv_ecdsa_tiny.S && size /tmp/_tiny_small.o | tail -1 && rm -f /tmp/_tiny_small.o
 
 test_wycheproof_tiny: tv_ecdsa_tiny.S test_wycheproof_asm.c test_wycheproof.c wycheproof_vectors.h
 	$(CC) $(CFLAGS) -o $@ tv_ecdsa_tiny.S test_wycheproof_asm.c
