@@ -61,6 +61,10 @@ FAST = [
     (1347,  945, "B-derive\n1347B"),
     (1338,  945, None),   # Shamir one-rep
     (1300, 1456, "32-bit q=t[top]\n1300B, 0.79"),  # 1461/1855*1850
+    (1293, 7180, None),   # loop everywhere (true speed)
+    (1279, 7180, None),   # cdq + .Lop3 cond-sub
+    (1266, 7180, None),   # INV bytecode ops
+    (1257, 7180, "INV bytecode\n1257B, 3.88"),  # 7180/1855*1850
 ]
 
 def pareto(pts):
