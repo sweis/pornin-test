@@ -1,34 +1,30 @@
 #!/usr/bin/env python3
 """
-Regenerate the size-vs-speed progress charts.
+Generate the size-vs-speed progress chart (docs/progress.png).
 
 Data is (bytes, kcyc_nominal, label).  kcyc_nominal is the cycle count
 normalized to a nominal 1.85M bc.S baseline: measured_fast/measured_bc * 1850.
-This lets measurements from different µarches (Skylake vs Sapphire Rapids)
-live on the same axis — only the ratio matters.
+This lets measurements from different µarches live on the same axis —
+only the ratio matters.
 
-Historical fast.S points (Skylake-class, bc.S ~1832K) are from commit logs
-and prior chart data.  The 1397B session was measured on Sapphire Rapids
-(bc.S ~1855K); ratios converted to nominal kcyc here.
+Historical points (Skylake-class, bc.S ~1832K) are from commit logs.
+The 1427→1397 session was measured on Sapphire Rapids (bc.S ~1855K);
+ratios scaled to nominal.
 """
 
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 # ----------------------------------------------------------------------
 # bc.S baseline track (all at ratio 1.0 = 1850 kcyc nominal)
-# Size-only shrink from 2018 B to 1712 B.
 # ----------------------------------------------------------------------
 BC_TRACK = [2018, 1963, 1911, 1872, 1839, 1801, 1766, 1712]
 BC_Y = 1850
 
 # ----------------------------------------------------------------------
 # fast.S full history.  (bytes, kcyc_nominal, label or None).
-# Skylake-era points use raw cycles (bc.S was ~1832 ≈ 1850 nominal,
-# close enough that raw≈nominal).  Sapphire Rapids points are scaled
-# by 1850/1855 ≈ 0.997 — effectively identity at kcyc resolution.
 # ----------------------------------------------------------------------
 FAST = [
-    # --- Skylake-era ---
     (1712, 1850, "fork\n1712B"),
     (1660, 1105, "CIOS unroll\n1660B"),
     (1622, 1046, None),
@@ -37,25 +33,20 @@ FAST = [
     (1565, 1028, None),
     (1538, 1037, None),
     (1511, 1035, "1511B (README)"),
-    (1498, 1035, None),   # no bench recorded; carried fwd
+    (1498, 1035, None),
     (1483, 1035, None),
     (1471, 1035, None),
     (1458, 1035, None),
     (1448, 1035, None),
     (1441, 1018, "session start\n1441B"),
     (1425,  930, "muladd4 carry\n1425B"),
-    (1424,  980, None),   # r14 invariant pass (temp regression)
-    (1411,  925, None),   # fe_sub_raw lodsq
-    (1406,  906, None),   # pt_add_acc reloc
+    (1424,  980, None),
+    (1411,  925, None),
+    (1406,  906, None),
     (1405,  888, "pre-Shamir smallest\n1405B, 0.48"),
     (1427,  629, "Shamir\n1427B, 0.34"),
-    # --- Sapphire Rapids era (this session) ---
-    # Measured bc.S ~1855K, fast ratios scaled to nominal 1850K.
-    # 1427B re-measured here at 660K → ratio 0.356 → 659 nominal.
-    # The ~30K gap vs Skylake's 629K is µarch noise; both are the
-    # same 1427B binary.  We plot the Skylake 629 as the canonical
-    # Shamir point and start this session's track from there.
-    (1418,  654, None),   # mov cl,N  (656/1855*1850)
+    # --- 1427→1397 session (Sapphire Rapids, scaled to nominal) ---
+    (1418,  654, None),   # mov cl,N
     (1416,  654, None),   # rbx stockpile
     (1413,  654, None),   # enter/leave verify
     (1409,  654, None),   # bc_run r13 drop
@@ -64,32 +55,23 @@ FAST = [
     (1397,  652, "rcx-chain + enter/leave\n1397B, 0.35"),
 ]
 
-# ----------------------------------------------------------------------
-# Pareto frontier: a point is on the frontier if nothing is both
-# smaller AND faster.
-# ----------------------------------------------------------------------
 def pareto(pts):
-    """Return indices of Pareto-optimal points (min bytes, min cycles)."""
     front = []
     for i, (b, c, _) in enumerate(pts):
-        dominated = any(
-            (b2 <= b and c2 <= c and (b2 < b or c2 < c))
-            for j, (b2, c2, _) in enumerate(pts) if j != i
-        )
-        if not dominated:
+        if not any((b2 <= b and c2 <= c and (b2 < b or c2 < c))
+                   for j, (b2, c2, _) in enumerate(pts) if j != i):
             front.append(i)
-    # Sort by bytes for the connecting line
     front.sort(key=lambda i: pts[i][0])
     return front
 
 FRONT = pareto(FAST)
 
 # ======================================================================
-# Chart 1: full_history.png — whole story from 2018B down to 1397B
+# Single chart: full history with inset zoom on the frontier region.
 # ======================================================================
-fig, ax = plt.subplots(figsize=(15.45, 9.45), dpi=100)
+fig, ax = plt.subplots(figsize=(14, 9), dpi=100)
 
-# bc.S baseline (gray)
+# bc.S baseline
 ax.plot(BC_TRACK, [BC_Y]*len(BC_TRACK), 'o-', color='#cccccc',
         markersize=5, linewidth=1, zorder=1,
         label='tv_ecdsa_bc.S (baseline, ratio=1.0)')
@@ -97,7 +79,7 @@ ax.annotate('bc.S start\n2018B', (BC_TRACK[0], BC_Y),
             textcoords="offset points", xytext=(8, 8), fontsize=9,
             bbox=dict(boxstyle='round,pad=0.3', fc='#fffacd', ec='gray', lw=0.5))
 
-# fast.S chronological path (dotted gray)
+# fast.S chronological path
 fx = [p[0] for p in FAST]
 fy = [p[1] for p in FAST]
 ax.plot(fx, fy, ':', color='#aaaaaa', linewidth=0.8, zorder=2,
@@ -105,90 +87,80 @@ ax.plot(fx, fy, ':', color='#aaaaaa', linewidth=0.8, zorder=2,
 ax.scatter(fx, fy, c='#3b5998', s=40, edgecolors='#1a2d5c',
            linewidths=0.8, zorder=3)
 
-# Pareto frontier (red diamonds)
+# Pareto frontier
 px = [FAST[i][0] for i in FRONT]
 py = [FAST[i][1] for i in FRONT]
 ax.plot(px, py, '-', color='#c41e3a', linewidth=2.5, zorder=4,
-        label='fast.S Pareto frontier')
+        label='Pareto frontier')
 ax.scatter(px, py, c='#c41e3a', s=120, marker='D',
            edgecolors='#7a1225', linewidths=1.2, zorder=5)
 
-# Labels for notable points
+# Main-axis labels
+LABEL_OFFSETS = {
+    "fork":     (-55, -18),
+    "CIOS":     (10, 8),
+    "1511":     (-35, 22),
+    "session":  (10, 8),
+    "muladd4":  (10, 8),
+    "pre-Sham": (10, -20),
+    "Shamir":   (12, -8),
+    "rcx-chain":(-145, -8),
+}
 for b, c, lab in FAST:
     if lab:
-        # Nudge to avoid overlaps
-        dx, dy = (10, 8)
-        if "1397" in lab: dx, dy = (-120, -12)
-        if "1405" in lab: dx, dy = (-140,  12)
-        if "Shamir" in lab: dx, dy = ( 12, -18)
-        if "fork" in lab: dx, dy = (-30,  18)
-        ax.annotate(lab, (b, c), textcoords="offset points",
-                    xytext=(dx, dy), fontsize=9,
-                    bbox=dict(boxstyle='round,pad=0.3',
-                              fc='#fffacd', ec='gray', lw=0.5))
+        dx, dy = next((v for k, v in LABEL_OFFSETS.items() if lab.startswith(k)), (10, 8))
+        ax.annotate(lab, (b, c), textcoords="offset points", xytext=(dx, dy),
+                    fontsize=9, bbox=dict(boxstyle='round,pad=0.3',
+                    fc='#fffacd', ec='gray', lw=0.5))
 
 ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, nominal 1.85M bc baseline)', fontsize=12)
-ax.set_title('Full ECDSA/P-256 verify optimization history — lower-left is better',
+ax.set_title('ECDSA/P-256 verify optimization history — lower-left is better',
              fontsize=13)
 ax.legend(loc='upper left', framealpha=0.95)
 ax.grid(True, alpha=0.2)
 ax.set_axisbelow(True)
 
-plt.tight_layout()
-plt.savefig('docs/full_history.png', dpi=100, bbox_inches='tight')
-print(f"wrote docs/full_history.png  —  Pareto: {[(FAST[i][0],FAST[i][1]) for i in FRONT]}")
+# ----------------------------------------------------------------------
+# Inset: the frontier region (1390-1440 B × 600-700 Kcyc) where the
+# 1427→1397 sweep is otherwise too cramped to read.
+# ----------------------------------------------------------------------
+axins = inset_axes(ax, width="42%", height="38%", loc='center',
+                   bbox_to_anchor=(0.02, -0.08, 1, 1),
+                   bbox_transform=ax.transAxes)
 
-# ======================================================================
-# Chart 2: size_speed_progress.png — zoomed to fast.S-only interesting region
-# ======================================================================
-# Show only points from "session start" onward (where the interesting
-# size/speed trade-offs live).
-ZOOM = FAST[13:]   # 1441B onward
-ZFRONT = pareto(ZOOM)
-
-fig, ax = plt.subplots(figsize=(11.72, 8.25), dpi=100)
-
+# Only the sub-900Kcyc points
+ZOOM = [(b, c, l) for b, c, l in FAST if c < 900 and b < 1440]
 zx = [p[0] for p in ZOOM]
 zy = [p[1] for p in ZOOM]
-ax.plot(zx, zy, ':', color='#aaaaaa', linewidth=1, zorder=2,
-        label='chronological')
-ax.scatter(zx, zy, c='#3b5998', s=50, edgecolors='#1a2d5c',
-           linewidths=1, zorder=3)
+axins.plot(zx, zy, ':', color='#aaaaaa', linewidth=0.8, zorder=2)
+axins.scatter(zx, zy, c='#3b5998', s=35, edgecolors='#1a2d5c', linewidths=0.8, zorder=3)
+axins.plot(px, py, '-', color='#c41e3a', linewidth=2.5, zorder=4)
+axins.scatter(px, py, c='#c41e3a', s=100, marker='D',
+              edgecolors='#7a1225', linewidths=1.2, zorder=5)
 
-zpx = [ZOOM[i][0] for i in ZFRONT]
-zpy = [ZOOM[i][1] for i in ZFRONT]
-ax.plot(zpx, zpy, '-', color='#c41e3a', linewidth=2.5, zorder=4,
-        label='Pareto frontier')
-ax.scatter(zpx, zpy, c='#c41e3a', s=140, marker='D',
-           edgecolors='#7a1225', linewidths=1.3, zorder=5)
+# Inset labels: the two frontier points + session start/end
+INSET_ANN = [
+    (1427, 629, "Shamir\n1427B", (6, -4)),
+    (1418, 654, "mov cl,N\n1418B", (4, 10)),
+    (1397, 652, "1397B\ncurrent", (-52, -4)),
+    (1405, 888, "1405B\n(dominated)", (4, -18)),
+]
+for b, c, txt, (dx, dy) in INSET_ANN:
+    axins.annotate(txt, (b, c), textcoords="offset points", xytext=(dx, dy),
+                   fontsize=8, bbox=dict(boxstyle='round,pad=0.25',
+                   fc='#fffacd', ec='gray', lw=0.4))
 
-# Zoomed labels: annotate everything with a label plus a few key unlabeled
-ZOOM_LABELS = {
-    1441: ("session start\n1441 B, 1018 Kcyc", (10, 8)),
-    1424: ("r14 invariant pass\n1424 B, 980 Kcyc", (-80, 25)),
-    1411: ("fe_sub_raw lodsq\n1411 B, 925 Kcyc", (12, -8)),
-    1405: ("epilogue share\n1405 B, 888 Kcyc", (-130, -4)),
-    1427: ("Shamir's trick\n1427 B, 629 Kcyc", (12, -6)),
-    1418: ("mov cl,N\n1418 B, 654 Kcyc", (12, 20)),
-    1399: ("pt_mul rbx direct\n1399 B, 652 Kcyc", (10, 30)),
-    1397: ("rcx-chain + enter/leave\n1397 B, 652 Kcyc", (-160, -20)),
-}
-for b, c, _ in ZOOM:
-    if b in ZOOM_LABELS:
-        txt, (dx, dy) = ZOOM_LABELS[b]
-        ax.annotate(txt, (b, c), textcoords="offset points",
-                    xytext=(dx, dy), fontsize=9,
-                    bbox=dict(boxstyle='round,pad=0.3',
-                              fc='#fffacd', ec='gray', lw=0.5))
+axins.set_xlim(1390, 1435)
+axins.set_ylim(615, 900)
+axins.grid(True, alpha=0.2)
+axins.set_axisbelow(True)
+axins.tick_params(labelsize=8)
+axins.set_title('frontier detail', fontsize=9)
 
-ax.set_xlabel('Size (bytes)', fontsize=12)
-ax.set_ylabel('Cycles (thousands)', fontsize=12)
-ax.set_title('tv_ecdsa_fast.S - size vs speed  (lower-left = better)', fontsize=13)
-ax.legend(loc='upper right', framealpha=0.95)
-ax.grid(True, alpha=0.2)
-ax.set_axisbelow(True)
+# Shade the inset region on the main axes
+ax.indicate_inset_zoom(axins, edgecolor="#888", alpha=0.4)
 
-plt.tight_layout()
-plt.savefig('docs/size_speed_progress.png', dpi=100, bbox_inches='tight')
-print(f"wrote docs/size_speed_progress.png  —  Pareto: {[(ZOOM[i][0],ZOOM[i][1]) for i in ZFRONT]}")
+plt.savefig('docs/progress.png', dpi=100, bbox_inches='tight')
+print(f"wrote docs/progress.png")
+print(f"Pareto frontier: {[(FAST[i][0], FAST[i][1]) for i in FRONT]}")

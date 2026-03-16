@@ -22,16 +22,16 @@ make size-thumb                          # ARM Cortex-M4 (needs arm-none-eabi-gc
 
 | Implementation | Target | Compiler | text+rodata | Cycles | Notes |
 |---|---|---|---|---|---|
-| **x86-64 asm, bytecode + mulx + Shamir** | **x86-64 (BMI2+MOVBE)** | **GAS** | **1427 B** | **~0.65M** | `tv_ecdsa_fast.S` |
+| **x86-64 asm, bytecode + mulx + Shamir** | **x86-64 (BMI2+MOVBE)** | **GAS** | **1397 B** | **~0.65M** | `tv_ecdsa_fast.S` |
 | x86-64 asm, bytecode-interpreted | x86-64 | GAS | 1712 B | ~1.85M | `tv_ecdsa_bc.S` |
 | C, 32-bit limbs | Cortex-M4 Thumb-2 | arm-none-eabi-gcc 13.2 `-Os` | 2082 B | — | realistic boot-ROM target |
 | Pure x86-64 asm, 64-bit limbs | x86-64 | GAS | 2875 B | — | `tv_ecdsa_amd64.S` |
 | C, 32-bit limbs | x86-64 | GCC 13.3 `-Os` | 3076 B | — | `tv_ecdsa.c` |
 | C, 32-bit limbs | x86-64 | clang 18 `-Os` | ~3856 B | — | different inliner |
 
-Cycle counts are best-of-many on a 2.1 GHz Skylake-class Xeon; see
-[BENCHMARK.md](BENCHMARK.md) for methodology and attribution. Charts of
-the full optimisation history are in [`docs/`](docs/).
+Cycle counts are best-of-many; see [BENCHMARK.md](BENCHMARK.md) for
+methodology and attribution. The full optimisation history chart is
+in [`docs/progress.png`](docs/progress.png).
 
 ## Correctness
 
@@ -49,15 +49,15 @@ All implementations pass the same test gate:
 
 ## Per-implementation notes
 
-### The 1427-byte speed+size version (`tv_ecdsa_fast.S`)
+### The 1397-byte speed+size version (`tv_ecdsa_fast.S`)
 
 Same bytecode architecture as `tv_ecdsa_bc.S`, with the Montgomery
 multiplier rebuilt around `mulx`, Shamir's trick for the scalar
-multiplication, and another ~280 bytes squeezed out. Requires BMI2
+multiplication, and another ~315 bytes squeezed out. Requires BMI2
 (`mulx`) and MOVBE.
 
-**1427 B, ~0.65M cycles** vs `tv_ecdsa_bc.S` at 1712 B / ~1.85M: both
-**−285 bytes** and **−65% cycles**. text 1271 + rodata 156.
+**1397 B, ~0.65M cycles** vs `tv_ecdsa_bc.S` at 1712 B / ~1.85M: both
+**−315 bytes** and **−65% cycles**. text 1241 + rodata 156.
 
 Run `make size-fast test-fast wp-fast bench` to reproduce.
 
@@ -163,7 +163,7 @@ defined after the constants, which are after the decoder). gas won't
 relax `disp(reg)` the way it does jumps. Hardcoded with a `.error`
 assert so a layout change can't silently cost 3 bytes.
 
-**Optimisation journey (1712 → 1427):**
+**Optimisation journey (1712 → 1397):**
 
 | Size | Cycles | Key technique |
 |---|---|---|
@@ -179,11 +179,19 @@ assert so a layout change can't silently cost 3 bytes.
 | 1455 | ~0.86M | r14-invariant through pt ops (−24 B); cond_sub_n fallthrough |
 | 1425 | ~0.78M | muladd4 carry elision via mulx flag-preservation (−16 B, −9% cyc) |
 | 1405 | ~0.89M | push-allocate t; movbe; cGXM to .text; fallthrough+epilogue shares |
-| 1427 | ~0.65M | **Shamir's trick** (+22 B, −30% cyc) — current Pareto-optimal point |
+| 1427 | ~0.65M | **Shamir's trick** (+22 B, −30% cyc) |
+| 1418 | ~0.65M | `mov cl,N` at 9 sites where rcx postcondition-zero (−9 B) |
+| 1413 | ~0.65M | enter/leave frames (slot-2 → r15 frees rbp as true frame ptr) |
+| 1409 | ~0.65M | bc_run's r13 push/pop goes dead once verify owns its epilogue |
+| 1399 | ~0.65M | pt_mul takes &u1 in rbx directly — drops a full round-trip (−7 B) |
+| 1397 | ~0.65M | **.Lf trampoline removed** — current size minimum |
 
-Size minimum is 1405 B (pre-Shamir). Spending 22 bytes for ~30% speed
-is a good trade for most contexts. Cycle numbers are fuzzy across the
-middle rows: different measurement sessions saw bc.S swing ±20%.
+Pareto frontier is (1397 B, 0.35) and (1427 B, 0.34). The 30-byte
+sweep from 1427→1397 was all zero-cycle-cost: each change was either
+a dataflow simplification (a value already live in the right place)
+or an instruction-form swap (`push N;pop rcx` → `mov cl,N`). Cycle
+numbers are fuzzy across the middle rows: different measurement
+sessions saw bc.S swing ±20%.
 
 ### The 1712-byte bytecode-interpreted version (`tv_ecdsa_bc.S`)
 
