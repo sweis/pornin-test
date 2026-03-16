@@ -471,7 +471,8 @@ bc_run:
  * RCB).  Q/G adds use 3-slot backups (X,Y,Z=1) — RCB reads addend
  * Z from slot6 and NEVER writes slots 4-6.  r12 not needed.
  *
- * Caller (verify): rbx=&slot13 (u1; u2 at +32).  r14=slot base.
+ * Caller (verify): rbx=&slot16.  u1 at [rbx−96], u2 at [rbx−64].
+ * G-backup at [rbx], Q-backup at [rbx+96] — both disp8.  r14=slot base.
  * r15=slot2.  G-backup at slots 16-18, Q-backup at 19-21.
  * slot10 = b (RCB reads, never writes).  rcx=0 on entry. */
 pt_mul:
@@ -489,14 +490,15 @@ pt_mul:
 	mov	rsi, r14
 	call	.Lcadd
 	/* u2 bit: copy Q-backup (slots 19-21) → addend, add. */
-	bt	DWORD PTR [rbx+32], ebp
+	bt	DWORD PTR [rbx-64], ebp   /* u2 = slot14 = slot16−64 */
 	jnc	2f
-	lea	rsi, [rbx+192]      /* slot19 = slot13+192.  disp32. */
+	lea	rsi, [rbx+96]       /* slot19 = slot16+96.  disp8. */
 	call	.Lcadd
 2:	/* u1 bit: copy G-backup (slots 16-18) → addend, add. */
-	bt	DWORD PTR [rbx], ebp
+	bt	DWORD PTR [rbx-96], ebp   /* u1 = slot13 */
 	jnc	3f
-	lea	rsi, [rbx+96]       /* slot16 = slot13+96.  disp8. */
+	push	rbx
+	pop	rsi                 /* slot16 — G is here; 2B vs 3B mov */
 	call	.Lcadd
 3:	dec	ebp
 	jns	.Lpm
@@ -753,10 +755,11 @@ tv_ecdsa_p256_verify_asm:
 	xor	eax, eax
 	rep	stosq
 	inc	DWORD PTR [rdi-32]
-	/* rdi = slot 16 now.  Stockpile rbx = &slot13 — survives to
-	 * pt_mul (bc_run push/pops rbx, nothing else writes it).
-	 * Shamir's slot16 lea uses it for disp8. */
-	lea	rbx, [rdi-96]       /* slot 13 */
+	/* rdi = slot 16.  Stockpile rbx = slot16 (not 13) — makes
+	 * G-backup a mov, Q-backup disp8 instead of disp32.  u1/u2
+	 * at [rbx−96]/[rbx−64], both disp8.  push;pop = 2B vs 4B lea. */
+	push	rdi
+	pop	rbx                 /* slot 16 */
 
 	cmp	BYTE PTR [rdx], 0x04
 	jne	.Lf2
@@ -793,7 +796,8 @@ tv_ecdsa_p256_verify_asm:
 	 * G at slots 16-18, Q at 19-21.  G.xy in slots 2,3 (block
 	 * copy), Q.xyz in slots 4,5,6 (bc_v1 copies + slot6=1).
 	 * G's Z borrowed from slot6.  rcx=0 from bc_v1's last Nmul. */
-	lea	rdi, [rbx+96]       /* slot 16 */
+	push	rbx
+	pop	rdi                 /* slot 16 — 2B vs 3B mov */
 	mov	rsi, r15            /* slot 2 */
 	mov	cl, 8
 	rep	movsq               /* G.xy → 16,17.  rdi=slot18, rsi=slot4. */
