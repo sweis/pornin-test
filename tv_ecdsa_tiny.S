@@ -477,7 +477,8 @@ bc_run:
 	push	rbx
 	push	r12
 	push	r14
-	mov	rbx, rdi
+	push	rdi                 /* 2B push;pop vs 3B REX.W mov */
+	pop	rbx
 	mov	r12, rsi
 	/* Check accumulator in ebp: xor is 2 bytes (no REX), and since only
 	 * the low byte is ever OR'd with 0/1, `mov eax,ebp` (2 bytes) works
@@ -711,7 +712,8 @@ Fadd:	push	rdi
 	pop	rdi
 	pop	rdx
 	jnc	1f
-	mov	rsi, rdi
+	push	rdi                 /* 2B vs 3B REX.W mov */
+	pop	rsi
 	clc                         /* rcx=0 from fe_sub_raw; CF=1 on this path */
 	mov	cl, 4
 2:	lodsq
@@ -740,7 +742,8 @@ fe_inv_m:
 	mov	r8, rdi             /* dst — survives fe_mul_m */
 	enter	32, 0
 
-	mov	rdi, rsp
+	push	rsp                 /* 2B vs 3B; push rsp = pre-decrement value */
+	pop	rdi
 	lea	rsi, [r14+oN_early] /* cN (.text, via bc_run's r14=.Ljt) */
 	push	4
 	pop	rcx
@@ -827,7 +830,8 @@ tv_ecdsa_p256_verify_asm:
 	/* fe_from_be: stosq×4 advances rdi by 32; rsi index-read only.
 	 * Chain: rdi flows call→call; rsi bumped +32 in place.
 	 * rdi (sig ptr, ABI arg1) still live — nothing above touched it. */
-	mov	rsi, rdi
+	push	rdi                 /* 2B vs 3B REX.W mov */
+	pop	rsi
 	lea	rdi, [r14+12*32]    /* slot 12 (disp32; r13 gone) */
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi already r13+32 */
