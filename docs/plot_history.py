@@ -51,9 +51,12 @@ TRAIL = [
     (1032, 3645, None),   # default — CLAUDE star
 ]
 
-THOMAS_V1 = (1156, 3600)
-THOMAS    = (1046, 3990)
-CLAUDE    = (1012, 7950)
+# Thomas's track: v1, v2, v3 (1004B), v4 (996B).
+# v3 and v4 BOTH dominate our 1012B (smaller AND faster).
+# Our 1032B stays Pareto (faster than any Thomas point).
+THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100)]
+THOMAS    = (996, 4100)     # size corner now
+CLAUDE    = (1032, 3645)    # our best Pareto point — speed at this size
 TARGET    = 1024
 
 def pareto(pts):
@@ -65,7 +68,7 @@ def pareto(pts):
     front.sort(key=lambda i: pts[i][0])
     return front
 
-ALL_XY = [(b, c) for b, c, _ in TRAIL] + [THOMAS, THOMAS_V1]
+ALL_XY = [(b, c) for b, c, _ in TRAIL] + THOMAS_TRACK
 FRONT = pareto(ALL_XY)
 
 # ======================================================================
@@ -91,41 +94,39 @@ ax.plot(px, py, '-', color='#c41e3a', linewidth=2.8, zorder=4,
 ax.scatter(px, py, c='#c41e3a', s=110, marker='D',
            edgecolors='#7a1225', linewidths=1.2, zorder=5)
 
-# Thomas track — BOTH DOMINATED now.  Gray, no frontier diamond.
-ttx, tty = [THOMAS_V1[0], THOMAS[0]], [THOMAS_V1[1], THOMAS[1]]
-ax.plot(ttx, tty, ':', color='#999', linewidth=1.2, zorder=3,
-        label='Thomas (both dominated)')
-ax.scatter(ttx, tty, c='#bbb', s=70, marker='o',
-           edgecolors='#888', linewidths=1, zorder=3)
-ax.annotate(f'Thomas v2\n{THOMAS[0]}B\n(dominated)', THOMAS,
-            textcoords="offset points", xytext=(12, -4), fontsize=9,
-            color='#666', bbox=dict(boxstyle='round,pad=0.3',
-            fc='#eee', ec='#aaa', lw=0.8))
+# Thomas track — 4 points.  v3/v4 (1004B, 996B) RETAKE the size corner,
+# both under 1024, both faster than our SMALL_MUL8.  v1/v2 dominated.
+ttx = [p[0] for p in THOMAS_TRACK]
+tty = [p[1] for p in THOMAS_TRACK]
+ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.5, zorder=4,
+        label='Thomas')
+ax.scatter(ttx, tty, c='#2e8b57', s=90, marker='o',
+           edgecolors='#1a5235', linewidths=1.2, zorder=5)
+ax.annotate(f'Thomas\n{THOMAS[0]}B — size corner', THOMAS,
+            textcoords="offset points", xytext=(-14, 14), fontsize=10,
+            fontweight='bold', ha='right',
+            bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',
+            ec='#2e8b57', lw=1))
+ax.annotate(f'{THOMAS_TRACK[2][0]}B', THOMAS_TRACK[2],
+            textcoords="offset points", xytext=(8, -14), fontsize=8,
+            color='#2e8b57')
 
-# Claude stars — TWO of them.  Size floor + the Thomas-killer.
-CLAUDE_FAST = (1032, 3645)  # dominates Thomas v2 on both axes
+# Claude star — our best Pareto point.  Faster than any Thomas point.
 ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=280, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
-           label=f'Claude {CLAUDE[0]}B — under 1024')
-ax.annotate(f'RCB complete addition\n{CLAUDE[0]}B — UNDER TARGET',
-            CLAUDE, textcoords="offset points", xytext=(20, -12),
+           label=f'Claude {CLAUDE[0]}B')
+ax.annotate(f'Claude\n{CLAUDE[0]}B, ratio {CLAUDE[1]/1850:.2f}',
+            CLAUDE, textcoords="offset points", xytext=(14, -22),
             fontsize=10, fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.4', fc='#ffe4c4',
-                      ec='#e07000', lw=1.5))
-ax.scatter([CLAUDE_FAST[0]], [CLAUDE_FAST[1]], c='#e07000', s=200, marker='*',
-           edgecolors='#8a4500', linewidths=1.2, zorder=6)
-ax.annotate(f'{CLAUDE_FAST[0]}B, ratio {CLAUDE_FAST[1]/1850:.2f}\ndominates Thomas',
-            CLAUDE_FAST, textcoords="offset points", xytext=(14, -24),
-            fontsize=9, fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.3', fc='#ffe4c4',
+            bbox=dict(boxstyle='round,pad=0.35', fc='#ffe4c4',
                       ec='#e07000', lw=1))
 
-# 1024 B target line — we're PAST it.
-ax.axvline(TARGET, color='#2e8b57', linestyle='--', linewidth=1.8,
+# 1024 B target line — Thomas is past it now; we're at 1012 (dominated).
+ax.axvline(TARGET, color='#888', linestyle='--', linewidth=1.5,
            alpha=0.7, zorder=1)
-ax.annotate(f'{TARGET}B target\n← past', (TARGET, 500),
-            textcoords="offset points", xytext=(6, 0), fontsize=10,
-            color='#2e8b57', fontweight='bold')
+ax.annotate(f'{TARGET}B', (TARGET, 500),
+            textcoords="offset points", xytext=(6, 0), fontsize=9,
+            color='#888')
 
 # Turning-point labels only — the path, not every step
 LABEL_OFFSETS = {
