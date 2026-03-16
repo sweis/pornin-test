@@ -370,59 +370,6 @@ fe_mul_m:
 	pop	rbx
 	ret
 
-/* fe_inv_m.  Loop counter in rbx (callee-saved, survives fe_mul_m).
- * fe_mul_m now uses r10 internally for b, so r10 is not free here.
- * Push/pop rbx costs +2 bytes, but `mov ebx,imm` and `dec ebx` are
- * each 1 byte shorter than their r10d equivalents — net zero. */
-fe_inv_m:
-	/* All args on stack — fe_mul_m preserves r12-r15 now so no
-	 * callee-save reg is needed for dest/src/m.  Just push rbx
-	 * (loop counter) + args.  rbp from enter is the stable base;
-	 * [rbp+8]=dest, [rbp+16]=src, [rbp+24]=m.  −7 B: drop push
-	 * r12,r13 (−4) + pops (−4) + movs (−6); add push rdi,rsi
-	 * (+2), pops (+2), [rbp+N] loads vs reg (+3).  */
-	push	rbx
-	push	rsi                 /* src → [rbp+16] */
-	push	rdi                 /* dst → [rbp+8]  */
-	enter	32, 0
-
-	mov	rdi, rsp
-	lea	rsi, [r14+oN_early] /* cN (.text, via bc_run's r14=.Ljt) */
-	push	4
-	pop	rcx
-	rep	movsq               /* exponent ← m; rcx=0 after */
-	/* Both moduli have low limb ≫ 2 → no borrow into limb 1. */
-	sub	DWORD PTR [rsp], 2
-
-	mov	rdi, [rbp+8]        /* dst */
-	mov	rsi, [rbp+16]       /* src */
-	mov	cl, 4               /* rcx=0 from rep above */
-	rep	movsq               /* r ← a */
-
-	xor	ebx, ebx
-	mov	bl, 254
-.Le:	mov	rdi, [rbp+8]
-	push	rdi                 /* stash for reuse after .Lfm clobbers */
-	push	rdi
-	push	rdi
-	pop	rdx
-	pop	rsi
-	call	.Lfm
-	pop	rdi                 /* restore dest — before bt so [rsp]=exp */
-	bt	DWORD PTR [rsp], ebx
-	jnc	.Lnx
-	push	rdi
-	pop	rsi
-	mov	rdx, [rbp+16]       /* src */
-	call	.Lfm
-.Lnx:	dec	ebx
-	jns	.Le
-
-	leave
-	pop	rcx                 /* discard dst */
-	pop	rcx                 /* discard src */
-	pop	rbx
-	ret
 
 /* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
  * 32 first, for chained decode (rdi already advanced by the prior
@@ -704,10 +651,7 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 	xor	al, 1
 .Lor:	or	bpl, al
 	ret
-/* INV (mod-n only — mod-p inversion eliminated by projective
- * check).  rdx = slot[s2] from decoder; bc_v1 runs before pt_mul
- * so slot 8=cN is live.  fe_inv_m preserves bc_run's state. */
-.Lop8:	jmp	fe_inv_m
+/* .Lop8 (INV) is fe_inv_m itself — moved to after .Lop3.  −5 B. */
 /* No m0i → Nmul is just a rcx override, Fmul is just the jmp.
  * Decoder preloaded rcx = &cP; Nmul overwrites to &cN then falls
  * through.  −10 B (push 1;pop r8 + mov r8,[rcx-8] + jmp .Lmj). */
@@ -759,6 +703,63 @@ Fadd:	push	rdi
 	dec	ecx
 	jnz	2b
 1:	ret
+
+/* .Lop8 = fe_inv_m (moved here to drop the 5-B jmp).  Offset
+ * from .Ljt is ~170 B — fits u8.  fe_inv_m is mod-n only. */
+.Lop8:
+/* fe_inv_m.  Loop counter in rbx (callee-saved, survives fe_mul_m).
+ * fe_mul_m now uses r10 internally for b, so r10 is not free here.
+ * Push/pop rbx costs +2 bytes, but `mov ebx,imm` and `dec ebx` are
+ * each 1 byte shorter than their r10d equivalents — net zero. */
+fe_inv_m:
+	/* All args on stack — fe_mul_m preserves r12-r15 now so no
+	 * callee-save reg is needed for dest/src/m.  Just push rbx
+	 * (loop counter) + args.  rbp from enter is the stable base;
+	 * [rbp+8]=dest, [rbp+16]=src, [rbp+24]=m.  −7 B: drop push
+	 * r12,r13 (−4) + pops (−4) + movs (−6); add push rdi,rsi
+	 * (+2), pops (+2), [rbp+N] loads vs reg (+3).  */
+	push	rbx
+	push	rsi                 /* src → [rbp+16] */
+	push	rdi                 /* dst → [rbp+8]  */
+	enter	32, 0
+
+	mov	rdi, rsp
+	lea	rsi, [r14+oN_early] /* cN (.text, via bc_run's r14=.Ljt) */
+	push	4
+	pop	rcx
+	rep	movsq               /* exponent ← m; rcx=0 after */
+	/* Both moduli have low limb ≫ 2 → no borrow into limb 1. */
+	sub	DWORD PTR [rsp], 2
+
+	mov	rdi, [rbp+8]        /* dst */
+	mov	rsi, [rbp+16]       /* src */
+	mov	cl, 4               /* rcx=0 from rep above */
+	rep	movsq               /* r ← a */
+
+	xor	ebx, ebx
+	mov	bl, 254
+.Le:	mov	rdi, [rbp+8]
+	push	rdi                 /* stash for reuse after .Lfm clobbers */
+	push	rdi
+	push	rdi
+	pop	rdx
+	pop	rsi
+	call	.Lfm
+	pop	rdi                 /* restore dest — before bt so [rsp]=exp */
+	bt	DWORD PTR [rsp], ebx
+	jnc	.Lnx
+	push	rdi
+	pop	rsi
+	mov	rdx, [rbp+16]       /* src */
+	call	.Lfm
+.Lnx:	dec	ebx
+	jns	.Le
+
+	leave
+	pop	rcx                 /* discard dst */
+	pop	rcx                 /* discard src */
+	pop	rbx
+	ret
 
 /* ======================================================================
  * Public entry point.
