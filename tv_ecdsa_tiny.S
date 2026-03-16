@@ -727,24 +727,8 @@ Fmul:	jmp	fe_mul_m
 /* rcx = &P is supplied by the decoder.  Fadd also preserves it
  * across its fe_sub_raw call (push/pop around it, +2 B) and jumps to
  * .Lop3 directly — the old `Fsub: lea rcx,[r14+oP]` re-load is gone. */
-.Lop3:	push	rcx
-	push	rdi
-	call	fe_sub_raw
-	pop	rdi
-	pop	rdx
-	jnc	1f
-	mov	rsi, rdi
-	/* rcx=0 from fe_sub_raw's dec-to-0; only CF needs clearing
-	 * (we're on the borrow path, CF=1).  clc = 1 B vs xor 2 B. */
-	clc
-	mov	cl, 4
-2:	lodsq
-	adc	rax, [rdx]
-	stosq
-	lea	rdx, [rdx+8]
-	dec	ecx
-	jnz	2b
-1:	ret
+/* Fadd now BEFORE .Lop3 → falls through (drops 2-B jmp).  .Lop3's
+ * table offset grows by ~20 B but stays u8.  */
 .Lop2:
 Fadd:	push	rdi
 	push	rsi
@@ -758,7 +742,23 @@ Fadd:	push	rdi
 	pop	rcx
 	pop	rsi
 	pop	rdi
-	jmp	.Lop3
+	/* FALLTHROUGH */
+.Lop3:	push	rcx
+	push	rdi
+	call	fe_sub_raw
+	pop	rdi
+	pop	rdx
+	jnc	1f
+	mov	rsi, rdi
+	clc                         /* rcx=0 from fe_sub_raw; CF=1 on this path */
+	mov	cl, 4
+2:	lodsq
+	adc	rax, [rdx]
+	stosq
+	lea	rdx, [rdx+8]
+	dec	ecx
+	jnz	2b
+1:	ret
 
 /* ======================================================================
  * Public entry point.
