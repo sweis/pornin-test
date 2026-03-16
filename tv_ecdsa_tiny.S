@@ -914,13 +914,11 @@ tv_ecdsa_p256_verify_asm:
 	push	rbx
 	push	rbx
 	pop	rdi
-	/* cond_sub_n inlined (sole caller).  r12 = &cN in verify.
-	 * .Lop3 semantics: dst = s1 − s2, add-back rcx on borrow.
-	 * With rsi=rdi, rdx=rcx=&cN: cond-sub mod n. */
 	mov	rcx, r12
-	mov	rsi, rdi
+	push	rdi
+	pop	rsi                 /* 2 B vs mov rsi,rdi 3 B */
 	mov	rdx, r12
-	call	.Lop3
+	call	.Lop3               /* cond-sub mod n */
 	pop	rsi
 	pop	rdi
 	mov	rdx, r13
