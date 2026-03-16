@@ -1,7 +1,7 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 984 B default build; 964 B with -DSMALL_MUL8 (~2× cycles).
+ * 983 B default build; 963 B with -DSMALL_MUL8 (~2× cycles).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -529,8 +529,16 @@ pt_mul:
 	call	.Lcadd
 3:	dec	ebp
 	jns	.Lpm
+	/* TAIL into bc_v3 dispatch.  pop rbp BEFORE the jmp (bcrun
+	 * doesn't know about our push); bcrun's ret goes to OUR
+	 * caller (verify) directly — call pt_mul's ret addr is
+	 * still on the stack, the jmp preserves it.  CF (check
+	 * result) survives all the way to verify's sbb.  +7 B here,
+	 * −8 B in verify (push;pop;call gone). */
 	pop	rbp
-	ret
+	push	obc_v3
+	pop	rdi
+	jmp	bcrun_r14
 
 /* .Ljt + constants.  cGX→cGY→cN→cP contiguous in that order:
  * verify copies all four to slots 2-5 in one 16-qword rep movsq
@@ -833,12 +841,9 @@ tv_ecdsa_p256_verify_asm:
 	rep	movsq               /* slots 2-7 → 16-21.  rcx → 0. */
 
 	/* rbx = &slot13 (stockpile) — pt_mul reads u1/u2 from it. */
-	call	pt_mul              /* acc (slots 0-2) = u1·G + u2·Q */
-
-	/* bc_v3: projective check.  See bc_v3 header. */
-	push	obc_v3
-	pop	rdi
-	call	bcrun_r14
+	/* pt_mul tail-jumps into bc_v3 dispatch — returns HERE with
+	 * CF set by bc_run's neg ebp.  See pt_mul epilogue. */
+	call	pt_mul              /* acc = u1·G + u2·Q, then bc_v3 check */
 	sbb	eax, eax            /* CF=1 → eax=−1; CF=0 → eax=0 */
 	inc	eax                 /* −1→0 (fail), 0→1 (valid) */
 .Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
