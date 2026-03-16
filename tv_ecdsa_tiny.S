@@ -273,14 +273,14 @@ fe_mul_m:
 	 * so .Lepi4 drops one pop: −6 B combined). */
 	mov	r14, rsi            /* a */
 
-	/* Allocate + zero t[0..8] in one go: push rax×9 decrements rsp
-	 * by 72 and writes zeros.  11 B vs 18 B for sub + dec-loop.
-	 * 4 reg-pushes + 9 value-pushes = 104 B below entry rsp; entry
-	 * rsp%16=8 → final %16=0, same alignment as before. */
+	/* Allocate + zero t[0..8]: loop 9 pushes (8 B) vs unrolled
+	 * (11 B).  `loop` microcode ~7 cyc × 9 × 5850 calls ≈ +370K
+	 * cyc.  rcx=0 after; muladd4 clobbers rcx anyway. */
 	xor	eax, eax
-	.rept 9
-	push	rax
-	.endr
+	push	9
+	pop	rcx
+1:	push	rax
+	loop	1b
 
 	/* r11 counts −32→0; `add r11,8; jnz` drops the cmp.  a[i] is
 	 * then [r15+r11+32], disp8 (+1 byte), but net −2. */
