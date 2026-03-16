@@ -186,14 +186,12 @@ bc_v1:
  * 256-bit primitives (4 × u64 limbs, little-endian).
  * -------------------------------------------------------------------- */
 
-/* fe_cpy(dst=rdi, src=rsi).  movsq unrolled — `rep movsq` has a
- * ~25-cycle startup cost for small counts, and this is called from
- * fe_mul_m's ~50%-taken fallback (~4500× per verify). */
+/* fe_cpy(dst=rdi, src=rsi).  rep at cnt=4 is ~20 cyc startup ×
+ * ~2900 calls ≈ 58K cyc — accepted for −2 B. */
 fe_cpy:
-	movsq
-	movsq
-	movsq
-	movsq
+	push	4
+	pop	rcx
+	rep	movsq
 	ret
 
 /* fe_iszero(a=rdi) -> eax=1 iff zero.  OR accumulates into rax; the
