@@ -116,10 +116,10 @@ bc_v3:
 	.byte 0x21,0x72            /* slot7  = z²                     */
 	.byte 0x70,0xac            /* slot10 = r·z²  (r=slot12)       */
 	.byte 0xa3,0xa0            /* slot10 = X − r·z²       = diff1 */
-	.byte 0x09,0x37            /* slot3  = n·z²  (MULCN: b=cN, mod p)*/
+	.byte 0x08,0x37            /* slot3  = n·z²  (MULCN=op8 now)  */
 	.byte 0x33,0x3a            /* slot3  = diff1 − n·z² = diff2 (Fsub)*/
 	.byte 0x30,0x3a            /* slot3  = diff1·diff2            */
-	.byte 0x07,0x30            /* check slot3 nonzero → fail      */
+	.byte 0x16,0x30            /* check slot3 nonzero (op6 s2=1)  */
 	.byte 0x00,0x00
 
 /* Tail checkzero on slot3 (= H): bc_run returns CF=1 iff H==0.
@@ -173,8 +173,8 @@ bc_v1:
 	.byte 0x11,0x71            /* slot7  = Qy²           (SQR) */
 	.byte 0xa3,0x77            /* slot7 -= B             (Fsub)*/
 	.byte 0xb3,0x77            /* slot7 -= slot11        (Fsub)*/
-	.byte 0x07,0x70            /* check slot7 nonzero (dst=7!) */
-	.byte 0x88,0x0d            /* INV: slot0 = slot13^-1 mod n */
+	.byte 0x16,0x70            /* check slot7 nonzero (op6 s2=1)  */
+	.byte 0x07,0x0d            /* INV (op7 now): slot0 = s⁻¹ mod n*/
 	/* bc_v2 appended: hash is in slot14, s⁻¹ in slot0, r in slot12.
 	 * Checks may have failed — harmless, ebp already tainted. */
 	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
@@ -208,23 +208,7 @@ fe_iszero:
 	sete	al
 	ret
 
-/* fe_sub_raw: dst = a − b.  Borrow in CF on return (last sbb's CF;
- * lea/dec/jnz/ret all preserve it).  lodsq/stosq auto-increment and
- * preserve all flags; `xor ecx,ecx` doubles as the initial CF-clear.
- * Pointers advance — callers must not assume they're preserved.
- *
- * Sole CF consumer is .Lop3's jnc.  eax never read by any caller
- * (Fadd passes rsi=&cP so a≥b always; fe_mul_m's cond-sub uses CF). */
-fe_sub_raw:
-	xor	ecx, ecx
-	mov	cl, 4
-1:	lodsq
-	sbb	rax, [rdx]
-	stosq
-	lea	rdx, [rdx+8]
-	dec	ecx
-	jnz	1b
-	ret
+/* fe_sub_raw INLINED in .Lop3 — see handler block. */
 
 /* mul8 OP: dst[0..8] OP= ebx·src[0..7], 32-bit limbs.  One
  * expansion in the default build (reduce=sub only — schoolbook
@@ -262,7 +246,7 @@ fe_sub_raw:
  * which only runs mod-n (mod-p gone — projective check).  r14 at
  * the call site is bc_run's .Ljt hoist.  gas won't pick disp8 for
  * forward-ref oN — hardcode + assert. */
-.equ	oN_early, 74
+.equ	oN_early, 73
 .Lfm:	lea	rcx, [r14+oN_early]
 	/* FALLTHROUGH */
 /* fe_mul_m(r=rdi, a=rsi, b=rdx, m=rcx).  r = a·b mod m.  32-bit limbs.
@@ -490,7 +474,7 @@ bc_run:
 	/* Preload rcx = &P: most handlers want it (Fmul/Fsub/Fadd),
 	 * the rest overwrite it.  oP is a forward ref — gas picks
 	 * disp32 for those; hardcode + assert below. */
-.equ	oP_early, 106       /* .Ljt(10) + cGX/Y(64) + cN(32) */
+.equ	oP_early, 105       /* .Ljt(9) + cGX/Y(64) + cN(32) */
 	lea	rcx, [r14+oP_early]
 	call	rax
 	jmp	.Lbc
@@ -581,9 +565,13 @@ pt_mul:
  * 64 B — .Lop8 (fe_inv_m) is the furthest. */
 .Ljt:
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
-	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
-	.byte	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only */
-	.byte	.Lop9-.Ljt  /* MULCN: Fmul with b = cN (.text) */
+	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt
+	.byte	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only (op 7) */
+	.byte	.Lop9-.Ljt  /* MULCN (op 8) */
+/* op6 = check (s2 bit0: 0=checkzero, 1=checknonzero).  op7
+ * (checknonzero) absorbed — s2 encodes sense.  −1 table, −1
+ * handler vs separate ops; frees 2B headroom so fe_sub_raw
+ * can inline in .Lop3 (puts .Lop8 at exactly 255). */
 
 cGX:	.quad 0xf4a13945d898c296, 0x77037d812deb33a0
 	.quad 0xf8bce6e563a440f2, 0x6b17d1f2e12c4247
@@ -618,9 +606,13 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 	loopz	1b
 	setae	al
 	jmp	.Lor
+/* s2 bit0 (= bit4 of byte1 at [rbx-2]) selects sense.  s2=0
+ * checkzero (fail if zero), s2=1 checknonzero (fail if nonzero).
+ * 13 B vs 14 B for two handlers.  Reads byte1 back from the
+ * stream — decoder's `and eax,0xF` consumed s2 already. */
 .Lop6:	call	fe_iszero
-	jmp	.Lor
-.Lop7:	call	fe_iszero
+	test	BYTE PTR [rbx-2], 0x10
+	jz	.Lor
 	xor	al, 1
 .Lor:	or	bpl, al
 	ret
@@ -657,15 +649,29 @@ Fadd:	push	rdi
 	push	rdi
 	push	rcx
 	pop	rsi
-	call	fe_sub_raw
+	/* Fadd calls .Lop3 for p−s2 → scratch.  s2 < p so .Lop3's
+	 * jnc (no borrow) always taken — same result as fe_sub_raw
+	 * but reusing the inlined body.  0 B change (rel32 either way). */
+	call	.Lop3
 	pop	rdx
 	pop	rcx
 	pop	rsi
 	pop	rdi
 	/* FALLTHROUGH */
+/* fe_sub_raw inlined here — sole remaining caller.  The op6/7
+ * merge freed exactly 14 B of handler-block headroom (.Lop8
+ * 241+14 = 255, fits u8).  −20 B (standalone gone) +19 (body)
+ * −5 (call) = −6 B.  Plus −2 B from the merge = −8 B chain. */
 .Lop3:	push	rcx
 	push	rdi
-	call	fe_sub_raw
+	xor	ecx, ecx
+	mov	cl, 4
+3:	lodsq
+	sbb	rax, [rdx]
+	stosq
+	lea	rdx, [rdx+8]
+	dec	ecx
+	jnz	3b
 	pop	rdi
 	pop	rdx
 	jnc	1f
