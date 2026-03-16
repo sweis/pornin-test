@@ -51,18 +51,20 @@ TRAIL = [
     (1032, 3645, None),
     # --- Addend slot shift: Shamir setup → one rep movsq (−16B) ---
     #   bc_v1 stages slots 2-7 = Gx,Gy,1,Qx,Qy,1.  RCB addend moves
-    #   4,5,6 → 5,6,7 (pure nibble cycle, 0 B).  985 B retakes size
-    #   corner from Thomas v4 (996 B) by 11 B.
+    #   4,5,6 → 5,6,7 (pure nibble cycle, 0 B).  Retakes size corner.
     (1005, 3475, None),
-    (985,  7960, "addend slot shift\n985B — size corner"),
+    (985,  7960, None),
+    # --- Micro-grind: imul for slot12, [rdi-64] inc, drop r15 (−5B) ---
+    (1000, 3490, None),
+    (980,  7975, "addend slot shift\n980B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B).
-# Post-985B: Thomas v4 stays Pareto (996/4100 is between our two
+# Post-980B: Thomas v4 stays Pareto (996/4100 is between our two
 # points on the frontier) but no longer holds either corner.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100)]
 THOMAS    = (996, 4100)
-CLAUDE    = (985, 7960)     # size corner — back in our hands
+CLAUDE    = (980, 7975)     # size corner — 16 B under Thomas v4
 TARGET    = 1024
 
 def pareto(pts):
