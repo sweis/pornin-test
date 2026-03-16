@@ -340,8 +340,9 @@ fe_mul_m:
 	pop	rsi
 	add	rsp, 72
 	pop	rdi                 /* dest (pushed before push-loop) */
-	mov	rdx, r8             /* m */
-	mov	rcx, r8
+	mov	rcx, r8             /* m */
+	push	rcx
+	pop	rdx                 /* 5 B total vs 2×mov r8 (6 B) */
 	call	.Lop3
 
 	pop	rbp
