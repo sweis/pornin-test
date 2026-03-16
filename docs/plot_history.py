@@ -68,17 +68,20 @@ TRAIL = [
     (964,  8115, None),
     (983,  3525, None),
     (963,  8115, None),
-    # --- pt_mul before .Lcadd: tail jmp is rel8 over 14 B (−3B) ---
+    # --- Layout reorders: pt_mul/.Lcadd, fe_mul_m for rel8 jmps (−6B) ---
+    #   Costs ~5% cycles from new I-cache layout — accepted for size.
     (980,  3540, None),
-    (960,  8085, "fe_inv_m redesign\n960B — size corner"),
+    (960,  8085, None),
+    (977,  3720, None),
+    (957,  8470, "fe_inv_m + layout\n957B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B).
-# Post-960B: our 980B DOMINATES Thomas v4 (smaller AND faster).
+# Post-957B: our 977B DOMINATES Thomas v4 (smaller AND faster).
 # Thomas is fully off the frontier now.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100)]
 THOMAS    = (996, 4100)
-CLAUDE    = (960, 8085)     # size corner — 36 B under Thomas v4
+CLAUDE    = (957, 8470)     # size corner — 39 B under Thomas v4
 TARGET    = 1024
 
 def pareto(pts):

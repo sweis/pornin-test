@@ -20,21 +20,21 @@ make size      test      wp          # portable C reference
 
 | Implementation | text+rodata | Cycles | Requires | Notes |
 |---|---:|---:|---|---|
-| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **960 B** | ~8.1M | MOVBE | 32-bit schoolbook, size floor |
-| **`tv_ecdsa_tiny.S`** (default) | **980 B** | **~3.5M** | MOVBE | 64-bit schoolbook |
+| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **957 B** | ~8.5M | MOVBE | 32-bit schoolbook, size floor |
+| **`tv_ecdsa_tiny.S`** (default) | **977 B** | **~3.7M** | MOVBE | 64-bit schoolbook |
 | `tv_ecdsa_fast.S` | 1397 B | ~0.65M | BMI2+MOVBE | Montgomery+mulx, predecessor |
 | `tv_ecdsa_bc.S` | 1712 B | ~1.85M | — | first bytecode version |
 | `tv_ecdsa.c` (Cortex-M4) | 2082 B | — | — | realistic boot-ROM target |
 | `tv_ecdsa.c` (x86-64, gcc `-Os`) | 3076 B | — | — | portable C reference |
 
-**One source, two Pareto-optimal builds.** The default (980 B) uses
+**One source, two Pareto-optimal builds.** The default (977 B) uses
 64-bit schoolbook for the 512-bit product; `-DSMALL_MUL8` swaps in a
 32-bit schoolbook (−20 B) that uses `loop`+`scasd` in the hot loop —
 both microcoded, ~950K iterations/verify, ~4M extra cycles. Same reduce
 step either way.
 
 **vs Thomas** (external competing implementation): v4 at 996 B / ~4.1M
-cycles. Our default (980 B / ~3.5M) now DOMINATES it on both axes —
+cycles. Our default (977 B / ~3.7M) now DOMINATES it on both axes —
 Thomas is fully off the Pareto frontier. Full chart at
 [`docs/progress.png`](docs/progress.png).
 
@@ -75,7 +75,7 @@ What changed from fast.S to drop ~290 bytes:
 - **Shamir's trick inherited from fast.S.** Slot 6 = z = 1 serves both
   G and Q; only X,Y swap.
 
-### Journey (1397 → 960)
+### Journey (1397 → 957)
 
 | ~Size | Key step |
 |---|---|
@@ -93,7 +93,7 @@ What changed from fast.S to drop ~290 bytes:
 | 985 | **addend slot shift** — Shamir setup → one rep movsq (−16) |
 | 979 | imul edi,esi,6 for slot12; drop r15; lodsb for 0x04 (−6) |
 | 969 | **fe_inv_m: no seed copy** — bytecode sets dst=1, bit 255 (−10) |
-| 960 | .Lfm = Nmul; pt_mul tail-jmp → rel8 via reorder (−9) |
+| 957 | .Lfm = Nmul; layout reorders for rel8 jmps (−12) |
 
 ## Earlier implementations
 
