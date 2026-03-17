@@ -173,7 +173,7 @@ bc_v1:
 	/* checkzero-s DROPPED: s=0 → INV gives 0 → u1=u2=0 → ladder
 	 * never adds → R=∞ → bc_v3's checkzero(Z) catches it.  −2 B. */
 	.byte 0x06,0xc0, 0x05,0xc4,            0x05,0xd4
-	.byte 0x05,0x05, 0x05,0x15
+	.byte 0x09,0x00, 0x09,0x10   /* geq_p (op9): r13 = &cP, s1 unused */
 	/* b-derive: G in 2,3.  slot10 = b (survives pt_mul — RCB
 	 * reads slot 10 for the b multiplications, never writes). */
 	.byte 0x21,0xa2            /* slot10 = Gx²           (SQR) */
@@ -223,19 +223,9 @@ bc_v1:
  * 256-bit primitives (4 × u64 limbs, little-endian).
  * -------------------------------------------------------------------- */
 
-/* fe_iszero(a=rdi) -> al=1 iff zero.  OR-accumulates into rax;
- * last OR's ZF reflects the full 256-bit value.  Sole caller is
- * .Lop6 (the bytecode check handler) — reads only al.  High bytes
- * of rax are garbage from the OR loop.  Preserves rdi. */
-fe_iszero:
-	push	4
-	pop	rcx
-	xor	eax, eax
-1:	or	rax, [rdi+rcx*8-8]
-	loop	1b
-	sete	al
-	ret
-
+/* fe_iszero INLINED in .Lop6 — cP removal freed 36 B handler
+ * headroom, enough for the 10 B body growth.  −16 B standalone
+ * + (15 body − 5 call) = −6 B net. */
 /* fe_sub_raw INLINED in .Lop3 — see handler block. */
 
 /* mul8 OP: dst[0..8] OP= ebx·src[0..7], 32-bit limbs.  One
@@ -275,7 +265,7 @@ fe_iszero:
  * in fe_inv_m.  Assert below.  fe_mul_m moved to AFTER the handler
  * block — Fmul's jmp is rel8 (forward 115 B; 12 B headroom).
  * fe_inv_m reaches it via Nmul → Fmul fallthrough → rel8 jmp. */
-.equ	oN_early, 73
+.equ	oN_early, 74        /* +1 for the geq_p table entry */
 
 /* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
  * 32 first, for chained decode (rdi already advanced by the prior
@@ -417,10 +407,8 @@ bc_run:
 	movzx	eax, BYTE PTR [r12+rax]
 	add	rax, r12
 	/* Preload rcx = &P: most handlers want it (Fmul/Fsub/Fadd),
-	 * the rest overwrite it.  oP is a forward ref — gas picks
-	 * disp32; hardcode + assert below. */
-.equ	oP_early, 105       /* .Ljt(9) + cGX/Y(64) + cN(32) */
-	lea	rcx, [r12+oP_early]
+	 * the rest overwrite it.  r13 = &cP (slot22), set by verify. */
+	mov	rcx, r13
 	call	rax
 	jmp	.Lbc
 
@@ -445,6 +433,7 @@ bc_run:
 	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt
 	.byte	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only (op 7) */
 	.byte	.Lop9-.Ljt  /* MULCN (op 8) */
+	.byte	.Lop5p-.Ljt /* geq_p (op 9): rsi=r13=&cP, for Qx<p/Qy<p */
 /* op6 = check (s2 bit0: 0=checkzero, 1=checknonzero).  The old
  * separate checknonzero op was absorbed — s2 encodes sense.  The
  * table entry and handler it freed let fe_sub_raw inline in .Lop3. */
@@ -455,16 +444,14 @@ cGY:	.quad 0xcbb6406837bf51f5, 0x2bce33576b315ece
 	.quad 0x8ee7eb4a7c0f9e16, 0x4fe342e2fe1a7f9b
 cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
 	.quad 0xffffffffffffffff, 0xffffffff00000000
-cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
-	.quad 0x0000000000000000, 0xffffffff00000001
+/* cP DELETED — built at runtime in slot22 (rbp−40, disp8).  19 B of
+ * code vs 32 B of data, and r13 holds &cP for the decoder preload
+ * (mov rcx,r13 = 3 B vs lea = 4 B).  The 32 B of handler-block
+ * headroom this frees lets fe_iszero inline into .Lop6. */
 
 .equ oN,   cN   - .Ljt
-.equ oP,   cP   - .Ljt
 .if oN - oN_early
 .error "oN moved — update oN_early (fe_inv_m bt uses hardcoded disp8)"
-.endif
-.if oP - oP_early
-.error "oP moved — update oP_early in bc_run"
 .endif
 .if (cN - cGX) - 64
 .error "cGX..cN spacing changed — verify's 16-qword block copy depends on cGX,cGY,cN,cP contiguous"
@@ -473,6 +460,12 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
  * (gas .if can't forward-ref) — `.byte` truncation at .Ljt will
  * produce wrong bytes, not a build error, if it ever overflows. */
 
+/* .Lop5p: geq with rsi = r13 = &cP.  op1 (was SQR alias, now this);
+ * bc_v1's SQR ops are re-encoded as explicit Fmul (s2=s1, op=0).
+ * Falls through to .Lop5.  bc_v1's Qx<p,Qy<p checks use this —
+ * slot5 no longer gets cP block-copied (cP is built at slot22). */
+.Lop5p:	mov	rsi, r13
+	/* FALLTHROUGH */
 /* fe_geq inlined.  Compare [rdi] ≥ [rsi] limb-by-limb from the
  * top; loopz falls out on first mismatch with cmp's CF live. */
 .Lop5:	push	4
@@ -484,9 +477,14 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
 	jmp	.Lor
 /* s2 bit0 (= bit4 of byte1 at [rbx-2]) selects sense.  s2=0
  * checkzero (fail if zero), s2=1 checknonzero (fail if nonzero).
- * 13 B vs 14 B for two handlers.  Reads byte1 back from the
- * stream — decoder's `and eax,0xF` consumed s2 already. */
-.Lop6:	call	fe_iszero
+ * fe_iszero inlined (cP removal freed the headroom — .Lop8 at
+ * 219 + this 10 B = 229, still fits u8). */
+.Lop6:	push	4
+	pop	rcx
+	xor	eax, eax
+2:	or	rax, [rdi+rcx*8-8]
+	loop	2b
+	sete	al
 	test	BYTE PTR [rbx-2], 0x10
 	jz	.Lor
 	xor	al, 1
@@ -742,13 +740,13 @@ tv_ecdsa_p256_verify_asm:
 	 * (bc_run, pt_mul, fe_mul_m).  enter is microcoded (~12 cyc)
 	 * but runs once.  r15 dropped — .Lcadd goes via r14 disp32. */
 	push	rbx
+	push	r13
 	push	r14
-	enter	712, 0              /* 22 slots: 3-slot backups for RCB */
+	enter	744, 0              /* 22 slots + cP at slot22 (32 B) */
 	/* r12 not pushed: verify doesn't use it.  bc_run push/pops r12
-	 * as its own slot base — independent. */
+	 * as .Ljt — independent. */
 
-	/* r14 = slot base for the whole of verify.  r13 not used
-	 * anywhere. */
+	/* r14 = slot base.  r13 → &cP (built after block copy below). */
 	mov	r14, rsp
 
 	/* ABI args rdi (sig), rdx (pub), r8 (hash) all survive the
@@ -813,8 +811,31 @@ tv_ecdsa_p256_verify_asm:
 	 * (bc_v1's check ops read them first, then staging overwrites
 	 * 4-7 with 1,Qx,Qy,1).  rdi already at slot 2.  rcx=0. */
 	lea	rsi, [rip+cGX]
-	mov	cl, 16
-	rep	movsq               /* rdi → slot 6, rcx → 0 */
+	mov	cl, 12              /* cP is gone — only G + cN (12 qw) */
+	rep	movsq               /* rdi → slot 5, rcx → 0 */
+
+	/* BUILD cP at slot22.  p = 2^256 − 2^224 + 2^192 + 2^96 − 1.
+	 * LE dwords: FFFFFFFF ×3, 0 ×3, 1, FFFFFFFF.  rbp−40 is disp8
+	 * (enter 744 → rbp = r14+744, slot22 = r14+704 = rbp−40).
+	 * 19 B of stores replaces the 32 B .quad block; −32+19+4(lea)
+	 * +3(r13)+4(push/pop r13)+3(.Lop5p)+1(table)−1(decoder mov)
+	 * = +1 B direct, but unlocks 32 B of handler-block headroom.
+	 * rdi at slot5 from block copy — dead (overwritten by push
+	 * obc_v1 below).  r13 captured BEFORE build advances rdi. */
+	lea	rdi, [rbp-40]
+	push	rdi
+	pop	r13                 /* r13 = &cP.  Survives bc_run, pt_mul. */
+	xor	eax, eax
+	dec	rax                 /* rax = −1 */
+	stosq                       /* qw0 = −1 */
+	stosd                       /* dw2 = FFFFFFFF (eax = low 32 of −1) */
+	xor	eax, eax
+	stosd                       /* dw3 = 0 */
+	stosq                       /* qw2 = 0 */
+	inc	eax
+	stosd                       /* dw6 = 1 */
+	neg	eax
+	stosd                       /* dw7 = FFFFFFFF */
 
 	push	obc_v1
 	pop	rdi
@@ -848,6 +869,7 @@ tv_ecdsa_p256_verify_asm:
 	inc	eax                 /* −1→0 (fail), 0→1 (valid) */
 .Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
 	pop	r14
+	pop	r13
 	pop	rbx
 	ret
 
