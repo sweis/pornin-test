@@ -34,15 +34,15 @@ make size      test      wp          # portable C reference
 | `tv_ecdsa.c` (Cortex-M4) | 2082 B | — | — | realistic boot-ROM target |
 | `tv_ecdsa.c` (x86-64, gcc `-Os`) | 3076 B | — | — | portable C reference |
 
-**One source, two Pareto-optimal builds.** The default (978 B) uses
+**One source, multiple Pareto builds.** The default (947 B) uses
 64-bit schoolbook for the 512-bit product; `-DSMALL_MUL8` swaps in a
-32-bit schoolbook (−20 B) that uses `loop`+`scasd` in the hot loop —
-both microcoded, ~950K iterations/verify, ~4M extra cycles. Same reduce
+32-bit schoolbook (−14 B) that uses `scasd` in the hot loop —
+microcoded, ~950K iterations/verify, ~1M extra cycles. Same reduce
 step either way.
 
-**vs Thomas** (external competing implementation): v5 at 989 B / ~4.15M
-cycles. Our default (978 B / ~3.45M) DOMINATES it on both axes —
-Thomas is fully off the Pareto frontier. Full chart at
+**vs Thomas** (external competing implementation): v6 at 955 B / ~4.33M
+cycles. Our default (947 B / ~3.6M) dominates it on both axes —
+Thomas is off the Pareto frontier. Full chart at
 [`docs/progress.png`](docs/progress.png).
 
 ## Correctness
@@ -82,7 +82,7 @@ What changed from fast.S to drop ~290 bytes:
 - **Shamir's trick inherited from fast.S.** Slot 6 = z = 1 serves both
   G and Q; only X,Y swap.
 
-### Journey (1397 → 957)
+### Journey (1397 → 933)
 
 | ~Size | Key step |
 |---|---|
