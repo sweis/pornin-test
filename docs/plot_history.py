@@ -80,7 +80,11 @@ TRAIL = [
     #   #ifdef; xor ecx does three jobs (zero for push, zero for
     #   mul8's mov cl,N, eax no longer needed).  960B dominates 969B.
     (978,  3450, None),
-    (960,  7845, "957/960B — size corner"),
+    (960,  7845, None),
+    # --- mul8: drop `loop`, keep `scasd` (+4B, −39% cycles) ---
+    #   `loop` was ~6.5M of SMALL_MUL8's 7.8M cycles on its own.
+    #   964B fills the 960→977 gap; scasd is the real size knob now.
+    (964,  4780, "957/964B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).
@@ -89,7 +93,7 @@ TRAIL = [
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
                 (989, 4150)]
 THOMAS    = (989, 4150)     # latest — still dominated
-CLAUDE    = (960, 7845)     # current build — dominates old 969B checkpoint
+CLAUDE    = (964, 4780)     # scasd-only SMALL_MUL8 — 39% faster for +4B
 
 def pareto(pts):
     front = []
@@ -145,7 +149,7 @@ ax.annotate(f'Thomas v5 — {THOMAS[0]}B', THOMAS,
 ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=260, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
            label=f'Claude {CLAUDE[0]}B')
-ax.annotate(f'Claude — 957/960B',
+ax.annotate(f'Claude — 957/964B',
             CLAUDE, textcoords="offset points", xytext=(14, -4),
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.35', fc='#ffe4c4',
