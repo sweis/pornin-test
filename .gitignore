@@ -22,3 +22,4 @@ test_wycheproof_fast2
 bench_speed
 test_ecdsa_speed
 test_wycheproof_speed
+p256_rust/target/
