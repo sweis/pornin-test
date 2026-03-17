@@ -58,12 +58,40 @@ IPC                 3.58    3.00      ← …better scheduled
 branch-miss/call    195     940       ← 5× fewer misses
 ```
 
+## vs OpenSSL
+
+Adding a 4-bit windowed scalar mul (960 B precomputed `[1..15]·G`) drops
+us to **478K — 20% faster than our best asm.**  Still 3.2× slower than
+OpenSSL's nistz256.
+
+| Implementation | Cycles | vs OpenSSL | Precompute |
+|---|---:|---:|---|
+| OpenSSL nistz256 | 150K | 1.0× | 367 KB comb table |
+| Rust (4-bit window) | 478K | 3.2× | 960 B (15 points) |
+| fast2.S (BMI2) | 600K | 4.0× | none |
+| fast.S (BMI2) | 659K | 4.4× | none |
+
+The remaining gap is nistz256's comb table: `[0..36][0..64]·G` at 37
+bit-positions.  u1·G becomes ~37 lookups + adds with **zero doublings
+for the G half**.  We still do 252 doublings shared between G and Q.
+That's ~252 × 43 Fe::mul = ~10800 extra field ops — at ~30 cyc each,
+~320K cycles.  Matches the gap.
+
+Porting the comb table would be straightforward (generate it in
+`build.rs`, ~100KB of `.rodata`) and would likely land ~200K.  But
+it's a space-for-time trade the asm project deliberately didn't take —
+933-byte boot ROM and 367KB lookup tables don't coexist.
+
 ## Takeaway
 
 The asm speed wins came from **dependency structure** (lazy carry), not
-from register allocation or instruction encoding.  LLVM handles the
-latter.  Express the algorithm's actual data dependencies in Rust and
-the compiler does the rest.
+from register allocation or encoding.  LLVM handles the latter.
+Express the data dependencies in Rust and the compiler does the rest.
+
+The precompute-vs-code-size tradeoff is orthogonal.  A 960-byte table
+beat all our asm.  OpenSSL's 367KB table beats everything.  Neither
+has anything to do with the asm optimization work — they weren't in
+scope for a boot ROM.
 
 The size wins don't transfer.  If you need 933 bytes, write assembly.
-If you need 597K cycles, write either.
+If you need 150K cycles, precompute a comb table — in any language.

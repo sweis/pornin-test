@@ -12,6 +12,7 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod fe;      // field element (mod p)
+mod gtable;      // precomputed [1..15]·G
 pub mod scalar;  // scalar (mod n)
 pub mod point;   // group ops
 pub mod verify;  // top-level ECDSA verify

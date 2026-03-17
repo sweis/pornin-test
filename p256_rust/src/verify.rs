@@ -5,6 +5,7 @@ use crate::scalar::{Sc, N};
 use crate::point::Point;
 
 const GX: Fe = Fe([0xF4A13945D898C296, 0x77037D812DEB33A0, 0xF8BCE6E563A440F2, 0x6B17D1F2E12C4247]);
+#[allow(dead_code)]
 const GY: Fe = Fe([0xCBB6406837BF51F5, 0x2BCE33576B315ECE, 0x8EE7EB4A7C0F9E16, 0x4FE342E2FE1A7F9B]);
 
 pub fn verify(sig: &[u8], pub_key: &[u8], hash: &[u8]) -> bool {
@@ -49,14 +50,37 @@ pub fn verify(sig: &[u8], pub_key: &[u8], hash: &[u8]) -> bool {
     let u1 = Sc::mul(&e, &s_inv);
     let u2 = Sc::mul(&r, &s_inv);
 
-    // Shamir: R = u1·G + u2·Q
-    let g = Point { x: GX, y: GY, z: Fe::ONE };
-    let q = Point { x: qx, y: qy, z: Fe::ONE };
+    // Windowed Shamir: 4-bit windows for both scalars.
+    // G table is precomputed (constant); Q table computed per-verify (15 adds).
+    // 64 windows × (4 doublings + ≤2 adds) vs old 256 × (1 doubling + ≤2 adds).
+    // Same doublings, but adds drop from ~256 to ~128.  The Q-table precompute
+    // costs 14 adds — net win if u2 has more than 14 set bits (it always does).
+    use crate::gtable::G_TABLE;
+    let q_pt = Point { x: qx, y: qy, z: Fe::ONE };
+    let mut q_table = [Point::INFINITY; 16];
+    q_table[1] = q_pt;
+    for i in 2..16 {
+        q_table[i] = Point::add(&q_table[i-1], &q_pt, &b);
+    }
+
     let mut acc = Point::INFINITY;
-    for i in (0..256).rev() {
-        acc = Point::double(&acc, &b);
-        if bit(&u1.0, i) { acc = Point::add(&acc, &g, &b); }
-        if bit(&u2.0, i) { acc = Point::add(&acc, &q, &b); }
+    for w in (0..64).rev() {
+        // 4 doublings per window (except the first — acc starts at ∞, doubling is free)
+        if w != 63 {
+            for _ in 0..4 { acc = Point::double(&acc, &b); }
+        }
+        // G-window: G_TABLE is affine (Z=1), so convert to Point for add
+        let gw = nibble(&u1.0, w);
+        if gw != 0 {
+            let (gx, gy) = G_TABLE[gw - 1];
+            let g = Point { x: gx, y: gy, z: Fe::ONE };
+            acc = Point::add(&acc, &g, &b);
+        }
+        // Q-window
+        let qw = nibble(&u2.0, w);
+        if qw != 0 {
+            acc = Point::add(&acc, &q_table[qw], &b);
+        }
     }
 
     // Projective check: X ≡ r·Z ∨ X ≡ (r+n)·Z (mod p)
@@ -73,6 +97,6 @@ pub fn verify(sig: &[u8], pub_key: &[u8], hash: &[u8]) -> bool {
 }
 
 #[inline(always)]
-fn bit(k: &[u64; 4], i: usize) -> bool {
-    (k[i / 64] >> (i % 64)) & 1 == 1
+fn nibble(k: &[u64; 4], w: usize) -> usize {
+    ((k[w / 16] >> ((w % 16) * 4)) & 0xF) as usize
 }
