@@ -1,8 +1,9 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 978 B default build; 960 B with -DSMALL_MUL8 (~2× cycles).
- * (957/977 B available by re-looping push-zero — costs ~3%/2% cycles.)
+ * 978 B default build; 964 B with -DSMALL_MUL8.  The SMALL_MUL8 knob
+ * now trades −14 B for +39% cycles — `scasd` stays (the real size
+ * win), `loop` is gone (was ~80% of the cycle penalty on its own).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -241,11 +242,11 @@ fe_iszero:
  * expansion in the default build (reduce=sub only — schoolbook
  * is 64-bit inlined); two under SMALL_MUL8 (add + sub).
  *
- * `loop` and `scasd` are microcoded on every modern x86
- * (~7 cyc and ~3 cyc).  This is the hottest loop — using
- * `dec+jnz` + `lea` instead roughly halves total cycles per
- * verify.  -DSMALL_MUL8 picks the microcoded forms for the
- * absolute size floor.
+ * Hottest loop — ~1.3M iterations/verify.  `scasd` (1 B) is
+ * microcoded (~3 cyc); `loop` was catastrophically so (~5 cyc
+ * EFFECTIVE penalty/iter, ~6.5M cyc total in SMALL_MUL8).  The
+ * SMALL_MUL8 knob now keeps `scasd` for the size edge (−3 B/exp
+ * vs `lea`) but drops `loop` for dec+jnz (+2 B/exp, −39% cycles).
  *
  * Clobbers: ebp (prev_hi), rcx→0, eax/edx, rsi/rdi advance +32. */
 .macro	mul8 op
@@ -259,12 +260,13 @@ fe_iszero:
 	adc	edx, 0
 	mov	ebp, edx
 #ifdef SMALL_MUL8
-	scasd                       /* 1 B, ~3 cyc microcoded */
-	loop	7b                  /* 2 B, ~7 cyc microcoded */
-#else
-	lea	rdi, [rdi+4]        /* 4 B, 1 cyc — +3 B */
+	scasd                       /* 1 B, ~3 cyc microcoded — keeps the size edge */
 	dec	ecx
-	jnz	7b                  /* 4 B, 1 cyc — +2 B */
+	jnz	7b                  /* was `loop`: +2 B, recovers ~5 cyc/iter */
+#else
+	lea	rdi, [rdi+4]        /* 4 B, 1 cyc — +3 B over scasd */
+	dec	ecx
+	jnz	7b
 #endif
 	\op	[rdi], ebp
 .endm
