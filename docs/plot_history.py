@@ -137,12 +137,12 @@ TRAIL = [
     (3265, 570, "fast2.S — BEATS fast.S"),
 ]
 
-# Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).
-# Our 977B default DOMINATES v5 on both axes (smaller AND faster).
-# Thomas is fully off the frontier.
+# Thomas's track: v1–v6.  v6 (955B) is 34B smaller than v5 but slower
+# (4325K vs 4150K) — size-for-speed within his own curve.  Our 947B
+# default at 3608K dominates it on both axes.  Still off the frontier.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
-                (989, 4150)]
-THOMAS    = (989, 4150)     # latest — still dominated
+                (989, 4150), (955, 4325)]
+THOMAS    = (955, 4325)     # v6 — still dominated by 947/3608
 CLAUDE    = (933, 4674)     # 20-run median; size corner
 
 def pareto(pts):
@@ -189,7 +189,7 @@ ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.2, zorder=4,
         label='Thomas')
 ax.scatter(ttx, tty, c='#2e8b57', s=50, marker='o',
            edgecolors='#1a5235', linewidths=0.8, zorder=5)
-ax.annotate(f'Thomas v5 — {THOMAS[0]}B', THOMAS,
+ax.annotate(f'Thomas v6 — {THOMAS[0]}B', THOMAS,
             textcoords="offset points", xytext=(12, 6), fontsize=10,
             fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',

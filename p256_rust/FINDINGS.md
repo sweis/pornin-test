@@ -95,3 +95,28 @@ scope for a boot ROM.
 
 The size wins don't transfer.  If you need 933 bytes, write assembly.
 If you need 150K cycles, precompute a comb table — in any language.
+
+## Size/speed matrix after hand-unrolling
+
+`Os` un-does three things that matter: it emits `imul` for `COEFF[i]*x`
+(instead of constant-folding to add/sub), it re-loops the nested
+schoolbook `for i/for j`, and it keeps the bounds check on
+`CARRY_ADJ[(carry+4) as usize]`.  Hand-expanding all three in source
+makes the code opt-level-proof:
+
+| Config | Code | Cycles | vs fast2.S |
+|---|---:|---:|---|
+| O3, default inline | 12,908 B | 481K | — |
+| **O3, Fe::mul `#[inline(never)]`** | **8,909 B** | **461K** | **−23%** |
+| O2, Fe::mul never | 6,819 B | 470K | −22% |
+| Os, Fe::mul never | 4,829 B | 546K | −9% |
+
+The `#[inline(never)]` on `Fe::mul` is a pure win: −31% code, −4% cycles
+(the hand-unrolled schoolbook schedules better when LLVM isn't trying to
+cram it into 12 different callers).  O2 at 6.8KB is the sweet spot if
+you care about both.  Os at 4.8KB if you REALLY care about size and can
+eat 14% on speed.
+
+`Fe::mul` outlined is 978 B.  With `Point::add` calling it 12× plus the
+verify loop calling that ~130×, one outlining saves ~4KB.  The call/ret
+overhead (~5 cyc) is invisible next to the ~70 cyc body.
