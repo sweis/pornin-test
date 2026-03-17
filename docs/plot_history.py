@@ -89,7 +89,11 @@ TRAIL = [
     #   1-B terminators (−3), cP built at rbp−40 → fe_iszero inlines
     #   (−6), r8 for &cP caller-saved (−5), or→dec eax (−2).
     (957,  4520, None),
-    (935,  4660, "935B — size corner"),
+    (935,  4660, None),
+    # --- EFD reschedule (hyperelliptic.org/EFD): hoist RCB steps 14,15
+    #   so X1,Z1 die early → slot2 reusable as 6th temp → 5 scratch
+    #   slots → slot8 free → cP@slot8 → .Lcadd [r8-96] disp8 (−2B)
+    (933,  4890, "933B — EFD reschedule"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).
@@ -98,7 +102,7 @@ TRAIL = [
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
                 (989, 4150)]
 THOMAS    = (989, 4150)     # latest — still dominated
-CLAUDE    = (935, 4660)     # cP built at runtime, r8 caller-saved
+CLAUDE    = (933, 4890)     # EFD reschedule frees slot8 for cP
 
 def pareto(pts):
     front = []

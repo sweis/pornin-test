@@ -20,8 +20,8 @@ make size      test      wp          # portable C reference
 
 | Implementation | text+rodata | Cycles | Requires | Notes |
 |---|---:|---:|---|---|
-| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **935 B** | ~4.7M | MOVBE | 32-bit schoolbook, `scasd` advance |
-| **`tv_ecdsa_tiny.S`** (default) | **949 B** | **~3.5M** | MOVBE | 64-bit schoolbook |
+| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **933 B** | ~4.9M | MOVBE | 32-bit schoolbook, `scasd` advance |
+| **`tv_ecdsa_tiny.S`** (default) | **947 B** | **~3.5M** | MOVBE | 64-bit schoolbook |
 | `tv_ecdsa_fast.S` | 1397 B | ~0.65M | BMI2+MOVBE | Montgomery+mulx, predecessor |
 | `tv_ecdsa_bc.S` | 1712 B | ~1.85M | — | first bytecode version |
 | `tv_ecdsa.c` (Cortex-M4) | 2082 B | — | — | realistic boot-ROM target |
@@ -97,6 +97,7 @@ What changed from fast.S to drop ~290 bytes:
 | 960 | push-zero unrolled: +3 B kills 220K cyc of `loop` penalty |
 | 964 | **mul8: drop `loop`, keep `scasd`** — +4 B, −39% cycles |
 | 935 | **cP built at runtime** (r8=&cP, rbp−40) → fe_iszero inlines; bc_run inherits r14; Fadd commutes X+=Y (−29) |
+| 933 | **EFD reschedule**: hoist RCB 14,15 → 5 scratch slots → cP@slot8 → .Lcadd disp8 (−2) |
 
 ## Earlier implementations
 
