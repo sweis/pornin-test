@@ -1,9 +1,9 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 978 B default build; 964 B with -DSMALL_MUL8.  The SMALL_MUL8 knob
- * now trades −14 B for +39% cycles — `scasd` stays (the real size
- * win), `loop` is gone (was ~80% of the cycle penalty on its own).
+ * 949 B default build; 935 B with -DSMALL_MUL8.  The SMALL_MUL8 knob
+ * trades −14 B for ~+30% cycles — `scasd` stays (the real size win),
+ * `loop` is gone.  cP built at runtime (r8 = &cP, slot22 = rbp−40).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
