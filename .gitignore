@@ -16,3 +16,9 @@ tv_ecdsa_fast.S.bak*
 sign_vectors.h
 sign_zmm_test
 __pycache__/
+bench_fast2
+test_ecdsa_fast2
+test_wycheproof_fast2
+bench_speed
+test_ecdsa_speed
+test_wycheproof_speed

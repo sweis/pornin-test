@@ -261,3 +261,17 @@ wp-speed: test_wycheproof_speed
 
 bench_speed: tv_ecdsa_speed.S solinas_oneshot.inc bench.c
 	$(CC) -O2 -o $@ $^
+
+# fast2.S — mulx schoolbook + one-shot Solinas (BMI2+ADX required)
+tv_ecdsa_fast2.o: tv_ecdsa_fast2.S mulx_schoolbook.inc solinas_oneshot.inc rcb_direct.inc
+	$(CC) -c -mbmi2 -madx -o $@ $<
+test_ecdsa_fast2: tv_ecdsa_fast2.S mulx_schoolbook.inc solinas_oneshot.inc rcb_direct.inc test_ecdsa_asm.c
+	$(CC) $(CFLAGS) -mbmi2 -madx -o $@ tv_ecdsa_fast2.S test_ecdsa_asm.c
+test-fast2: test_ecdsa_fast2
+	./test_ecdsa_fast2
+test_wycheproof_fast2: tv_ecdsa_fast2.S mulx_schoolbook.inc solinas_oneshot.inc rcb_direct.inc test_wycheproof_asm.c wycheproof_vectors.h
+	$(CC) $(CFLAGS) -mbmi2 -madx -o $@ tv_ecdsa_fast2.S test_wycheproof_asm.c
+wp-fast2: test_wycheproof_fast2
+	./test_wycheproof_fast2
+bench_fast2: tv_ecdsa_fast2.S mulx_schoolbook.inc solinas_oneshot.inc rcb_direct.inc bench.c
+	$(CC) -O2 -mbmi2 -madx -o $@ tv_ecdsa_fast2.S bench.c
