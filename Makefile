@@ -239,3 +239,25 @@ sign-crossverify: sign_zmm.c tv_ecdsa_tiny.S sign_vectors.h
 	# Sign with ZMM, verify with tiny — catches everything except
 	# bugs shared between the two RCB implementations.
 	@echo "(cross-verify harness in /tmp/crossverify.c — manual for now)"
+
+# Speed-optimized variant (one-shot FIPS Solinas, MOVBE-only)
+tv_ecdsa_speed.o: tv_ecdsa_speed.S solinas_oneshot.inc
+	$(CC) -c -o $@ $<
+
+test_ecdsa_speed: tv_ecdsa_speed.S solinas_oneshot.inc test_ecdsa_asm.c
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_speed.S test_ecdsa_asm.c
+
+test-speed: test_ecdsa_speed
+	./test_ecdsa_speed
+
+size-speed: tv_ecdsa_speed.o
+	@size $<
+
+test_wycheproof_speed: tv_ecdsa_speed.S solinas_oneshot.inc test_wycheproof_asm.c wycheproof_vectors.h
+	$(CC) $(CFLAGS) -o $@ tv_ecdsa_speed.S test_wycheproof_asm.c
+
+wp-speed: test_wycheproof_speed
+	./test_wycheproof_speed
+
+bench_speed: tv_ecdsa_speed.S solinas_oneshot.inc bench.c
+	$(CC) -O2 -o $@ $^

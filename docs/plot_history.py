@@ -107,6 +107,12 @@ TRAIL = [
     #   +5% cyc (inc+jnz overhead).  Both Pareto.
     (999,  3118, None),
     (1005, 2965, "1005B — Solinas fold"),
+    # --- tv_ecdsa_speed.S: one-shot FIPS Solinas (139 ops straight-line).
+    #   Replaces 14+ sliding-window iterations with ONE branch-free pass.
+    #   Branch misses 1.76M → 0.42M (−76%), IPC 1.40 → 2.68.  5p bias
+    #   (all dwords fit imm8!) makes carry nonneg for the drain loop.
+    #   MOVBE-only — BMI2 not needed.  The new MOVBE speed corner.
+    (1567, 1349, "1567B — one-shot Solinas"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).
