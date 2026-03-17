@@ -126,7 +126,15 @@ TRAIL = [
     #   but ~10M more instructions (Solinas is a separate pass).
     #   Normalized to chart's fast.S=629K: ~650K.  Between 1397 and 1427
     #   on the global frontier.
-    (3201, 650, "fast2.S — mulx+Solinas"),
+    (3201, 650, None),
+    # --- LAZY-CARRY SOLINAS: break the 8-position serial carry chain.
+    #   Phase 1: compute all 8 accumulators INDEPENDENTLY (each = A[pos]
+    #   + Σ coeff·A[8+i], 64-bit signed).  Fully parallelizes at IPC~4.
+    #   Phase 2: single 8-step carry propagation.  Old version had the
+    #   carry threaded THROUGH the 139-op body (8× sar+mov serialized);
+    #   now the dependency chain is ~8 ops not ~139.
+    #   BEATS fast.S 50/50 head-to-head by ~9%.  New global speed corner.
+    (3265, 570, "fast2.S — BEATS fast.S"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).

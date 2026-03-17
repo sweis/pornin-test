@@ -1,140 +1,169 @@
-	/* ONE-SHOT SOLINAS — FULL HOIST (all 8 high dwords in regs).
-	 * Zero loads inside position bodies.  rax=acc, rbp=carry.
-	 * A[8..15] in rbx,rsi,rdi,rcx,rdx,r9,r10,r11. */
+	/* ================================================================
+	 * LAZY-CARRY SOLINAS.  Phase 1: compute all 8 position accumulators
+	 * INDEPENDENTLY (each = A[pos] + Σ coeff·A[8+i], 64-bit signed).
+	 * Phase 2: single 8-step carry propagation.  Phase 1 parallelizes
+	 * at IPC~4 (~14 cyc for 56 ops); only Phase 2 serializes (~16 cyc).
+	 * vs current ~50 cyc (serial 8× sar+mov carry chain interleaved).
+	 * ================================================================ */
 	cmp	[rsp+80], r8
 	jne	.Lrgen
-	mov	ebx, [rsp+32]
-	mov	esi, [rsp+36]
-	mov	edi, [rsp+40]
-	mov	ecx, [rsp+44]
-	mov	edx, [rsp+48]
-	mov	r9d, [rsp+52]
-	mov	r10d, [rsp+56]
-	mov	r11d, [rsp+60]
-	xor	ebp, ebp
-	mov	eax, [rsp+0]
-	add	rax, rbp
-	add	rax, rbx
-	add	rax, rsi
-	sub	rax, rcx
-	sub	rax, rdx
-	sub	rax, r9
-	sub	rax, r10
-	mov	[rsp+0], eax
-	sar	rax, 32
-	mov	rbp, rax
-	mov	eax, [rsp+4]
-	add	rax, rbp
-	add	rax, rsi
-	add	rax, rdi
-	sub	rax, rdx
-	sub	rax, r9
-	sub	rax, r10
-	sub	rax, r11
-	mov	[rsp+4], eax
-	sar	rax, 32
-	mov	rbp, rax
-	mov	eax, [rsp+8]
-	add	rax, rbp
-	add	rax, rdi
-	add	rax, rcx
-	sub	rax, r9
-	sub	rax, r10
-	sub	rax, r11
-	mov	[rsp+8], eax
-	sar	rax, 32
-	mov	rbp, rax
-	mov	eax, [rsp+12]
-	add	rax, rbp
-	sub	rax, rbx
-	sub	rax, rsi
-	add	rax, rcx
-	add	rax, rcx
-	add	rax, rdx
-	add	rax, rdx
-	add	rax, r9
-	sub	rax, r11
-	mov	[rsp+12], eax
-	sar	rax, 32
-	mov	rbp, rax
-	mov	eax, [rsp+16]
-	add	rax, rbp
-	sub	rax, rsi
-	sub	rax, rdi
-	add	rax, rdx
-	add	rax, rdx
-	add	rax, r9
-	add	rax, r9
-	add	rax, r10
-	mov	[rsp+16], eax
-	sar	rax, 32
-	mov	rbp, rax
-	mov	eax, [rsp+20]
-	add	rax, rbp
-	sub	rax, rdi
-	sub	rax, rcx
-	add	rax, r9
-	add	rax, r9
-	add	rax, r10
-	add	rax, r10
-	add	rax, r11
-	mov	[rsp+20], eax
-	sar	rax, 32
-	mov	rbp, rax
-	mov	eax, [rsp+24]
-	add	rax, rbp
-	sub	rax, rbx
-	sub	rax, rsi
-	add	rax, r9
-	add	rax, r10
-	add	rax, r10
-	add	rax, r10
-	add	rax, r11
-	add	rax, r11
-	mov	[rsp+24], eax
-	sar	rax, 32
-	mov	rbp, rax
-	mov	eax, [rsp+28]
-	add	rax, rbp
-	add	rax, rbx
-	sub	rax, rdi
-	sub	rax, rcx
-	sub	rax, rdx
-	sub	rax, r9
-	add	rax, r11
-	add	rax, r11
-	add	rax, r11
-	mov	[rsp+28], eax
-	sar	rax, 32
+	push	r12
+	push	r13
+	push	r15
+	/* Stack shifted +24; t[] now at rsp+24, m at rsp+104, dst at rsp+96. */
+	mov	edx, [rsp+72]
+	mov	r9d, [rsp+76]
+	mov	r10d, [rsp+80]
+	mov	r11d, [rsp+84]
 
-	/* Table-lookup correction. */
+	/* Phase 1: 8 independent accumulators. */
+	mov	ebp, [rsp+24]          /* A[0] zero-ext */
+	mov	eax, [rsp+56]
+	add	rbp, rax
+	mov	eax, [rsp+60]
+	add	rbp, rax
+	mov	eax, [rsp+68]
+	sub	rbp, rax
+	sub	rbp, rdx
+	sub	rbp, r9
+	sub	rbp, r10
+	mov	ebx, [rsp+28]          /* A[1] zero-ext */
+	mov	eax, [rsp+60]
+	add	rbx, rax
+	mov	eax, [rsp+64]
+	add	rbx, rax
+	sub	rbx, rdx
+	sub	rbx, r9
+	sub	rbx, r10
+	sub	rbx, r11
+	mov	r12d, [rsp+32]          /* A[2] zero-ext */
+	mov	eax, [rsp+64]
+	add	r12, rax
+	mov	eax, [rsp+68]
+	add	r12, rax
+	sub	r12, r9
+	sub	r12, r10
+	sub	r12, r11
+	mov	r13d, [rsp+36]          /* A[3] zero-ext */
+	mov	eax, [rsp+56]
+	sub	r13, rax
+	mov	eax, [rsp+60]
+	sub	r13, rax
+	mov	eax, [rsp+68]
+	add	r13, rax
+	add	r13, rax
+	add	r13, rdx
+	add	r13, rdx
+	add	r13, r9
+	sub	r13, r11
+	mov	r15d, [rsp+40]          /* A[4] zero-ext */
+	mov	eax, [rsp+60]
+	sub	r15, rax
+	mov	eax, [rsp+64]
+	sub	r15, rax
+	add	r15, rdx
+	add	r15, rdx
+	add	r15, r9
+	add	r15, r9
+	add	r15, r10
+	mov	esi, [rsp+44]          /* A[5] zero-ext */
+	mov	eax, [rsp+64]
+	sub	rsi, rax
+	mov	eax, [rsp+68]
+	sub	rsi, rax
+	add	rsi, r9
+	add	rsi, r9
+	add	rsi, r10
+	add	rsi, r10
+	add	rsi, r11
+	mov	edi, [rsp+48]          /* A[6] zero-ext */
+	mov	eax, [rsp+56]
+	sub	rdi, rax
+	mov	eax, [rsp+60]
+	sub	rdi, rax
+	add	rdi, r9
+	add	rdi, r10
+	add	rdi, r10
+	add	rdi, r10
+	add	rdi, r11
+	add	rdi, r11
+	mov	ecx, [rsp+52]          /* A[7] zero-ext */
+	mov	eax, [rsp+56]
+	add	rcx, rax
+	mov	eax, [rsp+64]
+	sub	rcx, rax
+	mov	eax, [rsp+68]
+	sub	rcx, rax
+	sub	rcx, rdx
+	sub	rcx, r9
+	add	rcx, r11
+	add	rcx, r11
+	add	rcx, r11
+
+	/* Phase 2: propagate carries.  acc[i] += carry; store low32; carry = hi32. */
+	mov	[rsp+24], ebp
+	sar	rbp, 32
+	mov	rax, rbp
+	add	rbx, rax
+	mov	[rsp+28], ebx
+	sar	rbx, 32
+	mov	rax, rbx
+	add	r12, rax
+	mov	[rsp+32], r12d
+	sar	r12, 32
+	mov	rax, r12
+	add	r13, rax
+	mov	[rsp+36], r13d
+	sar	r13, 32
+	mov	rax, r13
+	add	r15, rax
+	mov	[rsp+40], r15d
+	sar	r15, 32
+	mov	rax, r15
+	add	rsi, rax
+	mov	[rsp+44], esi
+	sar	rsi, 32
+	mov	rax, rsi
+	add	rdi, rax
+	mov	[rsp+48], edi
+	sar	rdi, 32
+	mov	rax, rdi
+	add	rcx, rax
+	mov	[rsp+52], ecx
+	sar	rcx, 32
+	mov	rax, rcx
+
+	/* Table correction + cond-sub (same as before). */
 	add	eax, 4
 	shl	eax, 5
 	lea	rsi, [rip+carry_adjust_table]
 	add	rsi, rax
-	mov	rax, [rsi];    add [rsp], rax
-	mov	rax, [rsi+8];  adc [rsp+8], rax
-	mov	rax, [rsi+16]; adc [rsp+16], rax
-	mov	rax, [rsi+24]; adc [rsp+24], rax
+	mov	rax, [rsi];    add [rsp+24], rax
+	mov	rax, [rsi+8];  adc [rsp+32], rax
+	mov	rax, [rsi+16]; adc [rsp+40], rax
+	mov	rax, [rsi+24]; adc [rsp+48], rax
 	sbb	rbp, rbp
-	mov	r9,  [rsp];    sub r9,  [r8]
-	mov	r10, [rsp+8];  sbb r10, [r8+8]
-	mov	r11, [rsp+16]; sbb r11, [r8+16]
-	mov	rax, [rsp+24]; sbb rax, [r8+24]
+	mov	r9,  [rsp+24]; sub r9,  [r8]
+	mov	r10, [rsp+32]; sbb r10, [r8+8]
+	mov	r11, [rsp+40]; sbb r11, [r8+16]
+	mov	rax, [rsp+48]; sbb rax, [r8+24]
 	sbb	rdx, rdx
 	not	rbp
 	and	rdx, rbp
 	neg	rdx
-	cmovc	r9,  [rsp]
-	cmovc	r10, [rsp+8]
-	cmovc	r11, [rsp+16]
-	cmovc	rax, [rsp+24]
-	mov	rdi, [rsp+72]
+	cmovc	r9,  [rsp+24]
+	cmovc	r10, [rsp+32]
+	cmovc	r11, [rsp+40]
+	cmovc	rax, [rsp+48]
+	mov	rdi, [rsp+96]       /* dst (shifted +24 from +72) */
 	mov	[rdi], r9
 	mov	[rdi+8], r10
 	mov	[rdi+16], r11
 	mov	[rdi+24], rax
 	xor	ecx, ecx
+	pop	r15
+	pop	r13
+	pop	r12
 	add	rsp, 88
 	pop	rbp
 	pop	rbx
