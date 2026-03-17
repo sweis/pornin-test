@@ -112,7 +112,14 @@ TRAIL = [
     #   Branch misses 1.76M → 0.42M (−76%), IPC 1.40 → 2.68.  5p bias
     #   (all dwords fit imm8!) makes carry nonneg for the drain loop.
     #   MOVBE-only — BMI2 not needed.  The new MOVBE speed corner.
-    (1567, 1349, "1567B — one-shot Solinas"),
+    (1567, 1349, None),
+    # --- speed.S iterations: register-hoist hot dwords, unroll Fadd/Fsub,
+    #   direct RCB (no bytecode dispatch).  All MOVBE-only.  Dominated on
+    #   the global frontier by fast.S's BMI2 points (1338/945 beats all
+    #   three), but own the MOVBE-only frontier past 1091B.
+    (1482, 1305, None),
+    (1718, 1191, None),
+    (2647, 1092, "speed.S — MOVBE-only"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).
@@ -195,7 +202,7 @@ ax.set_axisbelow(True)
 # a wall at the top, and separates the fast.S cluster (650K-1000K)
 # from the bc.S baseline (1850K).  Size stays linear — only 2:1 range.
 ax.set_yscale('log')
-ax.set_xlim(920, 2060)
+ax.set_xlim(920, 2700)
 ax.set_ylim(500, 10000)
 # Clean up the log axis: major ticks at nice values, no scientific notation.
 from matplotlib.ticker import ScalarFormatter, LogLocator

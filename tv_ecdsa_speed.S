@@ -347,12 +347,10 @@ pt_mul:
  * backups (X,Y,Z=1).  rsi set by caller; rcx=0 on entry (every
  * path: bc_run epilogue's neg+pops, or pt_mul init's rep stosq). */
 .Lcadd:
-	lea	rdi, [r8-96]        /* addend = slot5 = r8−96.  disp8 — cP at
-	                             * slot8 now (RCB reschedule freed it). */
+	lea	rdi, [r8-96]        /* addend = slot5 = r8−96.  disp8. */
 	mov	cl, 12
 	rep	movsq
-	xor	edi, edi            /* obc_rcb = 0 */
-	/* FALLTHROUGH to bcrun_r14 */
+	jmp	rcb_direct          /* tail call — rcb_direct returns to pt_mul */
 
 /* ======================================================================
  * BYTECODE INTERPRETER
@@ -802,6 +800,8 @@ fe_mul_m:
 	pop	rbp
 	pop	rbx
 	ret
+
+#include "rcb_direct.inc"
 
 /* ======================================================================
  * Public entry point.
