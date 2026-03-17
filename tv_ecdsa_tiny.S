@@ -38,7 +38,7 @@
  *   2-byte ops over 22 stack slots (16 work + 6 backup).  Nibble
  *   encoding: byte1 = (s2<<4)|op, byte2 = (dst<<4)|s1.  9 handlers
  *   in a u8 jump table right before the constants — &cP and &cN
- *   are disp8-reachable from r14 (= &.Ljt).  .Lop8 (fe_inv_m, the
+ *   are disp8-reachable from r12 (= &.Ljt).  .Lop8 (fe_inv_m, the
  *   biggest handler) lands at offset 252/255 — 3 B headroom since
  *   Fmul's jmp went rel8.  Streams: bc_rcb (88B), bc_v3 (16B), bc_v1 (60B).
  *
@@ -361,11 +361,14 @@ pt_mul:
 /* ======================================================================
  * BYTECODE INTERPRETER
  * ====================================================================== */
-/* rdi = byte offset from bc_rcb.  bcrun_off resolves; bcrun_r14 also
- * supplies rsi = r14 (slot base).  Call sites use push imm8; pop rdi
- * (2-3 B) instead of 7-B rip-rel lea. */
+/* rdi = byte offset from bc_rcb.  r14 = slot base is INHERITED from
+ * the caller (verify sets it once; pt_mul/.Lcadd don't touch it) —
+ * bc_run pushes r12 and uses IT for &.Ljt instead.  The old tunnel
+ * (bcrun_r14 set rsi=r14, bc_run did mov r12,rsi, later used r12 as
+ * slot base while r14 got .Ljt) was 10 B of detour that vanishes
+ * when r14 stays slot-base end to end.  bcrun_r14 is now just an
+ * alias of bcrun_off — callers still jmp/call here for clarity. */
 bcrun_r14:
-	mov	rsi, r14
 bcrun_off:
 	lea	rax, [rip+bc_rcb]
 	add	rdi, rax
@@ -374,15 +377,13 @@ bc_run:
 	push	rbp
 	push	rbx
 	push	r12
-	push	r14
 	push	rdi                 /* 2B push;pop vs 3B REX.W mov */
 	pop	rbx
-	mov	r12, rsi
-	/* Check accumulator in ebp (no REX).  Only bpl is ever OR'd
-	 * (with 0/1); upper bytes stay zero from this xor.  r13 not
-	 * push/popped: nothing in the dispatch tree touches it. */
+	/* r14 = slot base (inherited).  r12 → .Ljt.  Check accumulator
+	 * in ebp (no REX).  Only bpl is ever OR'd; upper bytes stay
+	 * zero from the xor.  r13,r14 not push/popped — not clobbered. */
 	xor	ebp, ebp
-	lea	r14, [rip+.Ljt]     /* Hoist: handlers are callee-saved, r14 lives. */
+	lea	r12, [rip+.Ljt]
 .Lbc:
 	movzx	eax, WORD PTR [rbx]
 	add	rbx, 2
@@ -394,39 +395,33 @@ bc_run:
 	 * decode: no push/pop, no loop.  Slot stride is 32 bytes; a
 	 * nibble in bits [7:4] is already ×16, so lea scale-2 finishes it.
 	 * `and edi,-16` = 3 bytes (imm8 sign-ext → 0xFFFFFFF0); works
-	 * because movzx cleared bits [31:8] already.
-	 *
-	 * Consume ah first (into edi/esi), then al (into edx), then
-	 * `and eax,0xF` for the op — using rax itself as the table
-	 * index.  No copy-to-ecx is needed. */
+	 * because movzx cleared bits [31:8] already. */
 	movzx	edi, ah             /* edi = (dst<<4)|s1 */
 	mov	esi, edi
 	and	esi, 0xF
 	shl	esi, 5
-	add	rsi, r12            /* r12 + s1*32 */
+	add	rsi, r14            /* r14 + s1*32 */
 	and	edi, -16            /* edi = dst<<4 */
-	lea	rdi, [r12+rdi*2]    /* r12 + dst*32 */
+	lea	rdi, [r14+rdi*2]    /* r14 + dst*32 */
 
 	movzx	edx, al             /* edx = (s2<<4)|op; high bits cleared */
 	and	dl, 0xF0            /* edx = s2<<4 */
-	lea	rdx, [r12+rdx*2]    /* r12 + s2*32 */
+	lea	rdx, [r14+rdx*2]    /* r14 + s2*32 */
 
 	and	eax, 0xF            /* op — ah already dead */
-	movzx	eax, BYTE PTR [r14+rax]
-	add	rax, r14
+	movzx	eax, BYTE PTR [r12+rax]
+	add	rax, r12
 	/* Preload rcx = &P: most handlers want it (Fmul/Fsub/Fadd),
 	 * the rest overwrite it.  oP is a forward ref — gas picks
-	 * disp32 for those; hardcode + assert below. */
+	 * disp32; hardcode + assert below. */
 .equ	oP_early, 105       /* .Ljt(9) + cGX/Y(64) + cN(32) */
-	lea	rcx, [r14+oP_early]
+	lea	rcx, [r12+oP_early]
 	call	rax
 	jmp	.Lbc
 
 /* NEG sets CF=1 iff operand was nonzero.  pops/ret preserve flags —
- * callers branch on CF directly (jc = a check failed for bc_v1/v3;
- * bc_rcb has no checks so CF=0 always). */
+ * callers branch on CF directly. */
 .Lbce:	neg	ebp
-	pop	r14
 	pop	r12
 	pop	rbx
 	pop	rbp
@@ -496,12 +491,12 @@ cP:	.quad 0xffffffffffffffff, 0x00000000ffffffff
  * uses this for n·Z; diff2 = diff1 − n·Z (mod p).  rcx = &cP
  * untouched (mod-p).  rel8 to Fmul. */
 .Lop9:
-MULCN:	lea	rdx, [r14+oN]
+MULCN:	lea	rdx, [r12+oN]
 	jmp	Fmul
 /* Nmul/Fmul differ only in modulus.  Decoder preloaded rcx = &cP;
  * Nmul overwrites to &cN and falls through. */
 .Lop4:
-Nmul:	lea	rcx, [r14+oN]
+Nmul:	lea	rcx, [r12+oN]
 	/* FALLTHROUGH */
 .Lop0:
 Fmul:	jmp	fe_mul_m
@@ -520,7 +515,7 @@ Fmul:	jmp	fe_mul_m
 Fadd:	push	rdi
 	push	rsi
 	push	rcx                 /* save &P across fe_sub_raw */
-	lea	rdi, [r12+3*32]
+	lea	rdi, [r14+3*32]
 	push	rdi
 	push	rcx
 	pop	rsi
@@ -583,7 +578,7 @@ Fadd:	push	rdi
  *   ebx ≥ 5:         n and n−2 agree — bt on cN is exact.
  *
  * Loop counter in rbx (callee-saved, survives Nmul).  src at
- * [rsp].  r14 = .Ljt (bc_run's hoist — fe_mul_m doesn't touch). */
+ * [rsp].  r12 = .Ljt (bc_run's hoist — fe_mul_m doesn't touch). */
 fe_inv_m:
 	push	rbx
 	push	rsi                 /* src → [rsp] */
@@ -599,7 +594,7 @@ fe_inv_m:
 	cmp	ebx, 4
 	jb	.Lmul
 	je	.Lnx
-	bt	DWORD PTR [r14+oN_early], ebx   /* cN in .text, disp8 */
+	bt	DWORD PTR [r12+oN_early], ebx   /* cN in .text, disp8 */
 	jnc	.Lnx
 .Lmul:	push	rdi
 	pop	rsi
@@ -633,7 +628,7 @@ fe_mul_m:
 	push	rbx                 /* mul8 reads ebx */
 	push	rbp                 /* mul8 clobbers ebp */
 	/* b,a in r9,r10 (caller-saved, mul8 doesn't touch).  r12-r15
-	 * not touched — no push/pop.  fe_inv_m's rbx,r14 survive. */
+	 * not touched — no push/pop.  fe_inv_m's rbx,r12 survive. */
 
 	mov	r9, rdx             /* b */
 	mov	r10, rsi            /* a */
