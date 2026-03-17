@@ -592,7 +592,7 @@ fe_inv_m:
 	push	rdi                 /* 3rd push = rdi-preserve across call */
 	pop	rdx
 	pop	rsi
-	call	Nmul                /* = lea rcx,&cN; jmp fe_mul_m.  .Lfm gone. */
+	call	Nmul                /* = lea rcx,&cN; jmp fe_mul_m. */
 	pop	rdi                 /* fe_mul_m may leave rdi at dst+32 */
 	cmp	ebx, 4
 	jb	.Lmul
@@ -825,13 +825,14 @@ tv_ecdsa_p256_verify_asm:
 	lea	rdi, [rbp-40]
 	push	rdi
 	pop	r13                 /* r13 = &cP.  Survives bc_run, pt_mul. */
+	or	eax, -1             /* eax = FFFFFFFF.  3 B vs xor+dec rax = 5 B. */
+	stosd
+	stosd
+	stosd                       /* dw0-2 = FFFFFFFF */
 	xor	eax, eax
-	dec	rax                 /* rax = −1 */
-	stosq                       /* qw0 = −1 */
-	stosd                       /* dw2 = FFFFFFFF (eax = low 32 of −1) */
-	xor	eax, eax
-	stosd                       /* dw3 = 0 */
-	stosq                       /* qw2 = 0 */
+	stosd
+	stosd
+	stosd                       /* dw3-5 = 0 */
 	inc	eax
 	stosd                       /* dw6 = 1 */
 	neg	eax
