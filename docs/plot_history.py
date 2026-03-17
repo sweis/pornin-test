@@ -158,7 +158,7 @@ ax.annotate(f'Thomas v5 — {THOMAS[0]}B', THOMAS,
 ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=260, marker='*',
            edgecolors='#8a4500', linewidths=1.5, zorder=6,
            label=f'Claude {CLAUDE[0]}B')
-ax.annotate(f'Claude — 935B',
+ax.annotate(f'Claude — {CLAUDE[0]}B',
             CLAUDE, textcoords="offset points", xytext=(14, -4),
             fontsize=10, fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.35', fc='#ffe4c4',
