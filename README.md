@@ -23,6 +23,8 @@ make size      test      wp          # portable C reference
 | **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **933 B** | ~4.7M | MOVBE | 32-bit schoolbook, `scasd` advance |
 | **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8 -DFAST_ADVANCE` | **939 B** | ~4.3M | MOVBE | 32-bit, `lea` advance (+6 B, −10%) |
 | **`tv_ecdsa_tiny.S`** (default) | **947 B** | **~3.6M** | MOVBE | 64-bit schoolbook |
+| **`tv_ecdsa_tiny.S`** `-DSOLINAS_P -DSOLINAS_LOOP` | **999 B** | ~3.1M | MOVBE | Solinas fold (looped adc) |
+| **`tv_ecdsa_tiny.S`** `-DSOLINAS_P` | **1005 B** | **~3.0M** | MOVBE | Solinas fold (unrolled) |
 | `tv_ecdsa_fast.S` | 1397 B | ~0.65M | BMI2+MOVBE | Montgomery+mulx, predecessor |
 | `tv_ecdsa_bc.S` | 1712 B | ~1.85M | — | first bytecode version |
 | `tv_ecdsa.c` (Cortex-M4) | 2082 B | — | — | realistic boot-ROM target |

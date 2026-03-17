@@ -707,6 +707,49 @@ fe_mul_m:
 .Lr:	mov	ebx, [rdi+32]       /* q = t[j+8] — NOT cleared */
 	test	ebx, ebx
 	jz	4f
+#ifdef SOLINAS_P
+	/* P-256-specific fold: p = 2^256 − 2^224 + 2^192 + 2^96 − 1,
+	 * so t −= q·p ≡ t += q·(2^256−p) − q·2^256.  The RHS is
+	 * +q at dword 0, −q at 3, −q at 6, +q at 7 (and the −q·2^256
+	 * is just zeroing t[8] first).  NO multiplies — 15-op adc/sbb
+	 * chain vs mul8's 8× (mul+5 ops).  Algebraically identical
+	 * bits, so the ≤2-iteration convergence holds unchanged.
+	 * mod-n falls through to generic mul8 (cN's low 128 bits are
+	 * unstructured).  Check: m-on-stack == r8 (= &cP)?  */
+	cmp	[rsp+80], r8
+	jne	.Lrgen
+	xor	eax, eax
+	mov	[rdi+32], eax       /* zero t[8] (was q) */
+	add	[rdi], ebx          /* +q at 0; CF = carry */
+#ifdef SOLINAS_LOOP
+	/* adc [rdi+4..24],eax — 6 identical ops.  Loop with rcx = −6..−1
+	 * indexing [rdi+rcx*4+28].  −6B vs unrolled, +~170K cyc (inc+jnz
+	 * × 6 × ~14 × ~5000).  push/pop preserve CF; inc rcx (NOT ecx —
+	 * 32-bit inc zero-extends, corrupting the negative index). */
+	push	-6
+	pop	rcx
+1:	adc	[rdi+rcx*4+28], eax
+	inc	rcx
+	jnz	1b
+#else
+	adc	[rdi+4], eax
+	adc	[rdi+8], eax
+	adc	[rdi+12], eax
+	adc	[rdi+16], eax
+	adc	[rdi+20], eax
+	adc	[rdi+24], eax
+#endif
+	adc	[rdi+28], ebx       /* +q at 7 */
+	adc	[rdi+32], eax       /* t[8] = add-carry ∈ {0,1,2} */
+	sub	[rdi+12], ebx       /* −q at 3 */
+	sbb	[rdi+16], eax
+	sbb	[rdi+20], eax
+	sbb	[rdi+24], ebx       /* −q at 6 */
+	sbb	[rdi+28], eax
+	sbb	[rdi+32], eax       /* t[8] −= sub-borrow */
+	jmp	.Lr
+.Lrgen:
+#endif
 	push	rdi
 	mov	rsi, [rsp+88]       /* m (72 t + 8 dest + 8 pushrdi) */
 	mul8	sub                 /* t[j..j+8] -= q·m; rdi += 32 */

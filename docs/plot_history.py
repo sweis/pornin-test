@@ -99,6 +99,14 @@ TRAIL = [
     (947,  3608, None),
     (939,  4265, "939B — lea advance"),
     (933,  4674, "933B — size corner"),
+    # --- -DSOLINAS_P: per-window P-256 fold, no multiplies.
+    #   t −= q·p  ≡  +q@0, −q@3, −q@6, +q@7, zero t[8].
+    #   Same bits as mul8 (algebraically identical) so the ≤2-iter
+    #   convergence holds unchanged.  mod-n stays generic.
+    #   Unrolled: +58B → −15.5%.  Looped (+SOLINAS_LOOP): −6B back,
+    #   +5% cyc (inc+jnz overhead).  Both Pareto.
+    (999,  3118, None),
+    (1005, 2965, "1005B — Solinas fold"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).
