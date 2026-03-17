@@ -7,7 +7,6 @@
 \usepackage{xcolor}
 \usepackage{listings}
 \usepackage{booktabs}
-\usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{microtype}
 \usepackage{enumitem}
@@ -103,6 +102,12 @@ correctness.}
   runs once per power-on, so milliseconds are fine. But there's a
   \emph{Pareto frontier}: if build~A is both smaller \emph{and}
   faster than build~B, build~B is dead. We track both axes.
+\item \textbf{Constant time is not required.} Signature
+  \emph{verification} takes only public inputs --- the signature, the
+  public key, the message hash. Nothing secret. Data-dependent
+  branches and variable-time reductions, which would be disqualifying
+  in a \emph{signer}, are fair game here. Several of the tricks below
+  exploit this freedom.
 \end{itemize}
 
 \subsection{What ECDSA verification actually computes}
@@ -137,7 +142,12 @@ $P$ and $Q$) wherever the scalar has a 1 bit.
 Each point doubling or point addition is in turn a fixed sequence of
 field operations: multiplications, squarings, additions, subtractions,
 all modulo~$p$. A P-256 point addition is roughly a dozen field
-multiplications plus change.
+multiplications plus change. One standard trick: instead of working
+with $(x, y)$ pairs directly, the loop carries an extra coordinate
+$Z$ and represents the running point as $(X, Y, Z)$ with $x = X/Z$.
+Divisions are expensive (see \S\ref{sec:projcheck}); this
+\emph{projective} representation defers them all to one division at
+the very end.
 
 \textbf{So the byte budget is roughly:} one field multiplier (mod~$p$
 and mod~$n$), one point-add and one point-double formula that call it,
@@ -148,17 +158,6 @@ another 128--160 bytes.
 
 % ======================================================================
 \section{The journey at a glance}
-
-\begin{figure}[h]
-\centering
-\includegraphics[width=\textwidth]{progress.png}
-\caption{Size versus speed for every checkpoint. Lower-left is
-  better. The red line is the Pareto frontier --- the set of builds
-  that are not beaten on both axes by any other build. The dotted
-  grey trail is chronological. The green track is a competing
-  implementation (``Thomas'') that served as a moving target.}
-\label{fig:progress}
-\end{figure}
 
 Table~\ref{tab:journey} gives the headline numbers. The rest of this
 document goes through each row in enough detail that you could, in
@@ -186,7 +185,10 @@ Size & $\Delta$ & What changed \\
 \bottomrule
 \end{tabular}
 \caption{Major milestones. Sizes between rows are connected by dozens
-  of smaller wins; see \S\ref{sec:grind} for the general flavour.}
+  of smaller wins; see \S\ref{sec:grind} for the general flavour. The
+  rule marks where \texttt{tiny.S} forked from \texttt{fast.S}: rows
+  above it optimised for speed first; rows below trade speed for
+  size.}
 \label{tab:journey}
 \end{table}
 
@@ -252,7 +254,7 @@ You could encode each op in 3 bytes (one per operand) and have room
 for 256 slots. But you don't \emph{have} 256 slots --- point addition
 uses perhaps a dozen temporaries. Four bits per operand, packed two to
 a byte, is the right granularity. And four bits of opcode gives you 16
-operations, which is two or three more than you need.
+operations --- the final build uses ten.
 
 There's a subtle win hiding here: \textbf{the interpreter doesn't
 care which \emph{specific} 16 slots you use}. You can reassign slots
@@ -317,11 +319,19 @@ slide a 9-word window from the top down. At each position $j$:
 Why is $q = t[j{+}8]$ a good quotient estimate? Because $m$'s top
 word is $2^{32}-1$, the true quotient
 $\lfloor t_{\text{window}} / m \rfloor$ is within 1 of
-$\lfloor t_{\text{window}} / 2^{256} \rfloor = t[j{+}8]$. And since
-$q < 2^{32}$ and $2^{256} - m < 2^{224}$, the product $q \cdot m$ is
-guaranteed to be \emph{almost} the right size: after subtraction, the
-window's new top word is either 0 or 1. Run the step at most twice
-per position and you're done.
+$\lfloor t_{\text{window}} / 2^{256} \rfloor = t[j{+}8]$.
+
+Concretely: write the window as $W = q \cdot 2^{256} + L$ with
+$0 \le L < 2^{256}$. Then
+\[
+  W - q \cdot m \;=\; q\,(2^{256} - m) + L
+  \;<\; 2^{32} \cdot 2^{224} + 2^{256}
+  \;=\; 2 \cdot 2^{256},
+\]
+so after one subtraction the window is at most two moduli wide, and
+its new top word --- $\lfloor (W - qm) / 2^{256} \rfloor$ --- is
+either 0 or 1. If it's~1, one more pass brings it to~0. Two passes
+per position, worst case.
 
 \begin{lstlisting}[language={[x86masm]Assembler}]
 ; Reduce: slide a 9-dword window from j=8 down to j=0.
@@ -370,10 +380,11 @@ affine coordinates --- it produces \emph{projective} coordinates
 $(X, Y, Z)$, where the affine $x$ is recovered as $x = X / Z$ (for
 homogeneous projective) or $x = X / Z^2$ (for Jacobian).
 
-``Divide by $Z$'' in a finite field means ``multiply by $Z^{-1}$,''
-and computing $Z^{-1} \bmod p$ via Fermat's little theorem is a
-256-iteration square-and-multiply loop --- another $\sim$380 field
-multiplications on top of everything else.
+``Divide by $Z$'' in a finite field means ``multiply by $Z^{-1}$.''
+For prime~$p$, Fermat's little theorem gives $Z^{p-1} \equiv 1
+\pmod p$, so $Z^{-1} \equiv Z^{p-2}$: inversion is exponentiation.
+That exponentiation is a 256-iteration square-and-multiply loop ---
+another $\sim$380 field multiplications on top of everything else.
 
 The straightforward verifier does this inversion, recovers $x$, and
 compares it to $r$. That inversion call, its argument setup, and the
@@ -387,13 +398,19 @@ $X \stackrel{?}{\equiv} r \cdot Z \pmod p$. No inversion needed.
 
 There's one wrinkle. The ECDSA check is modulo $n$, but $X$ and $Z$
 live modulo $p$, and $p \neq n$. Since $0 \le x < p < 2n$, there are
-exactly two possibilities: either $x = r$ or $x = r + n$. So the full
+at most two integers congruent to $r \pmod n$ in that range: $r$
+itself, and $r + n$ (the latter only when $r + n < p$). So the full
 check becomes:
 \[
   X \equiv r \cdot Z \pmod p
   \quad\textsc{or}\quad
   X \equiv (r+n) \cdot Z \pmod p.
 \]
+When $r \ge p - n$ --- a roughly $2^{-128}$ sliver of the $r$ range
+--- the sum $r + n$ wraps around mod~$p$ and the second disjunct
+tests a spurious value. That's harmless: forcing the scalar
+multiplication to land on a \emph{specific} spurious point is as hard
+as the discrete log problem the whole scheme rests on.
 
 \subsection{Folding the \textsc{or} into a multiply}
 
@@ -450,10 +467,10 @@ $(n-2) \bmod 256$ & \texttt{0x4F} & \texttt{0100\,1111} \\
 XOR               & \texttt{0x1E} & \texttt{0001\,1110} \\
 \end{tabular}
 \end{center}
-Subtracting 2 clears bit~1, which triggers a borrow cascade that
-flips bits 2, 3, and 4. Bit~5 of $n$ is 0, so the borrow stops.
-\textbf{Bits 5 through 255 of $n-2$ are identical to bits 5 through
-255 of $n$.}
+Subtracting 2 borrows from bit~1. That bit is 0 in~$n$, so the borrow
+propagates: through bit~2 (also~0), through bit~3 (also~0), until it
+reaches bit~4 --- which is~1 and absorbs it. \textbf{Bits 5 through
+255 of $n-2$ are identical to bits 5 through 255 of $n$.}
 
 So: don't compute $n-2$ at all. Read bits directly from the $n$
 constant that's already sitting in \texttt{.rodata}. For bits 5 and
@@ -469,8 +486,11 @@ special case:
     ; ... multiply step ...
 \end{lstlisting}
 
-The 33-byte buffer machinery becomes 7 bytes of branching. \saved{19}
-net after accounting for what the init copy still needs.
+The 33-byte buffer machinery becomes 7 bytes of branching. Six bytes
+of the original machinery survive (the init copy still has to run),
+and the \texttt{bt} operand grows by one byte (it now reaches into
+\texttt{.rodata} instead of \texttt{[rsp]}). Net: $-33 + 7 + 6 + 1 =
+\saved{19}$.
 
 \subsection{The broader lesson}
 
@@ -484,8 +504,8 @@ accidents of their structure you can exploit.
 \section{RCB complete addition: one formula for everything}
 \label{sec:rcb}
 
-\noindent\emph{From \bytes{1071} to \bytes{1012}. The single biggest
-win in the entire project.}
+\noindent\emph{From \bytes{1071} to \bytes{1012}. The biggest
+single-commit win after the bytecode interpreter.}
 
 \subsection{Why point addition normally has three cases}
 
@@ -520,11 +540,17 @@ of 43 field operations gives the correct answer for \emph{every} pair
 of inputs: distinct points, equal points, inverse points, and the
 point at infinity. No branches. No special cases. It just works.
 
-The formula uses \emph{homogeneous} projective coordinates, where the
-affine point is $(X/Z,\, Y/Z)$ and infinity is any $(0 : Y : 0)$ with
-$Y \neq 0$. The key property: feeding it $(0:1:0) + Q$ really does
-produce $Q$, and $(0:1:0) + (0:1:0)$ really does produce $(0:1:0)$.
-The edge cases are handled by the \emph{algebra}, not by \emph{code}.
+The formula uses \emph{homogeneous} projective coordinates: the
+affine point is recovered as $(X/Z,\, Y/Z)$. Two triples name the
+same point
+whenever they differ by a common nonzero scale factor: $(X:Y:Z)$ and
+$(\lambda X:\lambda Y:\lambda Z)$ are the same thing, which is what
+the colons signal. Infinity is
+the class with $Z = 0$, which on this curve forces $X = 0$ too: any
+$(0:Y:0)$ with $Y \neq 0$ will do. The key property: feeding the
+formula $(0:1:0) + Q$ really does produce~$Q$, and $(0:1:0) +
+(0:1:0)$ really does produce $(0:1:0)$. The edge cases are handled by
+the \emph{algebra}, not by \emph{code}.
 
 \subsection{The demolition}
 
@@ -540,7 +566,8 @@ accumulator, copy it into the addend slots and call the \emph{same}
 routine --- $P + P = 2P$, and RCB handles that case like any other.
 
 The three bytecode streams (\bytes{102} total) collapse into one
-43-operation stream (\bytes{88}). The 62-byte branch tree becomes
+43-operation stream (\bytes{87}: 86 bytes of ops plus a one-byte
+terminator). The 62-byte branch tree becomes
 an 11-byte dispatch. \saved{59} and a whole category of bugs
 (forget to handle one edge case, accept a forged signature)
 structurally eliminated.
@@ -573,7 +600,8 @@ memory displacements --- and those are \emph{not} free.
 
 \subsection{Shamir's trick and its setup cost}
 
-Shamir's trick~\cite[\S 14.88]{hac} computes $u_1 G + u_2 Q$ with a
+Shamir's trick~\cite[\S 14.88]{hac} (due originally to
+Straus~\cite{straus}) computes $u_1 G + u_2 Q$ with a
 \emph{single} 256-iteration loop instead of two: at each bit
 position, double once, then conditionally add $G$, conditionally
 add~$Q$. It halves the number of doublings.
@@ -611,10 +639,10 @@ shorter}.
 \section{Building constants at runtime}
 \label{sec:runtimecp}
 
-\noindent\emph{From \bytes{948} to \bytes{942}, plus a knock-on
-\saved{6} from unlocked headroom.}
+\noindent\emph{From \bytes{948} to \bytes{942} --- but the direct
+saving is zero. The entire win is a knock-on effect.}
 
-\subsection{When a constant is cheaper to compute than to store}
+\subsection{A constant you can compute in the same number of bytes}
 
 The field prime $p$ for P-256 is
 \[
@@ -625,23 +653,32 @@ As 32 bytes of \texttt{.rodata} it's \bytes{32}. But look at the hex:
 \texttt{ffffffff\,00000001\,00000000\,00000000\,00000000\,ffffffff\,ffffffff\,ffffffff}
 \]
 Seven of the eight 32-bit words are either \texttt{0x00000000} or
-\texttt{0xFFFFFFFF} --- only \texttt{0x00000001} is neither. You can \emph{build} this with a short sequence
-of \texttt{stosq}/\texttt{stosd} instructions (which write
-\texttt{rax}/\texttt{eax} and auto-advance \texttt{rdi}):
+\texttt{0xFFFFFFFF} --- only \texttt{0x00000001} is neither. Writing
+this out one dword at a time with \texttt{stosd} (which stores
+\texttt{eax} and auto-advances \texttt{rdi}) takes \bytes{17}:
 \begin{lstlisting}[language={[x86masm]Assembler}]
-    ; Build p into slot 8 on the stack.  r8 = &slot8.
-    or    eax, -1       ; rax = 0x00000000FFFFFFFF (top 32 bits zeroed)
-    stosq               ; write FFFFFFFF FFFFFFFF ... wait, this needs care
-    ; (actual sequence is ~19 bytes; details depend on the eax state
-    ;  inherited from surrounding code)
+    or    eax, -1       ; eax = FFFFFFFF   (3 B)
+    stosd               ; dword 0          (1 B each; stosd = AB)
+    stosd               ; dword 1
+    stosd               ; dword 2
+    xor   eax, eax      ; eax = 0          (2 B)
+    stosd               ; dword 3
+    stosd               ; dword 4
+    stosd               ; dword 5
+    inc   eax           ; eax = 1          (2 B)
+    stosd               ; dword 6
+    neg   eax           ; eax = FFFFFFFF   (2 B)
+    stosd               ; dword 7
 \end{lstlisting}
-Around 19 bytes of code builds the same 32 bytes of data. Direct
-saving: \saved{13}.
+That looks like a \saved{15} win --- but the constant didn't sit in a
+vacuum. Deleting it means the places that \emph{used} it need new
+plumbing: a pointer register to hold the built-at-runtime address, a
+new bytecode op so validation can check coordinates against it,
+save/restore of the new register in the prologue. About \spent{15} of
+overhead, netting out to roughly zero.
 
-We had already done the same thing for the curve coefficient $b$ ---
-but computed \emph{in bytecode}, using the curve equation itself.
-Since $G$ is on the curve, $b = G_y^2 - G_x^3 + 3 G_x \pmod p$. That's
-four field ops, 8 bytes of bytecode, replacing \bytes{32} of constant.
+So why bother? Because \textbf{where the 32 bytes disappeared from
+matters more than how many were saved.}
 
 \subsection{The knock-on win}
 
@@ -652,10 +689,18 @@ within 255 bytes of the table base. The largest handler
 headroom before the whole scheme breaks and every table entry doubles
 in size.
 
-Deleting \texttt{cP} from \texttt{.rodata} moved everything after it
-32 bytes closer to the table. Suddenly there's 36 bytes of headroom
---- enough to inline a small \texttt{fe\_iszero} helper into its only
-caller. That inline saves another \saved{6}.
+The \texttt{cP} constant lived \emph{between} the jump table and the
+handlers. Deleting it from \texttt{.rodata} moved every handler 32
+bytes closer to the table. Suddenly there's 36 bytes of headroom ---
+enough to inline a small \texttt{fe\_iszero} helper into its only
+caller, for \saved{6}. \emph{That} is the whole \saved{6} in the
+section header.
+
+(We had already done the related trick for the curve coefficient $b$,
+computed \emph{in bytecode} from the curve equation itself: since $G$
+is on the curve, $b = G_y^2 - G_x^3 + 3 G_x \pmod p$. Four field ops,
+8 bytes of bytecode, replacing \bytes{32} of constant --- and that one
+\emph{is} a direct saving, because bytecode costs no plumbing.)
 
 \textbf{Lesson:} size optimisations interact. Freeing space in one
 region can unblock a seemingly unrelated win elsewhere. Keep a list
@@ -740,7 +785,7 @@ dispatch. Each fall-through is \saved{2} to \saved{5}.
 
 \subsection{\texttt{rep movsq} is a free \texttt{memcpy}}
 
-\texttt{rep movsq} is 2 bytes and copies \texttt{rcx} quadwords from
+\texttt{rep movsq} is 3 bytes and copies \texttt{rcx} quadwords from
 \texttt{[rsi]} to \texttt{[rdi]}. If you can get \texttt{rsi},
 \texttt{rdi}, and \texttt{rcx} into the right state as a
 \emph{side-effect} of surrounding code --- \texttt{lodsb} leaves
@@ -756,12 +801,13 @@ so the registers are already right.
 
 The \texttt{loop} instruction (decrement \texttt{rcx} and jump if
 nonzero) is 2 bytes. The equivalent \texttt{dec rcx; jnz} is 5 bytes.
-But \texttt{loop} is \emph{microcoded} on modern Intel cores and takes
-about 7 cycles, versus 1--2 for \texttt{dec;\,jnz}.
+But \texttt{loop} is \emph{microcoded} on modern x86 and costs
+several extra cycles per iteration --- Agner Fog's
+tables~\cite{agner} put it at 6 on Skylake, worse on AMD Zen.
 
 If the loop runs ten times, nobody cares. If it's the inner loop of
 the field multiplier and runs 950{,}000 times per signature, that's
-5 million wasted cycles. The \texttt{-DSMALL\_MUL8} build takes the
+millions of wasted cycles. The \texttt{-DSMALL\_MUL8} build takes the
 size win; the default build spends \spent{14} to run at full speed.
 Both are on the Pareto frontier.
 
@@ -770,8 +816,9 @@ Both are on the Pareto frontier.
 \texttt{mov cl, 8} is 2 bytes and sets the low 8 bits of \texttt{rcx}.
 If the upper 56 bits happen to already be zero --- because a previous
 \texttt{rep} instruction counted down to zero, or a previous
-\texttt{loop} exited --- you just saved 2 bytes over
-\texttt{mov ecx, 8}.
+\texttt{loop} exited --- you just saved 3 bytes over
+\texttt{mov ecx, 8} (5 bytes) or 1 byte over \texttt{push 8; pop rcx}
+(3 bytes).
 
 This is a \emph{global} invariant: ``\texttt{rcx} is zero at these
 twelve points in the control flow, and the code downstream relies on
@@ -839,8 +886,8 @@ If you're trying to shrink your own binary, here's what transfers:
 
 \item \textbf{Track both axes.} It's easy to micro-optimise yourself
   into a corner where you've saved 5 bytes and lost $10\times$ speed.
-  Plot the Pareto frontier (Figure~\ref{fig:progress}). If your new
-  point is dominated by an old one, you've wasted your time.
+  Plot size against cycles for every checkpoint; if your new point is
+  dominated by an old one on both axes, you've wasted your time.
 
 \item \textbf{Tests before bench.} Every single one of the $\sim$130
   commits in this project passed 607/607 test vectors before being
@@ -883,6 +930,17 @@ Alfred J.\ Menezes, Paul C.\ van Oorschot, and Scott A.\ Vanstone.
 \textit{Handbook of Applied Cryptography}.
 CRC Press, 1996.
 \url{https://cacr.uwaterloo.ca/hac/}
+
+\bibitem{straus}
+Ernst G.\ Straus.
+\textit{Addition chains of vectors (Problem 5125)}.
+American Mathematical Monthly, 71(7):806--808, 1964.
+
+\bibitem{agner}
+Agner Fog.
+\textit{Instruction tables: Lists of instruction latencies,
+throughputs and micro-operation breakdowns}.
+\url{https://www.agner.org/optimize/instruction_tables.pdf}
 
 \end{thebibliography}
 
