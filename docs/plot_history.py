@@ -93,11 +93,12 @@ TRAIL = [
     # --- EFD reschedule (hyperelliptic.org/EFD): hoist RCB steps 14,15
     #   so X1,Z1 die early → slot2 reusable as 6th temp → 5 scratch
     #   slots → slot8 free → cP@slot8 → .Lcadd [r8-96] disp8 (−2B)
-    (933,  4674, None),
     # --- -DFAST_ADVANCE: scasd→lea in SMALL_MUL8 (+6B, −10% cyc).
-    #   Knocks 935B and 957B off the frontier.
+    #   Knocks 935B and 957B off the frontier.  Also add 947B default
+    #   to TRAIL so the frontier shows all three current builds.
+    (947,  3608, None),
     (939,  4265, "939B — lea advance"),
-    (933,  4727, "933B — size corner"),  # re-benched 20-run
+    (933,  4674, "933B — size corner"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).
@@ -106,7 +107,7 @@ TRAIL = [
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
                 (989, 4150)]
 THOMAS    = (989, 4150)     # latest — still dominated
-CLAUDE    = (933, 4727)     # 20-run median; size corner
+CLAUDE    = (933, 4674)     # 20-run median; size corner
 
 def pareto(pts):
     front = []
