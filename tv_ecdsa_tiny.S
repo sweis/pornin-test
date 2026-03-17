@@ -132,11 +132,11 @@ bc_rcb:
 	.byte 0xf0,0xbb, 0x82,0xf4, 0xf3,0xbb, 0x22,0xf1, 0x72,0x36
 	.byte 0x30,0xff, 0x92,0x38, 0x33,0xff, 0x72,0x15, 0x22,0x30
 	.byte 0x10,0x03, 0x92,0x14, 0x13,0x10, 0xa0,0x29, 0x23,0x01
-	.byte 0x02,0x20, 0x22,0x00, 0x03,0x28, 0x02,0x08, 0xa0,0x11
+	.byte 0x02,0x20, 0x02,0x02, 0x03,0x28, 0x02,0x08, 0xa0,0x11
 	.byte 0x92,0x89, 0x92,0x98, 0x93,0x11, 0x43,0x11, 0x12,0x81
 	.byte 0x12,0x18, 0x42,0x84, 0x42,0x48, 0x93,0x44, 0x10,0x8f
-	.byte 0x10,0x94, 0x20,0x10, 0x92,0x11, 0x00,0x0b, 0x83,0x00
-	.byte 0x20,0x2f, 0x40,0x8b, 0x82,0x22
+	.byte 0x10,0x94, 0x20,0x10, 0x12,0x19, 0x00,0x0b, 0x83,0x00
+	.byte 0x20,0x2f, 0x40,0x8b, 0x22,0x28
 	.byte 0x00,0x00
 
 /* bc_v3: PROJECTIVE CHECK — homogeneous coords (x=X/Z, not X/Z²).
@@ -502,32 +502,32 @@ Nmul:	lea	rcx, [r12+oN]
 Fmul:	jmp	fe_mul_m
 /* SQR = Fmul: bytecode encodes s2=s1, decoder already set rdx=rsi. */
 .equ .Lop1, .Lop0
-/* Fadd (dst = s1+s2 mod p): compute p−s2 into slot 3 (scratch),
- * fall through to Fsub with rdx=&scratch so .Lop3 does s1−(p−s2).
- * Fadd preserves rcx=&cP across fe_sub_raw (push/pop) so Fsub's
- * add-back path gets the right modulus. */
-/* Fsub (.Lop3): dst = a−b; if borrow, add m back.  fe_sub_raw
- * returns borrow in CF; pops preserve flags → jnc direct.  The
- * add-back's first adc needs CF=0: clc (rcx=0 from fe_sub_raw's
- * dec-to-0, but we're on the CF=1 path).  ALSO used by fe_mul_m
- * for its final conditional subtract. */
+/* Fadd (dst = s1+s2 mod p): compute p−s2 into DST, then fall
+ * through to Fsub with rdx=&dst so .Lop3 does s1−(p−s2) in place.
+ *
+ * dst-as-scratch is safe iff dst≠s1 (else p−s2 clobbers s1 before
+ * the second .Lop3 reads it).  bc_rcb had three dst==s1 ops (X+=Y
+ * pattern); they're COMMUTED to dst==s2 in the bytecode (addition
+ * is commutative; 0B).  dst==s2 is fine: first .Lop3 reads s2[i]
+ * before writing dst[i]=s2[i] per-limb, second reads s1 unaliased.
+ * None of the 20 Fadds target slots 5-7 (RCB never writes those).
+ *
+ * First .Lop3 never borrows (s2<p) so .Lop3's internal pop rdi
+ * restores it — no push/pop rdi here.  Slot 3 no longer clobbered
+ * as a side effect; bc_rcb's explicit dst=3 ops still work. */
+/* Fsub (.Lop3): dst = a−b; if borrow, add m back.  ALSO used by
+ * fe_mul_m for its final conditional subtract. */
 .Lop2:
-Fadd:	push	rdi
-	push	rsi
-	push	rcx                 /* save &P across fe_sub_raw */
-	lea	rdi, [r14+3*32]
-	push	rdi
+Fadd:	push	rsi
+	push	rcx                 /* save &P */
+	push	rdi                 /* &dst → pops into rdx */
 	push	rcx
-	pop	rsi
-	/* Fadd calls .Lop3 for p−s2 → scratch.  s2 < p so .Lop3's
-	 * jnc (no borrow) always taken — same result as fe_sub_raw
-	 * but reusing the inlined body.  0 B change (rel32 either way). */
-	call	.Lop3
-	pop	rdx
+	pop	rsi                 /* rsi = &P */
+	call	.Lop3               /* dst = P − s2.  rdi preserved (no borrow). */
+	pop	rdx                 /* rdx = &dst */
 	pop	rcx
 	pop	rsi
-	pop	rdi
-	/* FALLTHROUGH */
+	/* FALLTHROUGH — rdi=rdx=&dst, rsi=s1 */
 /* fe_sub_raw inlined here — sole remaining caller.  The old op6/7
  * merge freed the handler-block headroom for this. */
 .Lop3:	push	rcx
