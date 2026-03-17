@@ -80,7 +80,6 @@
  * or xor edi,edi for bc_rcb), and bcrun_off adds the base.
  * ====================================================================== */
 	.section .rodata
-	.p2align 3
 
 /* bc_rcb: Renes-Costello-Batina COMPLETE addition (ePrint 2015/1060,
  * Algorithm 7 for a=−3).  "Complete" means one formula gives the
@@ -407,8 +406,9 @@ bc_run:
 	movzx	eax, BYTE PTR [r12+rax]
 	add	rax, r12
 	/* Preload rcx = &P: most handlers want it (Fmul/Fsub/Fadd),
-	 * the rest overwrite it.  r13 = &cP (slot22), set by verify. */
-	mov	rcx, r13
+	 * the rest overwrite it.  r8 = &cP (slot22), set by verify.
+	 * r8 caller-saved but never clobbered in the call tree. */
+	mov	rcx, r8
 	call	rax
 	jmp	.Lbc
 
@@ -464,7 +464,7 @@ cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
  * bc_v1's SQR ops are re-encoded as explicit Fmul (s2=s1, op=0).
  * Falls through to .Lop5.  bc_v1's Qx<p,Qy<p checks use this —
  * slot5 no longer gets cP block-copied (cP is built at slot22). */
-.Lop5p:	mov	rsi, r13
+.Lop5p:	mov	rsi, r8
 	/* FALLTHROUGH */
 /* fe_geq inlined.  Compare [rdi] ≥ [rsi] limb-by-limb from the
  * top; loopz falls out on first mismatch with cmp's CF live. */
@@ -740,13 +740,13 @@ tv_ecdsa_p256_verify_asm:
 	 * (bc_run, pt_mul, fe_mul_m).  enter is microcoded (~12 cyc)
 	 * but runs once.  r15 dropped — .Lcadd goes via r14 disp32. */
 	push	rbx
-	push	r13
 	push	r14
 	enter	744, 0              /* 22 slots + cP at slot22 (32 B) */
-	/* r12 not pushed: verify doesn't use it.  bc_run push/pops r12
-	 * as .Ljt — independent. */
-
-	/* r14 = slot base.  r13 → &cP (built after block copy below). */
+	/* r12 not pushed: bc_run push/pops it as .Ljt.  r8 = &cP below
+	 * (caller-saved, but nothing in the call tree touches it:
+	 * fe_mul_m uses r9-r11, bc_run/pt_mul/fe_inv_m use low regs).
+	 * r8 on entry is hv (ABI arg5) — consumed at hash decode,
+	 * dead by the time we set it. */
 	mov	r14, rsp
 
 	/* ABI args rdi (sig), rdx (pub), r8 (hash) all survive the
@@ -793,6 +793,29 @@ tv_ecdsa_p256_verify_asm:
 	push	rdi
 	pop	rbx                 /* slot 16 */
 
+	/* BUILD cP at slot22.  p = 2^256 − 2^224 + 2^192 + 2^96 − 1.
+	 * LE dwords: FFFFFFFF ×3, 0 ×3, 1, FFFFFFFF.  Placed HERE
+	 * because eax=0 survives from build_one's xor (rep stosq,
+	 * inc[mem], push/pop don't touch it) — so `dec eax` (2B)
+	 * gives FFFFFFFF instead of `or eax,-1` (3B).  r8 (hv) was
+	 * consumed at hash decode above; caller-saved but nothing
+	 * below clobbers it.  rbp−40 = slot22 (enter 744). */
+	lea	rdi, [rbp-40]
+	push	rdi
+	pop	r8                  /* r8 = &cP */
+	dec	eax                 /* eax was 0; now FFFFFFFF */
+	stosd
+	stosd
+	stosd                       /* dw0-2 = FFFFFFFF */
+	xor	eax, eax
+	stosd
+	stosd
+	stosd                       /* dw3-5 = 0 */
+	inc	eax
+	stosd                       /* dw6 = 1 */
+	neg	eax
+	stosd                       /* dw7 = FFFFFFFF */
+
 	/* Format byte: lodsb advances rsi past the 0x04 to the X
 	 * coord for free.  push;pop+lodsb+cmp(al) = 5 B vs cmp[rdx]
 	 * +lea = 7 B.  rdx,rsi both non-REX → push;pop beats mov.
@@ -813,30 +836,6 @@ tv_ecdsa_p256_verify_asm:
 	lea	rsi, [rip+cGX]
 	mov	cl, 12              /* cP is gone — only G + cN (12 qw) */
 	rep	movsq               /* rdi → slot 5, rcx → 0 */
-
-	/* BUILD cP at slot22.  p = 2^256 − 2^224 + 2^192 + 2^96 − 1.
-	 * LE dwords: FFFFFFFF ×3, 0 ×3, 1, FFFFFFFF.  rbp−40 is disp8
-	 * (enter 744 → rbp = r14+744, slot22 = r14+704 = rbp−40).
-	 * 19 B of stores replaces the 32 B .quad block; −32+19+4(lea)
-	 * +3(r13)+4(push/pop r13)+3(.Lop5p)+1(table)−1(decoder mov)
-	 * = +1 B direct, but unlocks 32 B of handler-block headroom.
-	 * rdi at slot5 from block copy — dead (overwritten by push
-	 * obc_v1 below).  r13 captured BEFORE build advances rdi. */
-	lea	rdi, [rbp-40]
-	push	rdi
-	pop	r13                 /* r13 = &cP.  Survives bc_run, pt_mul. */
-	or	eax, -1             /* eax = FFFFFFFF.  3 B vs xor+dec rax = 5 B. */
-	stosd
-	stosd
-	stosd                       /* dw0-2 = FFFFFFFF */
-	xor	eax, eax
-	stosd
-	stosd
-	stosd                       /* dw3-5 = 0 */
-	inc	eax
-	stosd                       /* dw6 = 1 */
-	neg	eax
-	stosd                       /* dw7 = FFFFFFFF */
 
 	push	obc_v1
 	pop	rdi
@@ -870,7 +869,6 @@ tv_ecdsa_p256_verify_asm:
 	inc	eax                 /* −1→0 (fail), 0→1 (valid) */
 .Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
 	pop	r14
-	pop	r13
 	pop	rbx
 	ret
 
