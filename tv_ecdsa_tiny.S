@@ -256,15 +256,13 @@ bc_v1:
 	\op	[rdi], eax
 	adc	edx, 0
 	mov	ebp, edx
-#ifdef SMALL_MUL8
+#if defined(SMALL_MUL8) && !defined(FAST_ADVANCE)
 	scasd                       /* 1 B, ~3 cyc microcoded — keeps the size edge */
-	dec	ecx
-	jnz	7b                  /* was `loop`: +2 B, recovers ~5 cyc/iter */
 #else
 	lea	rdi, [rdi+4]        /* 4 B, 1 cyc — +3 B over scasd */
+#endif
 	dec	ecx
 	jnz	7b
-#endif
 	\op	[rdi], ebp
 .endm
 
