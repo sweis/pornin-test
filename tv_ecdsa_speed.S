@@ -270,7 +270,7 @@ bc_v1:
  * in fe_inv_m.  Assert below.  fe_mul_m moved to AFTER the handler
  * block — Fmul's jmp is rel8 (forward 115 B; 12 B headroom).
  * fe_inv_m reaches it via Nmul → Fmul fallthrough → rel8 jmp. */
-.equ	oN_early, 74        /* +1 for the geq_p table entry */
+.equ	oN_early, 84        /* 20B u16 table (was 10B u8) + cGX(32)+cGY(32) */
 
 /* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
  * 32 first, for chained decode (rdi already advanced by the prior
@@ -410,7 +410,7 @@ bc_run:
 	lea	rdx, [r14+rdx*2]    /* r14 + s2*32 */
 
 	and	eax, 0xF            /* op — ah already dead */
-	movzx	eax, BYTE PTR [r12+rax]
+	movzx	eax, WORD PTR [r12+rax*2]   /* u16 table — fat handlers > 255 */
 	add	rax, r12
 	/* Preload rcx = &P: most handlers want it (Fmul/Fsub/Fadd),
 	 * the rest overwrite it.  r8 = &cP (slot22), set by verify.
@@ -436,11 +436,11 @@ bc_run:
  * cGX/cGY between .Ljt and handlers push handler offsets up by
  * 64 B — .Lop8 (fe_inv_m) is the furthest. */
 .Ljt:
-	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
-	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt
-	.byte	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only (op 7) */
-	.byte	.Lop9-.Ljt  /* MULCN (op 8) */
-	.byte	.Lop5p-.Ljt /* geq_p (op 9): rsi=r13=&cP, for Qx<p/Qy<p */
+	.word	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3_fast-.Ljt
+	.word	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt
+	.word	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only (op 7) */
+	.word	.Lop9-.Ljt  /* MULCN (op 8) */
+	.word	.Lop5p-.Ljt /* geq_p (op 9): rsi=r8=&cP */
 /* op6 = check (s2 bit0: 0=checkzero, 1=checknonzero).  The old
  * separate checknonzero op was absorbed — s2 encodes sense.  The
  * table entry and handler it freed let fe_sub_raw inline in .Lop3. */
@@ -527,19 +527,93 @@ Fmul:	jmp	fe_mul_m
  * as a side effect; bc_rcb's explicit dst=3 ops still work. */
 /* Fsub (.Lop3): dst = a−b; if borrow, add m back.  ALSO used by
  * fe_mul_m for its final conditional subtract. */
+/* FAST Fadd: dst = s1 + s2 mod p.  Unrolled, no loops, no call/ret.
+ * Decoder gives rdi=dst, rsi=s1, rdx=s2, rcx=r8=&cP.  bc_rcb Fadds
+ * are always mod-p (and bc_v1 has none).  Clobbers rax, rcx.
+ *
+ * Strategy: dst = s1+s2; save carry; dst -= p; add-back iff (borrow
+ * AND NOT saved_carry) — equivalently, iff (borrow + saved_carry == 1)
+ * since (c=1,b=1) is impossible (s1+s2 < 2p < 2^257, so if carry then
+ * s1+s2 ≥ 2^256 > p, so subtracting p can't borrow). */
 .Lop2:
-Fadd:	push	rsi
-	push	rcx                 /* save &P */
-	push	rdi                 /* &dst → pops into rdx */
-	push	rcx
-	pop	rsi                 /* rsi = &P */
-	call	.Lop3               /* dst = P − s2.  rdi preserved (no borrow). */
-	pop	rdx                 /* rdx = &dst */
-	pop	rcx
-	pop	rsi
-	/* FALLTHROUGH — rdi=rdx=&dst, rsi=s1 */
-/* fe_sub_raw inlined here — sole remaining caller.  The old op6/7
- * merge freed the handler-block headroom for this. */
+Fadd:
+	mov	rax, [rsi]
+	add	rax, [rdx]
+	mov	[rdi], rax
+	mov	rax, [rsi+8]
+	adc	rax, [rdx+8]
+	mov	[rdi+8], rax
+	mov	rax, [rsi+16]
+	adc	rax, [rdx+16]
+	mov	[rdi+16], rax
+	mov	rax, [rsi+24]
+	adc	rax, [rdx+24]
+	mov	[rdi+24], rax
+	sbb	ecx, ecx            /* ecx = −carry (0 or −1) */
+	/* Subtract p.  r8 = &cP. */
+	mov	rax, [rdi]
+	sub	rax, [r8]
+	mov	[rdi], rax
+	mov	rax, [rdi+8]
+	sbb	rax, [r8+8]
+	mov	[rdi+8], rax
+	mov	rax, [rdi+16]
+	sbb	rax, [r8+16]
+	mov	[rdi+16], rax
+	mov	rax, [rdi+24]
+	sbb	rax, [r8+24]
+	mov	[rdi+24], rax
+	/* CF=borrow.  Add-back iff borrow=1 AND carry=0 ⇔ ecx+CF == 1. */
+	adc	ecx, 0              /* ecx ∈ {0, −1+1, 0+1} = {0, 0, 1} — only {0,1} reachable */
+	jz	1f                  /* ecx=0: no add-back */
+	/* Add p back. */
+	mov	rax, [rdi]
+	add	rax, [r8]
+	mov	[rdi], rax
+	mov	rax, [rdi+8]
+	adc	rax, [r8+8]
+	mov	[rdi+8], rax
+	mov	rax, [rdi+16]
+	adc	rax, [r8+16]
+	mov	[rdi+16], rax
+	mov	rax, [rdi+24]
+	adc	rax, [r8+24]
+	mov	[rdi+24], rax
+1:	ret
+
+/* FAST Fsub: dst = s1 − s2 mod p.  Unrolled, mod-p only.  Handler
+ * table points here (op3); fe_mul_m's cond-sub still calls the OLD
+ * generic .Lop3 below (which takes m from rcx/rdx, works for cN). */
+.Lop3_fast:
+	mov	rax, [rsi]
+	sub	rax, [rdx]
+	mov	[rdi], rax
+	mov	rax, [rsi+8]
+	sbb	rax, [rdx+8]
+	mov	[rdi+8], rax
+	mov	rax, [rsi+16]
+	sbb	rax, [rdx+16]
+	mov	[rdi+16], rax
+	mov	rax, [rsi+24]
+	sbb	rax, [rdx+24]
+	mov	[rdi+24], rax
+	jnc	1f                  /* no borrow → done */
+	/* Borrowed: add p back. */
+	mov	rax, [rdi]
+	add	rax, [r8]
+	mov	[rdi], rax
+	mov	rax, [rdi+8]
+	adc	rax, [r8+8]
+	mov	[rdi+8], rax
+	mov	rax, [rdi+16]
+	adc	rax, [r8+16]
+	mov	[rdi+16], rax
+	mov	rax, [rdi+24]
+	adc	rax, [r8+24]
+	mov	[rdi+24], rax
+1:	ret
+
+/* Generic .Lop3 — kept for fe_mul_m's cond-sub (works with any m). */
 .Lop3:	push	rcx
 	push	rdi
 	xor	ecx, ecx
