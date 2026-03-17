@@ -120,6 +120,13 @@ TRAIL = [
     (1482, 1305, None),
     (1718, 1191, None),
     (2647, 1092, "speed.S — MOVBE-only"),
+    # --- tv_ecdsa_fast2.S: mulx+adcx/adox schoolbook + full-hoist
+    #   one-shot Solinas + 10-entry carry correction table.  BMI2+ADX.
+    #   Within 3% of fast.S — 3.7× fewer branch misses (62K vs 228K),
+    #   but ~10M more instructions (Solinas is a separate pass).
+    #   Normalized to chart's fast.S=629K: ~650K.  Between 1397 and 1427
+    #   on the global frontier.
+    (3201, 650, "fast2.S — mulx+Solinas"),
 ]
 
 # Thomas's track: v1, v2, v3 (1004B), v4 (996B), v5 (989B).
@@ -202,7 +209,7 @@ ax.set_axisbelow(True)
 # a wall at the top, and separates the fast.S cluster (650K-1000K)
 # from the bc.S baseline (1850K).  Size stays linear — only 2:1 range.
 ax.set_yscale('log')
-ax.set_xlim(920, 2700)
+ax.set_xlim(920, 3300)
 ax.set_ylim(500, 10000)
 # Clean up the log axis: major ticks at nice values, no scientific notation.
 from matplotlib.ticker import ScalarFormatter, LogLocator

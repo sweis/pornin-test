@@ -28,6 +28,7 @@ make size      test      wp          # portable C reference
 | **`tv_ecdsa_speed.S`** | 1482 B | ~1.31M | MOVBE | One-shot Solinas, register-hoisted |
 | | 1718 B | ~1.19M | MOVBE | + unrolled Fadd/Fsub (u16 jump table) |
 | | 2647 B | **~1.09M** | MOVBE | + direct RCB (no bytecode dispatch) |
+| **`tv_ecdsa_fast2.S`** | 3201 B | **~650K** | BMI2+ADX | mulx schoolbook + Solinas + carry table |
 | `tv_ecdsa_fast.S` | 1397 B | ~0.65M | BMI2+MOVBE | Montgomery+mulx, predecessor |
 | `tv_ecdsa_bc.S` | 1712 B | ~1.85M | — | first bytecode version |
 | `tv_ecdsa.c` (Cortex-M4) | 2082 B | — | — | realistic boot-ROM target |

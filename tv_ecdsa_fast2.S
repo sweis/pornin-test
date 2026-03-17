@@ -895,4 +895,5 @@ tv_ecdsa_p256_verify_asm:
 	pop	rbx
 	ret
 
+#include "carry_table.inc"
 	.section .note.GNU-stack,"",@progbits
