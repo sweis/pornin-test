@@ -135,9 +135,9 @@ bc_rcb:
 	.byte 0x02,0x20, 0x02,0x02, 0x03,0x28, 0x02,0x08, 0xa0,0x11
 	.byte 0x92,0x89, 0x92,0x98, 0x93,0x11, 0x43,0x11, 0x12,0x81
 	.byte 0x12,0x18, 0x42,0x84, 0x42,0x48, 0x93,0x44, 0x10,0x8f
-	.byte 0x10,0x94, 0x20,0x10, 0x12,0x19, 0x00,0x0b, 0x83,0x00
+	.byte 0x10,0x94, 0x20,0x10, 0x12,0x19, 0xb0,0x00, 0x83,0x00
 	.byte 0x20,0x2f, 0x40,0x8b, 0x22,0x28
-	.byte 0x00,0x00
+	.byte 0x00                 /* 1-B terminator (test al,al) */
 
 /* bc_v3: PROJECTIVE CHECK — homogeneous coords (x=X/Z, not X/Z²).
  * Valid iff X/Z mod n == r ⇔ X ≡ r·Z (mod p) OR X ≡ (r+n)·Z.
@@ -151,7 +151,7 @@ bc_v3:
 	.byte 0x33,0x37            /* slot3  = diff1 − n·Z    = diff2 */
 	.byte 0x70,0x33            /* slot3  = diff1·diff2            */
 	.byte 0x16,0x30            /* check slot3 nonzero (op6 s2=1)  */
-	.byte 0x00,0x00
+	.byte 0x00
 
 /* bc_v1: range checks + curve check + Shamir staging + s⁻¹ + u1,u2.
  *
@@ -186,7 +186,7 @@ bc_v1:
 	/* Curve check: scratch in 7,11 so Q(0,1) and G(2,3) survive.
 	 * slot7 = Qy²−b−(Qx³−3Qx); nonzero ⇔ off-curve. */
 	.byte 0x01,0xb0            /* slot11 = Qx²           (SQR) */
-	.byte 0x00,0xbb            /* slot11 = Qx³           (Fmul)*/
+	.byte 0xb0,0xb0            /* slot11 = Qx³  (commuted — s2≠0)*/
 	.byte 0x03,0xbb            /* slot11 -= Qx           (Fsub)*/
 	.byte 0x03,0xbb            /* slot11 -= Qx           (Fsub)*/
 	.byte 0x03,0xbb            /* slot11 -= Qx (=Qx³−3Qx)      */
@@ -210,7 +210,7 @@ bc_v1:
 	.byte 0x07,0x0d            /* INV (op7): slot0 = s⁻¹ mod n    */
 	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
 	.byte 0x04,0xec            /* slot14 = slot12·slot0 = r·s⁻¹ = u2 */
-	.byte 0x00,0x00
+	.byte 0x00
 
 .equ obc_rcb,  0
 .equ obc_v3,   bc_v3  - bc_rcb
@@ -387,8 +387,13 @@ bc_run:
 .Lbc:
 	movzx	eax, WORD PTR [rbx]
 	add	rbx, 2
-	/* END is word 0x0000 (no stream uses MUL s0,s0,s0→s0). */
-	test	eax, eax
+	/* END is byte1=0x00.  The two ops that naturally encode as
+	 * s2=0/op=0 (bc_rcb 0x00,0x0b; bc_v1 0x00,0xbb) are commuted
+	 * (Fmul commutes) so byte1≠0.  Terminator drops to 1 B × 3
+	 * streams = −3 B.  The word read past the terminator is the
+	 * next stream's first op (or garbage past bc_v1) — ah is dead
+	 * on the jz-taken path, doesn't matter. */
+	test	al, al
 	jz	.Lbce
 
 	/* Nibble layout: al=(s2<<4)|op, ah=(dst<<4)|s1.  Straight-line
