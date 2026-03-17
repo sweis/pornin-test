@@ -126,16 +126,24 @@
  * final result overlays it, and the next op reads it before any
  * clobber.  Tight but verified by exhaustive Python simulation
  * against the affine reference for all edge cases. */
+/* EFD add-2015-rcb-3 (hyperelliptic.org/EFD) — same RCB formula,
+ * different SCHEDULE.  Steps 14,15 hoisted before 10-13 so X1,Z1
+ * die early; slot2 (dead Z1) serves as the "6th temp" for steps
+ * 10'-13' (EFD's X3-as-temp, renamed to Z3-as-temp here).  Result:
+ * scratch = {3,4,9,11,15} — only FIVE slots.  SLOT 8 NEVER WRITTEN.
+ * cP lives there now (r8=&slot8), making .Lcadd's slot5 = r8−96
+ * disp8 (−3 B).  5 commutes applied for the Fadd dst≠s1 invariant
+ * and the byte1≠0 terminator invariant. */
 bc_rcb:
-	.byte 0x50,0x40, 0x60,0x81, 0x70,0x92, 0x12,0xb0, 0x62,0xf5
-	.byte 0xf0,0xbb, 0x82,0xf4, 0xf3,0xbb, 0x22,0xf1, 0x72,0x36
-	.byte 0x30,0xff, 0x92,0x38, 0x33,0xff, 0x72,0x15, 0x22,0x30
-	.byte 0x10,0x03, 0x92,0x14, 0x13,0x10, 0xa0,0x29, 0x23,0x01
-	.byte 0x02,0x20, 0x02,0x02, 0x03,0x28, 0x02,0x08, 0xa0,0x11
-	.byte 0x92,0x89, 0x92,0x98, 0x93,0x11, 0x43,0x11, 0x12,0x81
-	.byte 0x12,0x18, 0x42,0x84, 0x42,0x48, 0x93,0x44, 0x10,0x8f
-	.byte 0x10,0x94, 0x20,0x10, 0x12,0x19, 0xb0,0x00, 0x83,0x00
-	.byte 0x20,0x2f, 0x40,0x8b, 0x22,0x28
+	.byte 0x50,0x30, 0x60,0x41, 0x70,0x92, 0x12,0xb0, 0x62,0xf5
+	.byte 0xf0,0xbb, 0x42,0xf3, 0xf3,0xbb, 0x22,0xf1, 0x02,0x02
+	.byte 0x72,0x15, 0x72,0x26, 0x20,0xff, 0x92,0x24, 0x23,0xff
+	.byte 0x10,0x00, 0x92,0x13, 0x13,0x10, 0xa0,0x29, 0x23,0x01
+	.byte 0x02,0x20, 0x02,0x02, 0x03,0x24, 0x02,0x04, 0xa0,0x11
+	.byte 0x92,0x49, 0x92,0x94, 0x93,0x11, 0x33,0x11, 0x12,0x41
+	.byte 0x12,0x14, 0x32,0x43, 0x32,0x34, 0x93,0x33, 0x10,0x4f
+	.byte 0x10,0x93, 0x20,0x10, 0x12,0x19, 0xb0,0x00, 0x43,0x00
+	.byte 0x20,0x2f, 0x30,0x4b, 0x22,0x24
 	.byte 0x00                 /* 1-B terminator (test al,al) */
 
 /* bc_v3: PROJECTIVE CHECK — homogeneous coords (x=X/Z, not X/Z²).
@@ -341,7 +349,8 @@ pt_mul:
  * backups (X,Y,Z=1).  rsi set by caller; rcx=0 on entry (every
  * path: bc_run epilogue's neg+pops, or pt_mul init's rep stosq). */
 .Lcadd:
-	lea	rdi, [r14+160]      /* addend = slot5.  disp32; r15 is gone. */
+	lea	rdi, [r8-96]        /* addend = slot5 = r8−96.  disp8 — cP at
+	                             * slot8 now (RCB reschedule freed it). */
 	mov	cl, 12
 	rep	movsq
 	xor	edi, edi            /* obc_rcb = 0 */
@@ -741,7 +750,7 @@ tv_ecdsa_p256_verify_asm:
 	 * but runs once.  r15 dropped — .Lcadd goes via r14 disp32. */
 	push	rbx
 	push	r14
-	enter	744, 0              /* 22 slots + cP at slot22 (32 B) */
+	enter	712, 0              /* 22 slots; cP now at slot8 (RCB-free) */
 	/* r12 not pushed: bc_run push/pops it as .Ljt.  r8 = &cP below
 	 * (caller-saved, but nothing in the call tree touches it:
 	 * fe_mul_m uses r9-r11, bc_run/pt_mul/fe_inv_m use low regs).
@@ -793,29 +802,6 @@ tv_ecdsa_p256_verify_asm:
 	push	rdi
 	pop	rbx                 /* slot 16 */
 
-	/* BUILD cP at slot22.  p = 2^256 − 2^224 + 2^192 + 2^96 − 1.
-	 * LE dwords: FFFFFFFF ×3, 0 ×3, 1, FFFFFFFF.  Placed HERE
-	 * because eax=0 survives from build_one's xor (rep stosq,
-	 * inc[mem], push/pop don't touch it) — so `dec eax` (2B)
-	 * gives FFFFFFFF instead of `or eax,-1` (3B).  r8 (hv) was
-	 * consumed at hash decode above; caller-saved but nothing
-	 * below clobbers it.  rbp−40 = slot22 (enter 744). */
-	lea	rdi, [rbp-40]
-	push	rdi
-	pop	r8                  /* r8 = &cP */
-	dec	eax                 /* eax was 0; now FFFFFFFF */
-	stosd
-	stosd
-	stosd                       /* dw0-2 = FFFFFFFF */
-	xor	eax, eax
-	stosd
-	stosd
-	stosd                       /* dw3-5 = 0 */
-	inc	eax
-	stosd                       /* dw6 = 1 */
-	neg	eax
-	stosd                       /* dw7 = FFFFFFFF */
-
 	/* Format byte: lodsb advances rsi past the 0x04 to the X
 	 * coord for free.  push;pop+lodsb+cmp(al) = 5 B vs cmp[rdx]
 	 * +lea = 7 B.  rdx,rsi both non-REX → push;pop beats mov.
@@ -836,6 +822,28 @@ tv_ecdsa_p256_verify_asm:
 	lea	rsi, [rip+cGX]
 	mov	cl, 12              /* cP is gone — only G + cN (12 qw) */
 	rep	movsq               /* rdi → slot 5, rcx → 0 */
+
+	/* BUILD cP at slot8.  The EFD-rescheduled bc_rcb uses only
+	 * 5 scratch slots (3,4,9,11,15) — slot 8 is NEVER written
+	 * during pt_mul.  r8 = &slot8 = r14+256, so .Lcadd's slot5
+	 * target becomes r8−96 = disp8 (was r14+160 disp32, −3 B).
+	 * rdi = slot5 from block copy → slot8 = rdi+96 (disp8).
+	 * rep movsq is mem→mem (no rax), so or eax,-1 not dec. */
+	lea	rdi, [rdi+96]       /* slot8 */
+	push	rdi
+	pop	r8                  /* r8 = &cP = &slot8 */
+	or	eax, -1             /* eax = FFFFFFFF */
+	stosd
+	stosd
+	stosd                       /* dw0-2 = FFFFFFFF */
+	xor	eax, eax
+	stosd
+	stosd
+	stosd                       /* dw3-5 = 0 */
+	inc	eax
+	stosd                       /* dw6 = 1 */
+	neg	eax
+	stosd                       /* dw7 = FFFFFFFF */
 
 	push	obc_v1
 	pop	rdi
