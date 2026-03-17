@@ -67,10 +67,10 @@ What changed from fast.S to drop ~290 bytes:
   granularity — `q = t[top_dword]` is exact to within one bit. No m0i,
   no R², no conversion ops, no Montgomery-domain constants.
 
-- **Projective final check.** Valid iff `X ≡ r·Z² ∨ X ≡ (r+n)·Z²
-  (mod p)`. Entirely in bytecode; `n·Z²` via a MULCN handler. Mod-p
-  inversion is gone — the second fe_inv_m call, its arg setup, and
-  the z² bytecode segment all disappear.
+- **Projective final check.** Valid iff `X ≡ r·Z ∨ X ≡ (r+n)·Z
+  (mod p)` — homogeneous projective, so `x = X/Z` not Jacobian
+  `X/Z²`. Entirely in bytecode; `n·Z` via a MULCN handler. Mod-p
+  inversion is gone.
 
 - **Fermat inversion reads `cN` in .text directly.** `n` and `n−2`
   differ only in bits 1–4 (four-bit borrow cascade, doesn't propagate

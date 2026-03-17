@@ -624,8 +624,8 @@ As 32 bytes of \texttt{.rodata} it's \bytes{32}. But look at the hex:
 \[
 \texttt{ffffffff\,00000001\,00000000\,00000000\,00000000\,ffffffff\,ffffffff\,ffffffff}
 \]
-Six of the eight 32-bit words are either \texttt{0x00000000} or
-\texttt{0xFFFFFFFF}. You can \emph{build} this with a short sequence
+Seven of the eight 32-bit words are either \texttt{0x00000000} or
+\texttt{0xFFFFFFFF} --- only \texttt{0x00000001} is neither. You can \emph{build} this with a short sequence
 of \texttt{stosq}/\texttt{stosd} instructions (which write
 \texttt{rax}/\texttt{eax} and auto-advance \texttt{rdi}):
 \begin{lstlisting}[language={[x86masm]Assembler}]
