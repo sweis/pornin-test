@@ -152,15 +152,11 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	loop	1b
 	ret
 
-.Lchknz: /* bpl |= (s1 == 0) */
-	call	.Lorall
-	cmc
-	jmp	.Ladc
-.Lchkz:  /* bpl |= (s1 != 0) */
-	call	.Lorall
-.Ladc:	rcl	ebp, 1              /* 2 B — CF into bit 0; stays nonzero if was */
+.Lchknz: /* ebp bit 0 ← (s1 == 0).  Call CHKZ then flip bit 0. */
+	call	.Lchkz
+	xor	ebp, 1
 	ret
-.Lorall:
+.Lchkz:  /* ebp bit 0 ← (s1 != 0). */
 	xor	edx, edx
 	push	K
 	pop	rcx
@@ -168,6 +164,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	or	rdx, rax
 	loop	1b
 	neg	rdx                 /* CF = (rdx != 0) */
+	rcl	ebp, 1              /* CF → bit 0; prior bits shifted up */
 	ret
 
 .Lchklt: /* bpl |= (s1 >= s2). Both canonical. */
