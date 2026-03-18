@@ -1,0 +1,4 @@
+commit,bytes,cycles,note
+# 5×54 signed-limb Montgomery track. Thomas at 928/4482467.
+# limb11 parallel track at 1244 B (commit 387114e) — estimated floor ~1067.
+# Target: < 928. Each row is a 607/607 checkpoint (cycles=0 for pre-607).
