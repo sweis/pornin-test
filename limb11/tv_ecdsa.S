@@ -504,10 +504,14 @@ pt_mul:
 tv_ecdsa_p256_verify_asm:
 	/* rdi=sig, rsi=sig_len, rdx=pub, rcx=pub_len, r8=hv, r9=hv_len */
 	push	rbx
-	push	rbp
 	push	r12
 	push	r13
 	push	r14
+
+	/* enter before checks → all paths go through leave. Stack is
+	 * 16-aligned: SysV caller rsp was aligned at call, −8 (ret addr)
+	 * −32 (4 pushes) −8 (enter's rbp) = −48, then sub 2112 (÷16). */
+	enter	NSLOTS * SLOT, 0
 
 	xor	eax, eax
 	cmp	rsi, 64
@@ -519,11 +523,16 @@ tv_ecdsa_p256_verify_asm:
 	cmp	r9, 64
 	ja	.Lfail
 	cmp	byte ptr [rdx], 0x04
-	jne	.Lfail
-
-	mov	rbp, rsp
-	sub	rsp, NSLOTS * SLOT
-	and	rsp, -16
+	je	.Lok
+	/* .Lfail falls in the middle — all jcc's above reach it rel8. */
+.Lfail:
+	leave
+	pop	r14
+	pop	r13
+	pop	r12
+	pop	rbx
+	ret
+.Lok:
 	mov	r14, rsp
 
 	push	rdi                 /* sig */
@@ -546,7 +555,7 @@ tv_ecdsa_p256_verify_asm:
 	stosq
 	mov	eax, 0xffff00
 	stosq
-	mov	eax, 0xffff
+	shr	eax, 8              /* 0xffff */
 	stosq
 
 	/* Constants (LE). rodata order matches rdi-chain opportunities. */
@@ -594,18 +603,10 @@ tv_ecdsa_p256_verify_asm:
 	call	pt_mul
 	sbb	eax, eax
 	inc	eax                 /* eax = !CF = (fail bits were 0) */
-	jmp	.Lout
+	jmp	.Lfail
 
 .Lfail2:
 	xor	eax, eax
-.Lout:
-	mov	rsp, rbp
-.Lfail:
-	pop	r14
-	pop	r13
-	pop	r12
-	pop	rbp
-	pop	rbx
-	ret
+	jmp	.Lfail
 
 	.section .note.GNU-stack,"",@progbits
