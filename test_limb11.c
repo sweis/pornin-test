@@ -9,6 +9,8 @@
 extern void fe_mul11(int64_t *dst, const int64_t *a, const int64_t *b,
                      const int64_t *m);
 
+/* v5+ is self-contained re: rcx (uses lea, not mov cl). */
+
 #define K 11
 #define W 24
 
