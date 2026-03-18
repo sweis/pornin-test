@@ -467,7 +467,8 @@ bc_run:
 	call	rax
 	jmp	.Lbc
 
-.Lbce:	neg	ebp                 /* CF = (ebp != 0) */
+.Lbce:	neg	ebp
+	sbb	eax, eax            /* 0 pass, −1 fail — verify pushes it */
 	pop	r12
 	pop	rbx
 	pop	rbp
@@ -553,16 +554,11 @@ tv_ecdsa_p256_verify_asm:
 	/* ── bc_v1 ── */
 	push	obc_v1
 	pop	rdi
-	call	bcrun_off
-	/* Carry bc_v1's fail flag on the stack — pt_mul on garbage is
-	 * safe (fixed 264 iters, no bounds issues). Shamir backup is
-	 * done by bc_v1's tail (COPYHI ops). */
-	sbb	eax, eax
-	push	rax
-	call	pt_mul
-	sbb	eax, eax
+	call	bcrun_off           /* returns eax = 0/−1 */
+	push	rax                 /* bc_v1 fail flag — pt_mul safe on garbage */
+	call	pt_mul              /* returns eax = 0/−1 via bc_v3 */
 	pop	rdx
-	or	eax, edx            /* −1 if either bc_v1 or bc_v3 failed */
+	or	eax, edx            /* −1 if either failed */
 	inc	eax
 	jmp	.Lfail
 
