@@ -1,59 +1,31 @@
 # 11×24 track — plan
 
 **Target:** < 928 B (Thomas's number with 5×54).
-**Current:** fe_mul alone at 158 B, full impl not yet at 607/607.
+**Current:** 1312 B, 607/607 pass. Phase 2 grind. See `HANDOFF.md`.
 **Constraint:** work only in this directory. Don't touch tiny.S.
 
 ---
 
-## 1. Reference baseline — get it WORKING, no golf
+## 1. Phase 1 — DONE (1488 B baseline at 1260a47)
 
-The first-pass number is a starting point, not a verdict. Don't golf
-during the build — we don't know which tricks survive the new shape.
+607/607 from the first working build. Baseline was +438 B over the
+pre-build estimate — the pieces shared less than expected, plus two
+decoder bugs that needed fixing first:
 
-### What "working" means
+- `bswap; shr 8` drops the LOW byte after bswap — want `and MASK`
+  (the low 3 bytes ARE the limb). Symptom: all VALID tests fail,
+  all INVALID pass. Systematic compute-path bug.
+- fe_from_le left rsi at src+30, not src+32 — chained constant
+  decodes drifted 2 B per call, eventually reading cGY's tail as cN.
 
-607/607: 33 hand-picked edge cases + 574 Wycheproof. Same gate as
-tiny.S. `make test` must pass before any size claim.
-
-### Build order (each step testable in isolation)
-
-| Step | Piece | Test | Blocks |
-|---|---|---|---|
-| 1.1 | fe_mul11 (done — 158 B, 103/103) | `make test-mul` | — |
-| 1.2 | fe_from_be (decoder) | standalone unit | — |
-| 1.3 | Fadd/Fsub limbwise | standalone unit | — |
-| 1.4 | NORM (to [0,p), to [0,n)) | standalone unit | — |
-| 1.5 | fe_inv_n (Fermat) | standalone unit | 1.1, 1.4 |
-| 1.6 | bc_rcb wired (slot remap 9→12, 15→13) | one RCB call vs Python | 1.1-1.3 |
-| 1.7 | bc_v1 (range checks, b-derive, convert, invert, u1/u2) | — | 1.1-1.6 |
-| 1.8 | pt_mul nested 11×24 | one scalar-mul vs Python | 1.6, 1.7 |
-| 1.9 | bc_v3 (projective check) | — | 1.8 |
-| 1.10 | Full 607/607 | `make test` | all |
-
-### Known issues to fix during phase 1
-
-Flagged in `tv_ecdsa.S` and `gen_bytecode.py` comments:
-
-- **bc_v1 slot collision**: u2 writes slot 3 (Gy) before Shamir
-  backup needs it. Fix: u1→12, u2→11, n_mont→15.
-- **fe_inv bt-on-cN**: cN stored BE, `bt` indexes LE bits. Options:
-  (a) store cN twice (+32 B), (b) byteswap-on-read (+~5 B in loop),
-  (c) store cN LE in rodata, convert to limbs differently. Lean (c).
-- **.Lai (accumulator = ∞)**: sets Y=1 plain. Need to verify
-  RCB(0:1:0, Q) = Q with plain Y in a Montgomery context. If the
-  algebra cares about Y's R-factor when X=Z=0, need Y=1_mont = R.
-  Test empirically: one RCB call with Y=1 vs Y=R, compare outputs.
-- **R²_n constant**: needed for s → Montgomery-n. +32 B.
-- **Ops SET1/COPY/NORMN**: not yet in skeleton. ~15 B each.
-- **CHKZ semantics inverted for Z≠0 check**: CHKZ sets fail-bit if
-  nonzero; we need fail-if-zero for the ∞ check in bc_v3. Either
-  add CHKNZ op or invert in native code.
-
-### Baseline size guess
-
-~1050–1100 B. Heavy caveat: session estimates were ~86 B pessimistic
-vs the assembler. The pieces share code in ways flat summing misses.
+Phase 1 decisions that stuck:
+- Constants stored LE (natural quad order). `bt [cN], ebx` works
+  directly in INV; fe_from_le is simpler than fe_from_be.
+- NORM: subtract-until-negative-then-add-once. No top-limb-equality
+  infinite loop (the earlier skeleton's while-ge-p had this trap).
+- .Ljt in .text (same section as handlers for u8-offset subtraction).
+- `push K; pop rcx` everywhere bc_run leaves rcx dirty (it lea's a
+  stack address there). The rcx=0 memory caught this proactively.
 
 ---
 

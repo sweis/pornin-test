@@ -5,3 +5,4 @@ commit,bytes,cycles,note
 a1f8ce0,158,0,fe_mul11 standalone (103/103 unit test)
 1260a47,1488,0,PHASE 1 BASELINE — 607/607 pass. Not golfed.
 89f89c2,1319,12185000,Phase 2 grind: −169 B. Chaining + .Lcp share + enter/leave + xor-neg add/sub + INV stack tricks
+6de9a83,1312,12185000,CIOS merge in fe_mul11 (schoolbook+reduce → one loop)

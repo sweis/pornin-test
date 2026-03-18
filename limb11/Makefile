@@ -45,8 +45,12 @@ size-mul:
 
 # ── Bench (only after 607/607) ──
 bench: tv_ecdsa.o
-	$(CC) -O2 -o /tmp/limb11_bench tv_ecdsa.o $(PARENT)/bench_asm.c
+	$(CC) -O2 -o /tmp/limb11_bench tv_ecdsa.o $(PARENT)/bench.c
 	/tmp/limb11_bench
+
+bench20: tv_ecdsa.o
+	$(CC) -O2 -o /tmp/limb11_bench tv_ecdsa.o $(PARENT)/bench.c
+	@for i in $$(seq 1 20); do /tmp/limb11_bench; done | sort -n | sed -n '10,11p'
 
 # ── Regenerate derived files ──
 regen: bytecode.inc vectors_mul.h
