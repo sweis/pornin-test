@@ -57,7 +57,7 @@ bc_v3:
 	.byte	0x09, 0x33  /* NORM    3 ←  3,  0 */
 	.byte	0x06, 0x03  /* CHKZ    0 ←  3,  0 */
 	.byte	0x09, 0x22  /* NORM    2 ←  2,  0 */
-	.byte	0x0d, 0x02  /* CHKNZ   0 ←  2,  0 */
+	.byte	0x0c, 0x02  /* CHKNZ   0 ←  2,  0 */
 	.byte	0x00  /* END */
 	/* 21 B */
 
@@ -66,8 +66,8 @@ bc_v1:
 	.byte	0x95, 0x0c  /* CHKLT   0 ← 12,  9 */
 	.byte	0x85, 0x05  /* CHKLT   0 ←  5,  8 */
 	.byte	0x85, 0x06  /* CHKLT   0 ←  6,  8 */
-	.byte	0x0d, 0x0b  /* CHKNZ   0 ← 11,  0 */
-	.byte	0x0d, 0x0c  /* CHKNZ   0 ← 12,  0 */
+	.byte	0x0c, 0x0b  /* CHKNZ   0 ← 11,  0 */
+	.byte	0x0c, 0x0c  /* CHKNZ   0 ← 12,  0 */
 	.byte	0x30, 0xa3  /* Fmul   10 ←  3,  3 */
 	.byte	0x20, 0x42  /* Fmul    4 ←  2,  2 */
 	.byte	0x20, 0x44  /* Fmul    4 ←  4,  2 */
@@ -93,14 +93,12 @@ bc_v1:
 	.byte	0xf8, 0xeb  /* MULR2  14 ← 11, 15 */
 	.byte	0x14, 0xcb  /* Nmul   12 ← 11,  1 */
 	.byte	0x14, 0xb7  /* Nmul   11 ←  7,  1 */
-	.byte	0x0c, 0xbb  /* NORMN  11 ← 11,  0 */
-	.byte	0x0c, 0xcc  /* NORMN  12 ← 12,  0 */
 	.byte	0x0a, 0x70  /* SET1    7 ←  0,  0 */
 	.byte	0xf8, 0x77  /* MULR2   7 ←  7, 15 */
 	.byte	0x0b, 0x47  /* COPY    4 ←  7,  0 */
 	.byte	0xf8, 0xf9  /* MULR2  15 ←  9, 15 */
 	.byte	0x00  /* END */
-	/* 75 B */
+	/* 71 B */
 
 	.equ	obc_rcb, 0
 	.equ	obc_v3,  87

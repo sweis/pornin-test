@@ -88,7 +88,7 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
 	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
 	.byte	.Lop8-.Ljt, .Lop9-.Ljt, .Lop10-.Ljt, .Lop11-.Ljt
-	.byte	.Lop12-.Ljt, .Lop13-.Ljt
+	.byte	.Lop12-.Ljt
 
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cP.
@@ -148,7 +148,7 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	loop	1b
 	ret
 
-.Lop13: /* CHKNZ — bpl |= (s1 == 0). */
+.Lop12: /* CHKNZ — bpl |= (s1 == 0). */
 	call	.Lorall
 	cmc                         /* CF ← zero */
 	jmp	.Ladc
@@ -223,12 +223,8 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
  * top-limb-equality trap). r8 holds the modulus (not rcx, which
  * gets clobbered by loop counters). */
 
-.Lop12: /* NORMN */
-	lea	r8, [r14 + oCN]
-	jmp	.Lnorm
 .Lop9:  /* NORM — rcx = &cP preloaded by bc_run. */
 	mov	r8, rcx
-.Lnorm:
 	push	rsi
 	pop	rdi                 /* in-place on s1 */
 	call	.Lcprop

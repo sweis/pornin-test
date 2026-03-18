@@ -26,7 +26,7 @@ import sys
 
 OPS = {'Fmul':0, 'SQR':1, 'Fadd':2, 'Fsub':3, 'Nmul':4,
        'CHKLT':5, 'CHKZ':6, 'INV':7, 'MULR2':8, 'NORM':9,
-       'SET1':10, 'COPY':11, 'NORMN':12, 'CHKNZ':13}
+       'SET1':10, 'COPY':11, 'CHKNZ':12}
 
 def emit(stream_name, ops, reserved_write=frozenset()):
     print(f"{stream_name}:")
@@ -153,11 +153,12 @@ V1 = [
     # ── 6. u1 = e·w, u2 = r·w  (MontMul(plain, mont) = plain) ──
     # r_mont first (reads r@11). Then u2 (reads r, w — both still live
     # after this since Nmul writes to 12). Then u1 → 11 overwrites r.
+    # u1,u2 ≥ 0 always: the mod-n chain (e,r,s decoded canonical;
+    # cR2_n canonical; MontMul(nonneg,nonneg)=nonneg). And pt_mul
+    # computes (k mod n)·G for any k ≥ 0 in 264 bits. No NORMN.
     ('MULR2', 14, 11, 15), # r_mont → 14
     ('Nmul', 12, 11,  1),  # u2 → 12 (r,w still live — Nmul reads only)
     ('Nmul', 11,  7,  1),  # u1 → 11 (r overwritten; e,w dead)
-    ('NORMN', 11, 11, 0),
-    ('NORMN', 12, 12, 0),
 
     # ── 7. Z = 1_mont_p for slots 4, 7  (must run BEFORE step 8) ──
     # Per HANDOFF Z-test: real-point Z must be 1_mont, not plain 1.
@@ -201,9 +202,9 @@ V3 = [
 READS  = {'Fmul':(1,2), 'SQR':(1,2), 'Fadd':(1,2), 'Fsub':(1,2),
           'Nmul':(1,2), 'CHKLT':(1,2), 'CHKZ':(1,), 'INV':(0,1),
           'MULR2':(1,), 'NORM':(1,), 'SET1':(), 'COPY':(1,),
-          'NORMN':(1,), 'CHKNZ':(1,)}
+          'CHKNZ':(1,)}
 WRITES = {'Fmul', 'SQR', 'Fadd', 'Fsub', 'Nmul', 'INV', 'MULR2',
-          'NORM', 'SET1', 'COPY', 'NORMN'}
+          'NORM', 'SET1', 'COPY'}
 
 def simulate(name, ops, initial, must_survive):
     """Track what each slot holds. Flag reads of dead slots and
