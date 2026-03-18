@@ -128,17 +128,18 @@ V1 = [
     # ── s_mont → 14 (overwrite s); consumes cR2_n @ 10 ──
     ('Nmul', 14, 14, 10),
 
-    # ── b-derive (G @ 11,12; b → 10) ──
+    # ── b-derive (G @ 11,12; b → 10). Gx² → slot 2, survives for G-scale. ──
     ('Fmul', 10, 12, 12),
-    ('Fmul',  4, 11, 11),
-    ('Fmul',  4,  4, 11),
+    ('Fmul',  2, 11, 11),  # Gx² → 2 (REUSED by G-scale)
+    ('Fmul',  4,  2, 11),  # Gx³ = Gx²·Gx
     ('Fsub', 10, 10,  4),
     ('Fadd',  4, 11, 11),
     ('Fadd',  4,  4, 11),
     ('Fadd', 10, 10,  4),
 
     # ── On-curve: Y²Z − X³ + 3XZ² − bZ³ ≡ 0, all @ level −2 ──
-    # Z=1 @ 15 (RCB-safe, survives for bc_v3's X·1). Temps: 2,3.
+    # Z=1 @ 15 (RCB-safe). 3Qx temp → slot 0 (free — r moved to 13).
+    # Slot 2 stays Gx² (not touched here).
     ('SET1', 15,  0,  0),  # Z = 1
     ('Fmul',  4,  6,  6),  # Qy²  @ −1
     ('Fmul',  4,  4, 15),  # Qy²·Z  @ −2
@@ -146,10 +147,10 @@ V1 = [
     ('Fmul',  3,  3,  5),  # Qx³  @ −2
     ('Fsub',  4,  4,  3),
     ('Fmul',  3, 15, 15),  # Z²  @ −1
-    ('Fadd',  2,  5,  5),  # 2Qx  @ 0
-    ('Fadd',  2,  2,  5),  # 3Qx  @ 0
-    ('Fmul',  2,  2,  3),  # 3Qx·Z²  @ −2
-    ('Fadd',  4,  4,  2),
+    ('Fadd',  0,  5,  5),  # 2Qx  @ 0
+    ('Fadd',  0,  0,  5),  # 3Qx  @ 0
+    ('Fmul',  0,  0,  3),  # 3Qx·Z²  @ −2
+    ('Fadd',  4,  4,  0),
     ('Fmul',  3,  3, 15),  # Z³  @ −2
     ('Fmul',  3, 10,  3),  # b·Z³  @ −2
     ('Fsub',  4,  4,  3),
@@ -165,9 +166,8 @@ V1 = [
     ('Nmul',  1, 13,  3),  # u2 = r·w → 1
     ('Nmul',  0,  7,  3),  # u1 = e·w → 0 (e,w dead; r@13 dead after u2 read)
 
-    # ── G-scale: (Gx², Gx·Gy, Gx_mont) → 2,3,4 ──
+    # ── G-scale: (Gx², Gx·Gy, Gx_mont) → 2,3,4. Gx² already @ 2 from b-derive. ──
     ('COPY',  4, 11,  0),  # Gx_mont → 4 (Z_G)
-    ('Fmul',  2, 11, 11),  # Gx² → 2
     ('Fmul',  3, 11, 12),  # Gx·Gy → 3
 
     # ── Z_Q = plain 1 ──
