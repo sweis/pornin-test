@@ -25,9 +25,10 @@ Ops:
 import sys
 
 # MULR2 = Fmul with s2=15 (bc_run already sets rdx). SQR never used.
+# COPYHI: dst nibble means slot(dst+16) — reaches Shamir backup slots.
 OPS = {'Fmul':0, 'Fadd':1, 'Fsub':2, 'Nmul':3,
        'CHKLT':4, 'CHKZ':5, 'INV':6, 'NORM':7,
-       'SET1':8, 'COPY':9, 'CHKNZ':10}
+       'SET1':8, 'COPY':9, 'CHKNZ':10, 'COPYHI':11}
 
 def MULR2(dst, s1): return ('Fmul', dst, s1, 15)
 
@@ -172,6 +173,16 @@ V1 = [
     # ── 8. n_mont = MontMul_p(n, R²_p).  Reads & writes 15; safe
     # because fe_mul11 copies inputs to its stack acc first. ──
     MULR2(15, 9),
+
+    # ── 9. Shamir backup — dst nibble means slot(dst+16). ──
+    ('COPYHI', 0,  2, 0),  # Gx → 16
+    ('COPYHI', 1,  3, 0),  # Gy → 17
+    ('COPYHI', 2,  4, 0),  # Z_G → 18
+    ('COPYHI', 3,  5, 0),  # Qx → 19
+    ('COPYHI', 4,  6, 0),  # Qy → 20
+    ('COPYHI', 5,  7, 0),  # Z_Q → 21
+    ('COPYHI', 6, 11, 0),  # u1 → 22
+    ('COPYHI', 7, 12, 0),  # u2 → 23
 ]
 
 
@@ -204,9 +215,10 @@ V3 = [
 # ──────────────────────────────────────────────────────────────────────
 READS  = {'Fmul':(1,2), 'Fadd':(1,2), 'Fsub':(1,2),
           'Nmul':(1,2), 'CHKLT':(1,2), 'CHKZ':(1,), 'INV':(0,1),
-          'NORM':(1,), 'SET1':(), 'COPY':(1,), 'CHKNZ':(1,)}
+          'NORM':(1,), 'SET1':(), 'COPY':(1,), 'CHKNZ':(1,),
+          'COPYHI':(1,)}
 WRITES = {'Fmul', 'Fadd', 'Fsub', 'Nmul', 'INV',
-          'NORM', 'SET1', 'COPY'}
+          'NORM', 'SET1', 'COPY'}  # COPYHI writes high slots, not tracked
 
 def simulate(name, ops, initial, must_survive):
     """Track what each slot holds. Flag reads of dead slots and

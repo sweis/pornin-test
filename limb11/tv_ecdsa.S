@@ -87,7 +87,7 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 .Ljt:
 	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, .Lnmul-.Ljt
 	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv-.Ljt, .Lnorm-.Ljt
-	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lchknz-.Ljt
+	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lchknz-.Ljt, .Lcopyhi-.Ljt
 
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cP.
@@ -108,6 +108,9 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	mov	r11d, 0xBC4F
 	jmp	fe_mul11
 
+.Lcopyhi: /* dst nibble means slot(dst+16) — Shamir backup reach. */
+	add	rdi, 16*SLOT
+	/* falls through */
 .Lcopy:
 	push	K
 	pop	rcx
@@ -153,13 +156,13 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 .Ladc:	adc	bpl, 0
 	ret
 .Lorall:
-	xor	eax, eax
+	xor	edx, edx
 	push	K
 	pop	rcx
-1:	or	rax, [rsi]
-	lea	rsi, [rsi+8]
+1:	lodsq
+	or	rdx, rax
 	loop	1b
-	neg	rax                 /* CF = (rax != 0) */
+	neg	rdx                 /* CF = (rdx != 0) */
 	ret
 
 .Lchklt: /* bpl |= (s1 >= s2). Both canonical. */
@@ -551,24 +554,10 @@ tv_ecdsa_p256_verify_asm:
 	pop	rdi
 	call	bcrun_off
 	/* Carry bc_v1's fail flag on the stack — pt_mul on garbage is
-	 * safe (fixed 264 iters, no bounds issues), and the OR below
-	 * guarantees we return 0 regardless of bc_v3's verdict. */
+	 * safe (fixed 264 iters, no bounds issues). Shamir backup is
+	 * done by bc_v1's tail (COPYHI ops). */
 	sbb	eax, eax
 	push	rax
-
-	/* Shamir backup: 2-7 → 16-21 (6 slots = 66 qw). */
-	lea	rsi, [r14 + 2*SLOT]
-	lea	rdi, [r14 + oBAK]
-	push	6*K
-	pop	rcx
-	rep	movsq
-	/* u1,u2: 11,12 → 22,23 (2 slots = 22 qw). rdi already at oBAK+6*SLOT=22*SLOT. */
-	lea	rsi, [r14 + 11*SLOT]
-	push	2*K
-	pop	rcx
-	rep	movsq
-
-	/* ── pt_mul (dispatches bc_v3 at the end) ── */
 	call	pt_mul
 	sbb	eax, eax
 	pop	rdx

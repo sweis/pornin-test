@@ -97,8 +97,16 @@ bc_v1:
 	.byte	0xf0, 0x77  /* Fmul    7 ←  7, 15 */
 	.byte	0x09, 0x47  /* COPY    4 ←  7,  0 */
 	.byte	0xf0, 0xf9  /* Fmul   15 ←  9, 15 */
+	.byte	0x0b, 0x02  /* COPYHI  0 ←  2,  0 */
+	.byte	0x0b, 0x13  /* COPYHI  1 ←  3,  0 */
+	.byte	0x0b, 0x24  /* COPYHI  2 ←  4,  0 */
+	.byte	0x0b, 0x35  /* COPYHI  3 ←  5,  0 */
+	.byte	0x0b, 0x46  /* COPYHI  4 ←  6,  0 */
+	.byte	0x0b, 0x57  /* COPYHI  5 ←  7,  0 */
+	.byte	0x0b, 0x6b  /* COPYHI  6 ← 11,  0 */
+	.byte	0x0b, 0x7c  /* COPYHI  7 ← 12,  0 */
 	.byte	0x00  /* END */
-	/* 71 B */
+	/* 87 B */
 
 	.equ	obc_rcb, 0
 	.equ	obc_v3,  87
