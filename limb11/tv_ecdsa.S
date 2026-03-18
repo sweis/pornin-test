@@ -454,7 +454,7 @@ bc_run:
 	add	rdx, r14
 
 	and	eax, 0xF
-	movzx	eax, byte ptr [r12 + rax]
+	mov	al, [r12 + rax]     /* high bytes already 0 from the and */
 	add	rax, r12
 	lea	rcx, [r14 + oCN]    /* cN; Fmul/NORM subtract SLOT for cP */
 	call	rax
