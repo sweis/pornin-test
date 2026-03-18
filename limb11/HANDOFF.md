@@ -4,8 +4,8 @@
 
 ## State
 
-**1250 B, 607/607 pass, ~11.9M cycles.** −238 B this session
-(1488 baseline). Target < 928 B. **322 B to go.**
+**1244 B, 607/607 pass, ~11.9M cycles.** −244 B this session
+(1488 baseline). Target < 928 B. **316 B to go.**
 
 Pushing now (repo private).
 
@@ -27,6 +27,7 @@ Pushing now (repo private).
 ## What DIDN'T work (tried, reverted/skipped)
 
 - **NORM before CHKNZ(Z) drop**: Wycheproof tcId=292 failed. RCB's Z is an Fadd chain output — can be kp≠0 for small k. NORM required.
+- **bt [rcx+56] via fe_from_be reversal**: fe_from_be's reversal into dst+56..87 is correct DURING decode (write trails read), but fe_from_le's 88-byte stosq output then OVERWRITES those bytes with limb qwords 7-10. bt read limb 7, not n's bytes. The trick needs the reversal target to be OUTSIDE fe_from_le's write range — but reversing to the previous slot's spare bytes breaks chained decodes (Qy@6's reversal would clobber Qx@5's limbs 7-10).
 - **Fadd/Fsub via copy+.Lasmod**: the fall-through-to-.Lcprop split costs more than the body sharing saves. And 3 dst==s2 Fsub's in bc can't commute.
 - **Fmul fall-through to fe_mul11**: u8 jump-table reach is the binding constraint. Stubs cost what the jmp saves.
 - **Nmul `add rcx,SLOT` from bc_run's &cP preload**: INV calls .Lnmul directly; fe_mul11 clobbers rcx so subsequent calls break. Fixed by preloading &cN instead.

@@ -7,3 +7,4 @@ a1f8ce0,158,0,fe_mul11 standalone (103/103 unit test)
 89f89c2,1319,12185000,Phase 2 grind: −169 B. Chaining + .Lcp share + enter/leave + xor-neg add/sub + INV stack tricks
 6de9a83,1312,12185000,CIOS merge in fe_mul11 (schoolbook+reduce → one loop)
 670e5e0,1254,0,Slot reshuffle: constants chain 9-11; r,s @ 0,1; COPYHI Shamir; drop NORMN,MULR2,SQR,r/s CHKNZ
+387114e,1244,11920000,ZERO op: bc_v1 tail does acc=(0:1:0); pt_mul drops 15-B init. SET1/ZERO shared tail.
