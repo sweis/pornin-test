@@ -205,8 +205,8 @@ ttx = [p[0] for p in THOMAS_TRACK]
 tty = [p[1] for p in THOMAS_TRACK]
 ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.2, zorder=4,
         label='Thomas (5×54 from v7)')
-ax.scatter(ttx, tty, c='#2e8b57', s=50, marker='o',
-           edgecolors='#1a5235', linewidths=0.8, zorder=5)
+ax.scatter(ttx, tty, c='#2e8b57', s=25, marker='o',
+           edgecolors='#1a5235', linewidths=0.6, zorder=5)
 ax.annotate(f'Thomas v7 — {THOMAS[0]}B', THOMAS,
             textcoords="offset points", xytext=(12, 6), fontsize=10,
             fontweight='bold',
@@ -243,16 +243,6 @@ if LIMB5_TRACK:
                 bbox=dict(boxstyle='round,pad=0.3', fc='#d0f0f0',
                 ec='#008b8b', lw=0.8))
 
-# Size corner — the one annotation that matters.
-ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=260, marker='*',
-           edgecolors='#8a4500', linewidths=1.5, zorder=6,
-           label=f'Claude {CLAUDE[0]}B')
-ax.annotate(f'Claude — {CLAUDE[0]}B',
-            CLAUDE, textcoords="offset points", xytext=(14, -4),
-            fontsize=10, fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.35', fc='#ffe4c4',
-                      ec='#e07000', lw=1))
-
 ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
 ax.set_title('ECDSA/P-256 verify — size vs speed (lower-left is better)',
@@ -265,7 +255,7 @@ ax.set_axisbelow(True)
 # a wall at the top, and separates the fast.S cluster (650K-1000K)
 # from the bc.S baseline (1850K).  Size stays linear — only 2:1 range.
 ax.set_yscale('log')
-ax.set_xlim(900, 3300)
+ax.set_xlim(900, 2000)    # cut off fast2.S/speed.S tail for detail
 ax.set_ylim(500, 15000)   # limb11 at ~12000K (loop-heavy)
 # Clean up the log axis: major ticks at nice values, no scientific notation.
 from matplotlib.ticker import ScalarFormatter, LogLocator
