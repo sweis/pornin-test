@@ -24,11 +24,10 @@ Ops:
 
 import sys
 
-# MULR2 was op 8, but it's just Fmul with s2=15 — bc_run already
-# computes rdx=r14+s2*SLOT. The handler's lea was a no-op. Dropped.
-OPS = {'Fmul':0, 'SQR':1, 'Fadd':2, 'Fsub':3, 'Nmul':4,
-       'CHKLT':5, 'CHKZ':6, 'INV':7, 'NORM':8,
-       'SET1':9, 'COPY':10, 'CHKNZ':11}
+# MULR2 = Fmul with s2=15 (bc_run already sets rdx). SQR never used.
+OPS = {'Fmul':0, 'Fadd':1, 'Fsub':2, 'Nmul':3,
+       'CHKLT':4, 'CHKZ':5, 'INV':6, 'NORM':7,
+       'SET1':8, 'COPY':9, 'CHKNZ':10}
 
 def MULR2(dst, s1): return ('Fmul', dst, s1, 15)
 
@@ -203,10 +202,10 @@ V3 = [
 # ──────────────────────────────────────────────────────────────────────
 # Slot lifetime simulator — catches read-before-write / overwrite bugs
 # ──────────────────────────────────────────────────────────────────────
-READS  = {'Fmul':(1,2), 'SQR':(1,2), 'Fadd':(1,2), 'Fsub':(1,2),
+READS  = {'Fmul':(1,2), 'Fadd':(1,2), 'Fsub':(1,2),
           'Nmul':(1,2), 'CHKLT':(1,2), 'CHKZ':(1,), 'INV':(0,1),
           'NORM':(1,), 'SET1':(), 'COPY':(1,), 'CHKNZ':(1,)}
-WRITES = {'Fmul', 'SQR', 'Fadd', 'Fsub', 'Nmul', 'INV',
+WRITES = {'Fmul', 'Fadd', 'Fsub', 'Nmul', 'INV',
           'NORM', 'SET1', 'COPY'}
 
 def simulate(name, ops, initial, must_survive):

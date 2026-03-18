@@ -85,9 +85,9 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
  * constant. gas .if can't forward-ref, so the u8-fit assert lives
  * at the end of the file (after all .Lop labels are defined). ── */
 .Ljt:
-	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
-	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
-	.byte	.Lop8-.Ljt, .Lop9-.Ljt, .Lop10-.Ljt, .Lop11-.Ljt
+	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, .Lnmul-.Ljt
+	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv-.Ljt, .Lnorm-.Ljt
+	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lchknz-.Ljt
 
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cP.
@@ -97,26 +97,24 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
  * rcx high bytes are DIRTY (bc_run lea's a stack address) — every
  * `mov cl,N` would leave a huge rcx. Use push;pop for loop counters. */
 
-.Lop0:  /* Fmul — MontMul mod p. m0inv = 1.  (MULR2 = Fmul with s2=15
- * encoded — bc_run already sets rdx=r14+15*SLOT, no handler needed.) */
-.Lop1:
+.Lfmul: /* Fmul — MontMul mod p. m0inv = 1.  MULR2 = Fmul with s2=15. */
+	sub	rcx, SLOT           /* &cN − SLOT = &cP */
 	push	1
 	pop	r11
 	jmp	fe_mul11
 
-.Lop4:  /* Nmul — MontMul mod n. (INV calls this directly, so can't
- * rely on bc_run's rcx=&cP preload — fe_mul11 clobbers rcx.) */
-	lea	rcx, [r14 + oCN]
+.Lnmul: /* Nmul — MontMul mod n.  bc_run preloads rcx=&cN; fe_mul11
+ * preserves rcx (pop rcx not pop rax) so INV's 384 calls all inherit it. */
 	mov	r11d, 0xBC4F
 	jmp	fe_mul11
 
-.Lop10: /* COPY — dst = s1. */
+.Lcopy:
 	push	K
 	pop	rcx
 	rep	movsq
 	ret
 
-.Lop9:  /* SET1 — dst = {1, 0, ..., 0}. */
+.Lset1:
 	xor	eax, eax
 	push	K
 	pop	rcx
@@ -126,7 +124,7 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	inc	qword ptr [rdi]
 	ret
 
-.Lop2:  /* Fadd — limbwise, no carry. */
+.Lfadd: /* limbwise, no carry */
 	push	K
 	pop	rcx
 1:	lodsq
@@ -136,7 +134,7 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	loop	1b
 	ret
 
-.Lop3:  /* Fsub — limbwise. */
+.Lfsub:
 	push	K
 	pop	rcx
 1:	lodsq
@@ -146,12 +144,12 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	loop	1b
 	ret
 
-.Lop11: /* CHKNZ — bpl |= (s1 == 0). */
+.Lchknz: /* bpl |= (s1 == 0) */
 	call	.Lorall
-	cmc                         /* CF ← zero */
+	cmc
 	jmp	.Ladc
-.Lop6:  /* CHKZ — bpl |= (s1 != 0). */
-	call	.Lorall             /* CF ← nonzero */
+.Lchkz:  /* bpl |= (s1 != 0) */
+	call	.Lorall
 .Ladc:	adc	bpl, 0
 	ret
 .Lorall:
@@ -164,26 +162,21 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	neg	rax                 /* CF = (rax != 0) */
 	ret
 
-.Lop5:  /* CHKLT — bpl |= (s1 >= s2). Both canonical limb form. */
+.Lchklt: /* bpl |= (s1 >= s2). Both canonical. */
 	push	K-1
 	pop	rcx
 1:	mov	rax, [rsi + rcx*8]
 	cmp	rax, [rdx + rcx*8]
-	jb	2f                  /* s1 < s2: pass */
-	ja	3f                  /* s1 > s2: fail */
+	jb	2f
+	ja	3f
 	dec	ecx
 	jns	1b
-	/* all equal: s1 >= s2, fail */
 3:	or	bpl, 1
 2:	ret
 
-/* ── INV — s^(n-2) mod n via Fermat. ──
- * dst pre-seeded with 1_mont_n. s1 = s_mont. n vs n-2 differ only in
- * bits 1-4 (0x51 → 0x4F); bits 0-3 of n-2 are all 1, bit 4 is 0,
- * bits 5+ match n. cN is stored LE so bt indexes bits directly.
- * Placed BEFORE NORM helpers so .Lop7 stays in u8 reach of .Ljt. */
+/* ── INV — s^(n-2) mod n via Fermat. ── */
 
-.Lop7:
+.Linv:
 	push	rbx
 	push	rsi                 /* s_mont */
 	push	rdi                 /* accumulator — pre-seeded with s_mont */
@@ -195,7 +188,7 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	push	rsi
 	pop	rdi
 	pop	rdx
-	call	.Lop4               /* dst = dst² (Nmul) */
+	call	.Lnmul              /* dst = dst² */
 	cmp	ebx, 4
 	jb	.Lmul               /* bits 0-3: n-2 has 1111 */
 	je	.Lnx                /* bit 4: n-2 has 0 */
@@ -207,7 +200,7 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	push	rdi                 /* stack restored */
 	push	rdi
 	pop	rsi
-	call	.Lop4
+	call	.Lnmul
 .Lnx:	dec	ebx
 	jns	.Le
 	pop	rax
@@ -221,8 +214,8 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
  * top-limb-equality trap). r8 holds the modulus (not rcx, which
  * gets clobbered by loop counters). */
 
-.Lop8:  /* NORM — rcx = &cP preloaded by bc_run. */
-	mov	r8, rcx
+.Lnorm:
+	lea	r8, [rcx - SLOT]    /* &cN − SLOT = &cP */
 	push	rsi
 	pop	rdi                 /* in-place on s1 */
 	call	.Lcprop
@@ -366,7 +359,7 @@ fe_mul11:
 	call	.Lcp_shared
 
 	leave
-	pop	rax
+	pop	rcx                 /* restore — INV's 384 calls rely on this */
 	pop	rax
 	pop	r12
 	pop	rbx
@@ -465,7 +458,7 @@ bc_run:
 	and	eax, 0xF
 	movzx	eax, byte ptr [r12 + rax]
 	add	rax, r12
-	lea	rcx, [r14 + oCP]
+	lea	rcx, [r14 + oCN]    /* cN; Fmul/NORM subtract SLOT for cP */
 	call	rax
 	jmp	.Lbc
 
@@ -496,9 +489,8 @@ tv_ecdsa_p256_verify_asm:
 	jne	.Lfail
 	cmp	rcx, 65
 	jne	.Lfail
-	cmp	r9, 32
-	jb	.Lfail
-	cmp	r9, 64
+	sub	r9, 32              /* fold range check: r9 ∈ [32,64] → */
+	cmp	r9, 32              /* [0,32] after sub; both OOB → ja */
 	ja	.Lfail
 	cmp	byte ptr [rdx], 0x04
 	je	.Lok
