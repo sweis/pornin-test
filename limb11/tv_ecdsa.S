@@ -393,8 +393,9 @@ fe_mul11:
 	jmp	bcrun_off           /* rel8 over pt_mul (~90 B) */
 
 pt_mul:
-	/* acc = ∞ = (0:1:0) done by bc_v1's tail (ZERO/SET1/ZERO ops). */
-	lea	r12, [r14 + oU1]
+	/* acc = ∞ = (0:1:0) done by bc_v1's tail (ZERO/SET1/ZERO ops).
+	 * r15 hoists &u1; r12 stays = &.Ljt for bc_run. */
+	lea	r15, [r14 + oU1]
 	push	K-1
 	pop	r13
 .Lpo:	push	W-1
@@ -403,12 +404,12 @@ pt_mul:
 	mov	rsi, r14
 	call	.Lcadd
 	/* u1 bit */
-	bt	[r12 + r13*8], ebx
+	bt	[r15 + r13*8], ebx
 	jnc	1f
 	lea	rsi, [r14 + oBAK]
 	call	.Lcadd
 1:	/* u2 bit — u2 at oU1+SLOT; 88 fits disp8. */
-	bt	[r12 + r13*8 + SLOT], ebx
+	bt	[r15 + r13*8 + SLOT], ebx
 	jnc	2f
 	lea	rsi, [r14 + oBAK + 3*SLOT]
 	call	.Lcadd
@@ -428,11 +429,10 @@ bcrun_off:
 bc_run:
 	push	rbp
 	push	rbx
-	push	r12
 	push	rdi
 	pop	rbx                 /* bytecode ptr */
 	xor	ebp, ebp            /* fail-bit accumulator */
-	lea	r12, [rip + .Ljt]
+	/* r12 = &.Ljt inherited from verify (set once, fe_mul11 preserves). */
 .Lbc:
 	movzx	eax, word ptr [rbx]
 	add	rbx, 2
@@ -461,8 +461,7 @@ bc_run:
 	jmp	.Lbc
 
 .Lbce:	neg	ebp
-	sbb	eax, eax            /* 0 pass, −1 fail — verify pushes it */
-	pop	r12
+	sbb	eax, eax            /* 0 pass, −1 fail */
 	pop	rbx
 	pop	rbp
 	ret
@@ -477,11 +476,12 @@ tv_ecdsa_p256_verify_asm:
 	push	r12
 	push	r13
 	push	r14
+	push	r15
 
-	/* enter before checks → all paths go through leave. Stack is
-	 * 16-aligned: SysV caller rsp was aligned at call, −8 (ret addr)
-	 * −32 (4 pushes) −8 (enter's rbp) = −48, then sub 2112 (÷16). */
-	enter	NSLOTS * SLOT, 0
+	/* enter before checks → all paths go through leave. 5 pushes +
+	 * ret addr + enter's rbp = −56, then 2112 (÷8). 16-align: pad
+	 * frame to 2120 (+8 B stack, 0 B code — enter imm16). */
+	enter	NSLOTS * SLOT + 8, 0
 
 	xor	eax, eax
 	cmp	rsi, 64
@@ -496,6 +496,7 @@ tv_ecdsa_p256_verify_asm:
 	/* .Lfail falls in the middle — all jcc's above reach it rel8. */
 .Lfail:
 	leave
+	pop	r15
 	pop	r14
 	pop	r13
 	pop	r12
@@ -503,6 +504,7 @@ tv_ecdsa_p256_verify_asm:
 	ret
 .Lok:
 	mov	r14, rsp
+	lea	r12, [rip + .Ljt]   /* set once — survives all bc_run calls */
 
 	push	rdi                 /* sig */
 	push	r8                  /* hv  */
