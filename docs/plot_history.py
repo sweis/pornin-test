@@ -137,13 +137,30 @@ TRAIL = [
     (3265, 570, "fast2.S — BEATS fast.S"),
 ]
 
-# Thomas's track: v1–v6.  v6 (955B) is 34B smaller than v5 but slower
-# (4325K vs 4150K) — size-for-speed within his own curve.  Our 947B
-# default at 3608K dominates it on both axes.  Still off the frontier.
+# Thomas's track: v1–v7.  v7 (928B, 5×54 signed limbs) takes the size
+# corner — tiny.S 933 no longer dominates.  v7 is ON the frontier.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
-                (989, 4150), (955, 4325)]
-THOMAS    = (955, 4325)     # v6 — still dominated by 947/3608
-CLAUDE    = (933, 4674)     # 20-run median; size corner
+                (989, 4150), (955, 4325), (928, 4482)]
+THOMAS    = (928, 4482)     # v7 — 5×54, ON the frontier now
+CLAUDE    = (933, 4674)     # 20-run median; WAS size corner
+
+# limb11 (11×24 Montgomery) and limb5 (5×54 Montgomery) tracks —
+# read from progress.csv so they stay current.  Cycles in raw kcyc
+# (this machine; tiny.S ≈ 3500K here vs chart's nominal 3608K, close).
+def read_progress_csv(path):
+    import csv
+    out = []
+    with open(path) as f:
+        for row in csv.reader(f):
+            if not row or row[0].startswith('#') or row[0] == 'commit':
+                continue
+            b, c = int(row[1]), int(row[2])
+            if b > 500 and c > 0:   # skip pre-607 fe_mul-only rows
+                out.append((b, c // 1000))
+    return out
+
+LIMB11_TRACK = read_progress_csv('limb11/progress.csv')
+LIMB5_TRACK  = read_progress_csv('limb5/progress.csv')
 
 def pareto(pts):
     front = []
@@ -154,7 +171,8 @@ def pareto(pts):
     front.sort(key=lambda i: pts[i][0])
     return front
 
-ALL_XY = [(b, c) for b, c, _ in TRAIL] + THOMAS_TRACK
+ALL_XY = ([(b, c) for b, c, _ in TRAIL] + THOMAS_TRACK
+          + LIMB11_TRACK + LIMB5_TRACK)
 FRONT = pareto(ALL_XY)
 
 # ======================================================================
@@ -182,18 +200,48 @@ ax.plot(px, py, '-', color='#c41e3a', linewidth=1.5, zorder=4,
 ax.scatter(px, py, c='#c41e3a', s=20, marker='o',
            edgecolors='none', zorder=5)
 
-# Thomas track.  v5 is his latest; all 5 points dominated.
+# Thomas track.  v7 (928B, 5×54) takes the size corner.
 ttx = [p[0] for p in THOMAS_TRACK]
 tty = [p[1] for p in THOMAS_TRACK]
 ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.2, zorder=4,
-        label='Thomas')
+        label='Thomas (5×54 from v7)')
 ax.scatter(ttx, tty, c='#2e8b57', s=50, marker='o',
            edgecolors='#1a5235', linewidths=0.8, zorder=5)
-ax.annotate(f'Thomas v6 — {THOMAS[0]}B', THOMAS,
+ax.annotate(f'Thomas v7 — {THOMAS[0]}B', THOMAS,
             textcoords="offset points", xytext=(12, 6), fontsize=10,
             fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',
             ec='#2e8b57', lw=1))
+
+# limb11 (11×24 signed-limb Montgomery) — purple.  Slow (loop-heavy)
+# but the trick-catalogue source.  Projective R-cancel at 1219B.
+if LIMB11_TRACK:
+    l11x = [p[0] for p in LIMB11_TRACK]
+    l11y = [p[1] for p in LIMB11_TRACK]
+    ax.plot(l11x, l11y, '-', color='#8a2be2', linewidth=1.2, zorder=4,
+            label='limb11 (11×24)')
+    ax.scatter(l11x, l11y, c='#8a2be2', s=40, marker='^',
+               edgecolors='#5a1b99', linewidths=0.6, zorder=5)
+    tip = LIMB11_TRACK[-1]
+    ax.annotate(f'limb11 — {tip[0]}B', tip,
+                textcoords="offset points", xytext=(10, 8), fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', fc='#e8d5ff',
+                ec='#8a2be2', lw=0.8))
+
+# limb5 (5×54 signed-limb Montgomery) — teal.  Same arch as Thomas.
+# Baseline already ~4× faster than limb11 (K²=25 vs 121 products).
+if LIMB5_TRACK:
+    l5x = [p[0] for p in LIMB5_TRACK]
+    l5y = [p[1] for p in LIMB5_TRACK]
+    ax.plot(l5x, l5y, '-', color='#008b8b', linewidth=1.4, zorder=4,
+            label='limb5 (5×54)')
+    ax.scatter(l5x, l5y, c='#008b8b', s=50, marker='s',
+               edgecolors='#005555', linewidths=0.7, zorder=5)
+    tip = LIMB5_TRACK[-1]
+    ax.annotate(f'limb5 — {tip[0]}B', tip,
+                textcoords="offset points", xytext=(10, -12), fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', fc='#d0f0f0',
+                ec='#008b8b', lw=0.8))
 
 # Size corner — the one annotation that matters.
 ax.scatter([CLAUDE[0]], [CLAUDE[1]], c='#e07000', s=260, marker='*',
@@ -217,8 +265,8 @@ ax.set_axisbelow(True)
 # a wall at the top, and separates the fast.S cluster (650K-1000K)
 # from the bc.S baseline (1850K).  Size stays linear — only 2:1 range.
 ax.set_yscale('log')
-ax.set_xlim(920, 3300)
-ax.set_ylim(500, 10000)
+ax.set_xlim(900, 3300)
+ax.set_ylim(500, 15000)   # limb11 at ~12000K (loop-heavy)
 # Clean up the log axis: major ticks at nice values, no scientific notation.
 from matplotlib.ticker import ScalarFormatter, LogLocator
 ax.yaxis.set_major_locator(LogLocator(base=10, subs=[1, 2, 5]))
