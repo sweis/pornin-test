@@ -158,7 +158,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	jmp	.Ladc
 .Lchkz:  /* bpl |= (s1 != 0) */
 	call	.Lorall
-.Ladc:	adc	ebp, 0              /* 3 B (no REX) — high bytes already 0 */
+.Ladc:	rcl	ebp, 1              /* 2 B — CF into bit 0; stays nonzero if was */
 	ret
 .Lorall:
 	xor	edx, edx
@@ -179,7 +179,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	ja	3f
 	dec	ecx
 	jns	1b
-3:	or	ebp, 1              /* 3 B (no REX) */
+3:	inc	ebp                 /* 2 B — we only test ebp≠0 at end */
 2:	ret
 
 /* ── INV — s^(n-2) mod n via Fermat. ── */
