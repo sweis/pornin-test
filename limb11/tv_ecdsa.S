@@ -533,13 +533,12 @@ tv_ecdsa_p256_verify_asm:
 	shr	eax, 8              /* 0xffff */
 	stosq
 
-	/* Constants (LE). cN → 9, cR2_n → 10 chain; then cGX,cGY → 2,3. */
+	/* Constants (LE). cN,cR2_n,cGX,cGY → 9,10,11,12 — all chain. */
 	lea	rsi, [rip + cN]
 	call	fe_from_le          /* cN → 9 */
 	call	fe_from_le          /* cR2_n → 10 */
-	lea	rdi, [r14 + 2*SLOT]
-	call	fe_from_le          /* cGX → 2 */
-	call	fe_from_le          /* cGY → 3 */
+	call	fe_from_le          /* cGX → 11 */
+	call	fe_from_le          /* cGY → 12 */
 
 	pop	rsi                 /* sig */
 	mov	rdi, r14

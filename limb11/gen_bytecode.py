@@ -125,29 +125,29 @@ V1 = [
     # ── s_mont — consume cR2_n @ 10 before b-derive writes there ──
     ('Nmul',  1,  1, 10),
 
-    # ── b-derive (G @ level 1; b ends @ level 1) ──
-    ('Fmul', 10,  3,  3),
-    ('Fmul',  4,  2,  2),
-    ('Fmul',  4,  4,  2),
+    # ── b-derive (G @ 11,12; b → 10) ──
+    ('Fmul', 10, 12, 12),
+    ('Fmul',  4, 11, 11),
+    ('Fmul',  4,  4, 11),
     ('Fsub', 10, 10,  4),
-    ('Fadd',  4,  2,  2),
-    ('Fadd',  4,  4,  2),
+    ('Fadd',  4, 11, 11),
+    ('Fadd',  4,  4, 11),
     ('Fadd', 10, 10,  4),
 
     # ── On-curve: Y²Z − X³ + 3XZ² − bZ³ ≡ 0, all @ level −2 ──
-    # Q @ 0, b @ 1. Plain Z=1 in slot 15 (RCB-safe — survives pt_mul
-    # for bc_v3's X·1). Z-mults are degree-balancers.
-    ('SET1', 15,  0,  0),  # Z = 1 (plain)
+    # Q @ 0, b @ 1. Z=1 @ slot 15 (RCB-safe, survives for bc_v3's X·1).
+    # Slot 2 free now (G moved to 11,12) — use as 3Qx temp.
+    ('SET1', 15,  0,  0),  # Z = 1
     ('Fmul',  4,  6,  6),  # Qy²  @ −1
     ('Fmul',  4,  4, 15),  # Qy²·Z  @ −2
     ('Fmul', 13,  5,  5),  # Qx²  @ −1
     ('Fmul', 13, 13,  5),  # Qx³  @ −2
     ('Fsub',  4,  4, 13),
     ('Fmul', 13, 15, 15),  # Z²  @ −1
-    ('Fadd', 11,  5,  5),  # 2Qx  @ 0
-    ('Fadd', 11, 11,  5),  # 3Qx  @ 0
-    ('Fmul', 11, 11, 13),  # 3Qx·Z²  @ −2
-    ('Fadd',  4,  4, 11),
+    ('Fadd',  2,  5,  5),  # 2Qx  @ 0
+    ('Fadd',  2,  2,  5),  # 3Qx  @ 0
+    ('Fmul',  2,  2, 13),  # 3Qx·Z²  @ −2
+    ('Fadd',  4,  4,  2),
     ('Fmul', 13, 13, 15),  # Z³  @ −2
     ('Fmul', 13, 10, 13),  # b·Z³  @ −2
     ('Fsub',  4,  4, 13),
@@ -163,10 +163,10 @@ V1 = [
     ('Nmul',  1,  0, 13),  # u2 → 1
     ('Nmul',  0,  7, 13),  # u1 → 0 (e @ 7 dead)
 
-    # ── G-scale: backup = (Gx², Gx·Gy, Gx_mont) — all level 1 ──
-    ('COPY',  4,  2,  0),  # Gx_mont → 4 (Z_G)
-    ('Fmul',  2,  2,  2),  # Gx² → 2
-    ('Fmul',  3,  4,  3),  # Gx·Gy → 3
+    # ── G-scale: backup = (Gx², Gx·Gy, Gx_mont) — all level 1. G @ 11,12. ──
+    ('COPY',  4, 11,  0),  # Gx_mont → 4 (Z_G)
+    ('Fmul',  2, 11, 11),  # Gx² → 2
+    ('Fmul',  3, 11, 12),  # Gx·Gy → 3
 
     # ── Z_Q = plain 1 (reuse on-curve's Z @ 15) ──
     ('COPY',  7, 15,  0),
@@ -270,8 +270,8 @@ if __name__ == '__main__':
           file=sys.stderr)
 
     # V1 slot lifetime
-    v1_init = {0:'r', 1:'s', 2:'Gx', 3:'Gy', 5:'Qx', 6:'Qy', 7:'e',
-               8:'cP', 9:'cN', 10:'cR2n'}
+    v1_init = {0:'r', 1:'s', 5:'Qx', 6:'Qy', 7:'e',
+               8:'cP', 9:'cN', 10:'cR2n', 11:'Gx', 12:'Gy'}
     v1_survive = {8:'cP', 9:'cN'}
     errs, out = simulate('v1', V1, v1_init, v1_survive)
     if errs:
