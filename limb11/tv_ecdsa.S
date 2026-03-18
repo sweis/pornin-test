@@ -188,9 +188,9 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 .Lop7:
 	push	rbx
 	push	rsi                 /* s_mont */
-	push	rdi                 /* working accumulator (dst) */
+	push	rdi                 /* accumulator — pre-seeded with s_mont */
 	xor	ebx, ebx
-	dec	bl                  /* ebx = 255 */
+	mov	bl, 254             /* bit 255 is implicit (seed = s_mont) */
 .Le:	mov	rsi, [rsp]
 	push	rsi
 	push	rsi
@@ -532,10 +532,16 @@ tv_ecdsa_p256_verify_asm:
 
 	push	rdi                 /* sig */
 	push	r8                  /* hv  */
-	push	rdx                 /* pub */
 
-	/* Build cP → slot 8.  11 stosq's leave rdi at slot 9 = cN's dest. */
-	lea	rdi, [r14 + oCP]
+	/* User inputs (BE). Qx,Qy,e chain 5,6,7 → rdi ends at slot 8. */
+	lea	rsi, [rdx + 1]      /* pub+1 (skip 0x04) */
+	lea	rdi, [r14 + 5*SLOT]
+	call	fe_from_be          /* Qx → 5 */
+	call	fe_from_be          /* Qy → 6 */
+	pop	rsi                 /* hv */
+	call	fe_from_be          /* e  → 7   rdi now at slot 8 */
+
+	/* cP → slot 8 — rdi inherited. Leaves rdi at slot 9. */
 	mov	eax, MASK
 	stosq
 	stosq
@@ -553,28 +559,20 @@ tv_ecdsa_p256_verify_asm:
 	shr	eax, 8              /* 0xffff */
 	stosq
 
-	/* Constants (LE). rodata order matches rdi-chain opportunities. */
+	/* Constants (LE). rodata order chains rdi: 9 → 2,3 → 14,15. */
 	lea	rsi, [rip + cN]
-	call	fe_from_le          /* cN → 9         (rdi inherited) */
+	call	fe_from_le          /* cN → 9 */
 	lea	rdi, [r14 + 2*SLOT]
 	call	fe_from_le          /* cGX → 2 */
-	call	fe_from_le          /* cGY → 3  chain */
+	call	fe_from_le          /* cGY → 3 */
 	lea	rdi, [r14 + 14*SLOT]
 	call	fe_from_le          /* cR2_n → 14 */
-	call	fe_from_le          /* cR2_p → 15  chain */
+	call	fe_from_le          /* cR2_p → 15 */
 
-	/* User inputs (BE). pub → Qx,Qy,e chain to slots 5,6,7. */
-	pop	rsi                 /* pub */
-	inc	rsi
-	lea	rdi, [r14 + 5*SLOT]
-	call	fe_from_be          /* Qx → 5 */
-	call	fe_from_be          /* Qy → 6   chain (rsi+32, rdi+88) */
-	pop	rsi                 /* hv */
-	call	fe_from_be          /* e  → 7   rdi chained */
 	pop	rsi                 /* sig */
 	lea	rdi, [r14 + 11*SLOT]
-	call	fe_from_be          /* r  → 11 */
-	call	fe_from_be          /* s  → 12  chain */
+	call	fe_from_be          /* r → 11 */
+	call	fe_from_be          /* s → 12 */
 
 	/* ── bc_v1 ── */
 	push	obc_v1

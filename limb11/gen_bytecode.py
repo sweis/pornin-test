@@ -144,11 +144,11 @@ V1 = [
     ('CHKZ',  0,  4,  0),
 
     # ── 5. w = s⁻¹ mod n  (Montgomery-n; only s needs conversion) ──
-    ('Nmul', 12, 12, 14),  # s_mont = MontMul_n(s, R²_n)
-    ('SET1',  1,  0,  0),
-    ('Nmul',  1,  1, 14),  # 1_mont_n = R_n  (cR2_n @ 14 dead — 3 ops
-                           # before r_mont writes 14, no conflict)
-    ('INV',   1, 12,  0),  # w_mont → 1  (s_mont @ 12 dead)
+    # INV loops from bit 254, seeded with dst = s_mont (bit 255 of n-2
+    # is always 1, so iter 255 with 1_mont seed just gives s_mont — skip it).
+    ('Nmul', 12, 12, 14),  # s_mont  (cR2_n @ 14 dead after this)
+    ('COPY',  1, 12,  0),  # seed dst = s_mont
+    ('INV',   1, 12,  0),  # w_mont → 1
 
     # ── 6. u1 = e·w, u2 = r·w  (MontMul(plain, mont) = plain) ──
     # e, r stay plain. Sequencing: u1→temp, r_mont, u2, then u1→final
