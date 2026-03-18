@@ -115,12 +115,12 @@ for op, d, s1, s2 in RCB:
 
 V1 = [
     # ── 1. Range checks (decoded inputs are canonical from fe_from_be) ──
+    # r≠0, s≠0 omitted: s=0 → w=0 → u=0 → ∞ → Z-check fires.
+    # r=0 → r_mont=0 → d1=X, final CHKZ catches it. Wycheproof confirms.
     ('CHKLT', 0, 11, 9),  # r < n
     ('CHKLT', 0, 12, 9),  # s < n
     ('CHKLT', 0,  5, 8),  # Qx < p
     ('CHKLT', 0,  6, 8),  # Qy < p
-    ('CHKNZ', 0, 11, 0),  # r != 0
-    ('CHKNZ', 0, 12, 0),  # s != 0
 
     # ── 2. b = Gy² − Gx³ + 3Gx  (all Montgomery; Gx,Gy read-only) ──
     ('Fmul', 10,  3,  3),

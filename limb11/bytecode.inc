@@ -66,8 +66,6 @@ bc_v1:
 	.byte	0x94, 0x0c  /* CHKLT   0 ← 12,  9 */
 	.byte	0x84, 0x05  /* CHKLT   0 ←  5,  8 */
 	.byte	0x84, 0x06  /* CHKLT   0 ←  6,  8 */
-	.byte	0x0a, 0x0b  /* CHKNZ   0 ← 11,  0 */
-	.byte	0x0a, 0x0c  /* CHKNZ   0 ← 12,  0 */
 	.byte	0x30, 0xa3  /* Fmul   10 ←  3,  3 */
 	.byte	0x20, 0x42  /* Fmul    4 ←  2,  2 */
 	.byte	0x20, 0x44  /* Fmul    4 ←  4,  2 */
@@ -106,7 +104,7 @@ bc_v1:
 	.byte	0x0b, 0x6b  /* COPYHI  6 ← 11,  0 */
 	.byte	0x0b, 0x7c  /* COPYHI  7 ← 12,  0 */
 	.byte	0x00  /* END */
-	/* 87 B */
+	/* 83 B */
 
 	.equ	obc_rcb, 0
 	.equ	obc_v3,  87
