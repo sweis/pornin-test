@@ -61,20 +61,19 @@
 
 .include "bytecode.inc"
 
-/* Constants — 32 LE bytes each (4 quads, low-qword-first = natural LE).
- * Order chosen for rdi chaining: cP-build ends at slot 9 → cN decodes
- * there; cGX/cGY → 2,3 chain; cR2N/cR2 → 14,15 chain (cR2_n @ 14 is
- * consumed before r_mont writes 14). */
+/* Constants — 32 LE bytes each. rodata order: cN,cR2N,cR2,cGX,cGY
+ * so cP-build → cN(9) → cR2N(10) → cR2_p(11) all chain, then one
+ * lea for cGX/cGY → 2,3. r,s decode to 0,1 via mov rdi,r14 (3 B). */
 cN:	.quad	0xf3b9cac2fc632551, 0xbce6faada7179e84
 	.quad	0xffffffffffffffff, 0xffffffff00000000
-cGX:	.quad	0xe730d418a9143c18, 0xba95fc47edb60179
-	.quad	0xfb732b7762251075, 0x905f76bd3755c661
-cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
-	.quad	0xe88688dd21f3258b, 0x71ff18aa885d854d
 cR2N:	.quad	0x0f80d88a9a9fedcf, 0x6ab8c68a2abb372e
 	.quad	0xb2392b6bec596190, 0x2d955aba561fc164
 cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	.quad	0xfffffffffffeffff, 0x0004fffffffdffff
+cGX:	.quad	0xe730d418a9143c18, 0xba95fc47edb60179
+	.quad	0xfb732b7762251075, 0x905f76bd3755c661
+cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
+	.quad	0xe88688dd21f3258b, 0x71ff18aa885d854d
 
 /* ======================================================================
  * TEXT
@@ -534,20 +533,19 @@ tv_ecdsa_p256_verify_asm:
 	shr	eax, 8              /* 0xffff */
 	stosq
 
-	/* Constants (LE). rodata order chains rdi: 9 → 2,3 → 14,15. */
+	/* Constants (LE). 9 → 10 → 11 chain, then 2 → 3. */
 	lea	rsi, [rip + cN]
 	call	fe_from_le          /* cN → 9 */
+	call	fe_from_le          /* cR2_n → 10 */
+	call	fe_from_le          /* cR2_p → 11 */
 	lea	rdi, [r14 + 2*SLOT]
 	call	fe_from_le          /* cGX → 2 */
 	call	fe_from_le          /* cGY → 3 */
-	lea	rdi, [r14 + 14*SLOT]
-	call	fe_from_le          /* cR2_n → 14 */
-	call	fe_from_le          /* cR2_p → 15 */
 
 	pop	rsi                 /* sig */
-	lea	rdi, [r14 + 11*SLOT]
-	call	fe_from_be          /* r → 11 */
-	call	fe_from_be          /* s → 12 */
+	mov	rdi, r14
+	call	fe_from_be          /* r → 0 */
+	call	fe_from_be          /* s → 1 */
 
 	/* ── bc_v1 ── */
 	push	obc_v1

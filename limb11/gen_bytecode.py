@@ -30,7 +30,7 @@ OPS = {'Fmul':0, 'Fadd':1, 'Fsub':2, 'Nmul':3,
        'CHKLT':4, 'CHKZ':5, 'INV':6, 'NORM':7,
        'SET1':8, 'COPY':9, 'CHKNZ':10, 'COPYHI':11}
 
-def MULR2(dst, s1): return ('Fmul', dst, s1, 15)
+def MULR2(dst, s1): return ('Fmul', dst, s1, 11)  # cR2_p @ slot 11
 
 def emit(stream_name, ops, reserved_write=frozenset()):
     print(f"{stream_name}:")
@@ -95,94 +95,82 @@ for op, d, s1, s2 in RCB:
 # bc_v1: validation + setup. Runs before pt_mul.
 # ──────────────────────────────────────────────────────────────────────
 # Entry (native verify decodes these):
+#   slot  0,1  = r, s (plain) — via mov rdi,r14 (3 B)
 #   slot  2,3  = Gx_mont, Gy_mont
-#   slot  5,6  = Qx, Qy (plain, from pub)
-#   slot  7    = e (hash, plain) — chains rdi after Qy
-#   slot  8,9  = cP, cN (limb form)
-#   slot 11,12 = r, s (plain, from sig)
-#   slot 14    = cR2_n (chains with cR2_p; dead before r_mont writes 14)
-#   slot 15    = cR2_p
+#   slot  5,6  = Qx, Qy plain
+#   slot  7    = e
+#   slot  8,9  = cP, cN
+#   slot 10    = cR2_n (chains after cN; consumed before b-derive)
+#   slot 11    = cR2_p (chains after cR2_n; consumed by all MULR2's)
 #
-# Exit:
-#   slot 2,3,4 = Gx_mont, Gy_mont, 1_mont_p (→ 16-18 Shamir G backup)
-#   slot 5,6,7 = Qx_mont, Qy_mont, 1_mont_p (→ 19-21 Shamir Q backup)
-#   slot 10    = b_mont (survives all RCB)
-#   slot 11,12 = u1, u2 normalized (→ 22,23 by one contiguous movsq)
-#   slot 14    = r_mont (survives RCB, bc_v3 reads)
-#   slot 15    = n_mont (survives RCB, bc_v3 reads)
-#
-# Free during bc_v1: 0, 1, 4, 7 (and 13 once cR2_n consumed).
+# Exit (for pt_mul):
+#   slot  2-7  stage Gx,Gy,Z,Qx,Qy,Z — COPYHI'd to 16-21
+#   slot 10    = b_mont (RCB-safe)
+#   slot 14    = r_mont (RCB-safe)
+#   slot 15    = n_mont (RCB-safe)
+#   slots 0,12 hold u1,u2 — COPYHI'd to 22,23
 
 V1 = [
-    # ── 1. Range checks (decoded inputs are canonical from fe_from_be) ──
-    # r≠0, s≠0 omitted: s=0 → w=0 → u=0 → ∞ → Z-check fires.
-    # r=0 → r_mont=0 → d1=X, final CHKZ catches it. Wycheproof confirms.
-    ('CHKLT', 0, 11, 9),  # r < n
-    ('CHKLT', 0, 12, 9),  # s < n
+    # ── Range checks ──
+    ('CHKLT', 0,  0, 9),  # r < n
+    ('CHKLT', 0,  1, 9),  # s < n
     ('CHKLT', 0,  5, 8),  # Qx < p
     ('CHKLT', 0,  6, 8),  # Qy < p
 
-    # ── 2. b = Gy² − Gx³ + 3Gx  (all Montgomery; Gx,Gy read-only) ──
+    # ── s_mont FIRST — consumes cR2_n @ 10 so b-derive can write there ──
+    ('Nmul',  1,  1, 10),  # s_mont → 1 (cR2_n @ 10 dead)
+
+    # ── b-derive — writes slot 10 ──
     ('Fmul', 10,  3,  3),
     ('Fmul',  4,  2,  2),
     ('Fmul',  4,  4,  2),
     ('Fsub', 10, 10,  4),
     ('Fadd',  4,  2,  2),
     ('Fadd',  4,  4,  2),
-    ('Fadd', 10, 10,  4),  # b_mont → 10
+    ('Fadd', 10, 10,  4),
 
-    # ── 3. Qx, Qy → Montgomery-p ──
+    # ── Qx, Qy → Montgomery-p (cR2_p @ 11) ──
     MULR2(5, 5),
     MULR2(6, 6),
 
-    # ── 4. On-curve: Qy² − Qx³ + 3Qx − b ≡ 0 ──
+    # ── On-curve check ──
     ('Fmul',  4,  6,  6),
-    ('Fmul',  1,  5,  5),
-    ('Fmul',  1,  1,  5),
-    ('Fsub',  4,  4,  1),
-    ('Fadd',  1,  5,  5),
-    ('Fadd',  1,  1,  5),
-    ('Fadd',  4,  4,  1),
+    ('Fmul', 13,  5,  5),
+    ('Fmul', 13, 13,  5),
+    ('Fsub',  4,  4, 13),
+    ('Fadd', 13,  5,  5),
+    ('Fadd', 13, 13,  5),
+    ('Fadd',  4,  4, 13),
     ('Fsub',  4,  4, 10),
     ('NORM',  4,  4,  0),
     ('CHKZ',  0,  4,  0),
 
-    # ── 5. w = s⁻¹ mod n  (Montgomery-n; only s needs conversion) ──
-    # INV loops from bit 254, seeded with dst = s_mont (bit 255 of n-2
-    # is always 1, so iter 255 with 1_mont seed just gives s_mont — skip it).
-    ('Nmul', 12, 12, 14),  # s_mont  (cR2_n @ 14 dead after this)
-    ('COPY',  1, 12,  0),  # seed dst = s_mont
-    ('INV',   1, 12,  0),  # w_mont → 1
+    # ── INV  (s_mont @ 1) ──
+    ('COPY', 13,  1,  0),
+    ('INV',  13,  1,  0),  # w_mont → 13
 
-    # ── 6. u1 = e·w, u2 = r·w  (MontMul(plain, mont) = plain) ──
-    # r_mont first (reads r@11). Then u2 (reads r, w — both still live
-    # after this since Nmul writes to 12). Then u1 → 11 overwrites r.
-    # u1,u2 ≥ 0 always: the mod-n chain (e,r,s decoded canonical;
-    # cR2_n canonical; MontMul(nonneg,nonneg)=nonneg). And pt_mul
-    # computes (k mod n)·G for any k ≥ 0 in 264 bits. No NORMN.
-    MULR2(14, 11),         # r_mont → 14
-    ('Nmul', 12, 11,  1),  # u2 → 12 (r,w still live — Nmul reads only)
-    ('Nmul', 11,  7,  1),  # u1 → 11 (r overwritten; e,w dead)
+    # ── u1, u2, r_mont  (e @ 7, r @ 0, w @ 13) ──
+    MULR2(14, 0),          # r_mont → 14 (reads r @ 0, cR2_p @ 11)
+    ('Nmul', 12,  0, 13),  # u2 → 12 (r,w still live — reads only)
+    ('Nmul',  0,  7, 13),  # u1 → 0  (r overwritten; e,w dead)
 
-    # ── 7. Z = 1_mont_p for slots 4, 7  (must run BEFORE step 8) ──
-    # Per HANDOFF Z-test: real-point Z must be 1_mont, not plain 1.
+    # ── 1_mont_p for Z ──
     ('SET1',  7,  0,  0),
     MULR2(7, 7),
     ('COPY',  4,  7,  0),
 
-    # ── 8. n_mont = MontMul_p(n, R²_p).  Reads & writes 15; safe
-    # because fe_mul11 copies inputs to its stack acc first. ──
+    # ── n_mont (LAST read of cR2_p @ 11) ──
     MULR2(15, 9),
 
-    # ── 9. Shamir backup — dst nibble means slot(dst+16). ──
-    ('COPYHI', 0,  2, 0),  # Gx → 16
-    ('COPYHI', 1,  3, 0),  # Gy → 17
-    ('COPYHI', 2,  4, 0),  # Z_G → 18
-    ('COPYHI', 3,  5, 0),  # Qx → 19
-    ('COPYHI', 4,  6, 0),  # Qy → 20
-    ('COPYHI', 5,  7, 0),  # Z_Q → 21
-    ('COPYHI', 6, 11, 0),  # u1 → 22
-    ('COPYHI', 7, 12, 0),  # u2 → 23
+    # ── Shamir backup via COPYHI ──
+    ('COPYHI', 0,  2, 0),
+    ('COPYHI', 1,  3, 0),
+    ('COPYHI', 2,  4, 0),
+    ('COPYHI', 3,  5, 0),
+    ('COPYHI', 4,  6, 0),
+    ('COPYHI', 5,  7, 0),
+    ('COPYHI', 6,  0, 0),  # u1 @ 0 → 22
+    ('COPYHI', 7, 12, 0),  # u2 @ 12 → 23
 ]
 
 
@@ -269,8 +257,8 @@ if __name__ == '__main__':
           file=sys.stderr)
 
     # V1 slot lifetime
-    v1_init = {2:'Gx', 3:'Gy', 5:'Qx', 6:'Qy', 7:'e', 8:'cP', 9:'cN',
-               11:'r', 12:'s', 14:'cR2n', 15:'cR2p'}
+    v1_init = {0:'r', 1:'s', 2:'Gx', 3:'Gy', 5:'Qx', 6:'Qy', 7:'e',
+               8:'cP', 9:'cN', 10:'cR2n', 11:'cR2p'}
     v1_survive = {2:'Gx', 3:'Gy', 8:'cP', 9:'cN'}
     errs, out = simulate('v1', V1, v1_init, v1_survive)
     if errs:
