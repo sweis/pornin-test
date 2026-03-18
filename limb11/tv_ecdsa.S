@@ -192,8 +192,10 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	xor	ebx, ebx
 	dec	bl                  /* ebx = 255 */
 .Le:	mov	rsi, [rsp]
-	mov	rdi, rsi
-	mov	rdx, rsi
+	push	rsi
+	push	rsi
+	pop	rdi
+	pop	rdx
 	call	.Lop4               /* dst = dst² (Nmul) */
 	cmp	ebx, 4
 	jb	.Lmul               /* bits 0-3: n-2 has 1111 */
@@ -201,7 +203,8 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	bt	dword ptr [rip + cN], ebx
 	jnc	.Lnx
 .Lmul:	mov	rdi, [rsp]
-	mov	rsi, rdi
+	push	rdi
+	pop	rsi
 	mov	rdx, [rsp + 8]
 	call	.Lop4
 .Lnx:	dec	ebx
@@ -237,20 +240,30 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	jge	2b
 	/* fall into .Laddm for the final add; its tail ret returns. */
 
-.Laddm:	/* [rdi] += [r8] limbwise, then carry-prop. */
+.Laddm:	/* [rdi] += [r8], carry-prop.  xor/sub r9 is a no-op when r9=0,
+	 * two's-complement negate when r9=−1 — shared body for add/sub. */
+	xor	r9d, r9d
+	/* falls through */
+.Lasmod:
 	push	rdi
 	mov	rsi, r8
 	push	K
 	pop	rcx
 1:	lodsq
+	xor	rax, r9
+	sub	rax, r9
 	add	[rdi], rax
 	scasq
 	loop	1b
 	pop	rdi
 	/* falls through */
-.Lcprop:
+.Lcprop:	/* in-place wrapper — fe_mul11 calls .Lcp_shared directly. */
 	push	rdi
 	mov	rsi, rdi
+	call	.Lcp_shared
+	pop	rdi
+	ret
+.Lcp_shared:	/* out-of-place carry-prop rsi → rdi. */
 	xor	edx, edx
 	push	K-1
 	pop	rcx
@@ -261,21 +274,15 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	stosq
 	sar	rdx, W
 	loop	1b
-	add	[rdi], rdx
-	pop	rdi
+	lodsq
+	add	rax, rdx
+	stosq
 	ret
 
 .Lsubm:
-	push	rdi
-	mov	rsi, r8
-	push	K
-	pop	rcx
-1:	lodsq
-	sub	[rdi], rax
-	scasq
-	loop	1b
-	pop	rdi
-	jmp	.Lcprop
+	push	-1
+	pop	r9
+	jmp	.Lasmod
 
 /* ── Decoders ── */
 
@@ -362,18 +369,7 @@ fe_mul11:
 	loop	.Lro
 
 	mov	rdi, [rbp + 24]
-	mov	cl, K-1             /* rcx = 0 from loop exit */
-	xor	edx, edx
-.Lcp:	lodsq
-	add	rax, rdx
-	mov	rdx, rax
-	and	eax, MASK
-	stosq
-	sar	rdx, W
-	loop	.Lcp
-	lodsq
-	add	rax, rdx
-	stosq
+	call	.Lcp_shared
 
 	leave
 	pop	rax
