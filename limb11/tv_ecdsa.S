@@ -533,7 +533,8 @@ tv_ecdsa_p256_verify_asm:
 	shr	eax, 8              /* 0xffff */
 	stosq
 
-	/* Constants (LE). cN,cR2_n,cGX,cGY → 9,10,11,12 — all chain. */
+	/* Constants (LE). cN,cR2_n,cGX,cGY → 9,10,11,12 — all chain.
+	 * Then r,s → 13,14 chain too. ZERO lea's after the Qx start. */
 	lea	rsi, [rip + cN]
 	call	fe_from_le          /* cN → 9 */
 	call	fe_from_le          /* cR2_n → 10 */
@@ -541,9 +542,8 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_from_le          /* cGY → 12 */
 
 	pop	rsi                 /* sig */
-	mov	rdi, r14
-	call	fe_from_be          /* r → 0 */
-	call	fe_from_be          /* s → 1 */
+	call	fe_from_be          /* r → 13 */
+	call	fe_from_be          /* s → 14 */
 
 	/* ── bc_v1 ── */
 	push	obc_v1

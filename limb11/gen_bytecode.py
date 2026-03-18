@@ -116,14 +116,17 @@ for op, d, s1, s2 in RCB:
 # X,Y,Z always same level. Final check: X·1 vs r·Z both at L−1.
 
 V1 = [
+    # Entry: r@13, s@14, Qx@5, Qy@6, e@7, cP@8, cN@9, cR2_n@10, Gx@11, Gy@12.
+    # Free: 0,1,2,3,4. Temps: 2,3 (on-curve). INV dst: 3.
+
     # ── Range checks ──
-    ('CHKLT', 0,  0, 9),  # r < n
-    ('CHKLT', 0,  1, 9),  # s < n
+    ('CHKLT', 0, 13, 9),  # r < n
+    ('CHKLT', 0, 14, 9),  # s < n
     ('CHKLT', 0,  5, 8),  # Qx < p
     ('CHKLT', 0,  6, 8),  # Qy < p
 
-    # ── s_mont — consume cR2_n @ 10 before b-derive writes there ──
-    ('Nmul',  1,  1, 10),
+    # ── s_mont → 14 (overwrite s); consumes cR2_n @ 10 ──
+    ('Nmul', 14, 14, 10),
 
     # ── b-derive (G @ 11,12; b → 10) ──
     ('Fmul', 10, 12, 12),
@@ -135,40 +138,39 @@ V1 = [
     ('Fadd', 10, 10,  4),
 
     # ── On-curve: Y²Z − X³ + 3XZ² − bZ³ ≡ 0, all @ level −2 ──
-    # Q @ 0, b @ 1. Z=1 @ slot 15 (RCB-safe, survives for bc_v3's X·1).
-    # Slot 2 free now (G moved to 11,12) — use as 3Qx temp.
+    # Z=1 @ 15 (RCB-safe, survives for bc_v3's X·1). Temps: 2,3.
     ('SET1', 15,  0,  0),  # Z = 1
     ('Fmul',  4,  6,  6),  # Qy²  @ −1
     ('Fmul',  4,  4, 15),  # Qy²·Z  @ −2
-    ('Fmul', 13,  5,  5),  # Qx²  @ −1
-    ('Fmul', 13, 13,  5),  # Qx³  @ −2
-    ('Fsub',  4,  4, 13),
-    ('Fmul', 13, 15, 15),  # Z²  @ −1
+    ('Fmul',  3,  5,  5),  # Qx²  @ −1
+    ('Fmul',  3,  3,  5),  # Qx³  @ −2
+    ('Fsub',  4,  4,  3),
+    ('Fmul',  3, 15, 15),  # Z²  @ −1
     ('Fadd',  2,  5,  5),  # 2Qx  @ 0
     ('Fadd',  2,  2,  5),  # 3Qx  @ 0
-    ('Fmul',  2,  2, 13),  # 3Qx·Z²  @ −2
+    ('Fmul',  2,  2,  3),  # 3Qx·Z²  @ −2
     ('Fadd',  4,  4,  2),
-    ('Fmul', 13, 13, 15),  # Z³  @ −2
-    ('Fmul', 13, 10, 13),  # b·Z³  @ −2
-    ('Fsub',  4,  4, 13),
+    ('Fmul',  3,  3, 15),  # Z³  @ −2
+    ('Fmul',  3, 10,  3),  # b·Z³  @ −2
+    ('Fsub',  4,  4,  3),
     ('NORM',  4,  4,  0),
     ('CHKZ',  0,  4,  0),
 
-    # ── INV ──
-    ('COPY', 13,  1,  0),
-    ('INV',  13,  1,  0),  # w_mont → 13
+    # ── INV (s_mont @ 14; w_mont → 3) ──
+    ('COPY',  3, 14,  0),
+    ('INV',   3, 14,  0),
 
-    # ── u1, u2, r_plain ──
-    ('COPY', 14,  0,  0),  # r_plain → 14 (RCB-safe; bc_v3 reads it)
-    ('Nmul',  1,  0, 13),  # u2 → 1
-    ('Nmul',  0,  7, 13),  # u1 → 0 (e @ 7 dead)
+    # ── r_plain → 14 (overwrite s_mont, dead); u1,u2 → 0,1 ──
+    ('COPY', 14, 13,  0),  # r_plain → 14 (RCB-safe)
+    ('Nmul',  1, 13,  3),  # u2 = r·w → 1
+    ('Nmul',  0,  7,  3),  # u1 = e·w → 0 (e,w dead; r@13 dead after u2 read)
 
-    # ── G-scale: backup = (Gx², Gx·Gy, Gx_mont) — all level 1. G @ 11,12. ──
+    # ── G-scale: (Gx², Gx·Gy, Gx_mont) → 2,3,4 ──
     ('COPY',  4, 11,  0),  # Gx_mont → 4 (Z_G)
     ('Fmul',  2, 11, 11),  # Gx² → 2
     ('Fmul',  3, 11, 12),  # Gx·Gy → 3
 
-    # ── Z_Q = plain 1 (reuse on-curve's Z @ 15) ──
+    # ── Z_Q = plain 1 ──
     ('COPY',  7, 15,  0),
 
     # ── Shamir backup ──
@@ -270,8 +272,8 @@ if __name__ == '__main__':
           file=sys.stderr)
 
     # V1 slot lifetime
-    v1_init = {0:'r', 1:'s', 5:'Qx', 6:'Qy', 7:'e',
-               8:'cP', 9:'cN', 10:'cR2n', 11:'Gx', 12:'Gy'}
+    v1_init = {5:'Qx', 6:'Qy', 7:'e', 8:'cP', 9:'cN',
+               10:'cR2n', 11:'Gx', 12:'Gy', 13:'r', 14:'s'}
     v1_survive = {8:'cP', 9:'cN'}
     errs, out = simulate('v1', V1, v1_init, v1_survive)
     if errs:
