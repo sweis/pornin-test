@@ -339,37 +339,35 @@ fe_mul11:
 
 	lea	r8, [rsi + K*8]
 
+	/* CIOS: for each row i, do schoolbook row + Montgomery reduce
+	 * row in one pass.  Same math as two-phase; one outer loop. */
 	push	-K*8
 	pop	r9
-.Lso:	mov	rbx, [r8 + r9]
-	lea	rdi, [rbp + r9 - 2*K*8 + K*8]
-	mov	rsi, r12
+.Lcios:	mov	rbx, [r8 + r9]              /* a[i] */
+	lea	rdi, [rbp + r9 - K*8]       /* &acc[i] */
+	push	rdi
+	mov	rsi, r12                    /* b */
 	call	.Lcnt
-	add	r9, 8
-	jnz	.Lso
 
-	push	rsp
-	pop	rsi
-	mov	r8, [rbp + 8]
-	mov	cl, K               /* rcx was 0 from rep stosq */
-.Lro:	push	rsi
 	pop	rdi
-	lodsq
+	mov	eax, [rdi]                  /* acc[i] low32 — enough for q */
 	imul	eax, r11d
 	and	eax, MASK
 	push	rax
-	pop	rbx
-	push	rcx
-	push	rsi
-	mov	rsi, r8
+	pop	rbx                         /* q */
+	push	rdi
+	mov	rsi, [rbp + 8]              /* m */
 	call	.Lcnt
-	pop	rsi
-	pop	rcx
-	mov	rax, [rsi - 8]
-	sar	rax, W
-	add	[rsi], rax
-	loop	.Lro
 
+	pop	rdi
+	mov	rax, [rdi]                  /* acc[i] ≡ 0 mod 2^W now */
+	sar	rax, W
+	add	[rdi + 8], rax
+
+	add	r9, 8
+	jnz	.Lcios
+
+	lea	rsi, [rdi + 8]              /* &acc[K] — rdi ended at &acc[K-1] */
 	mov	rdi, [rbp + 16]
 	call	.Lcp_shared
 
