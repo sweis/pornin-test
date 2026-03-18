@@ -220,14 +220,14 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	pop	rdi                 /* in-place on s1 */
 	call	.Lcprop
 	/* While top < 0: add m, re-carry. */
-1:	cmp	qword ptr [rdi + (K-1)*8], 0
-	jge	2f
+1:	test	byte ptr [rdi + K*8 - 1], 0x80
+	jz	2f
 	call	.Laddm
 	jmp	1b
 	/* Subtract m until negative, then add m once. */
 2:	call	.Lsubm
-	cmp	qword ptr [rdi + (K-1)*8], 0
-	jge	2b
+	test	byte ptr [rdi + K*8 - 1], 0x80
+	jz	2b
 	/* fall into .Laddm for the final add; its tail ret returns. */
 
 .Laddm:	/* [rdi] += [r8], carry-prop.  xor/sub r9 is a no-op when r9=0,
