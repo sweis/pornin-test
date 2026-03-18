@@ -24,9 +24,13 @@ Ops:
 
 import sys
 
+# MULR2 was op 8, but it's just Fmul with s2=15 — bc_run already
+# computes rdx=r14+s2*SLOT. The handler's lea was a no-op. Dropped.
 OPS = {'Fmul':0, 'SQR':1, 'Fadd':2, 'Fsub':3, 'Nmul':4,
-       'CHKLT':5, 'CHKZ':6, 'INV':7, 'MULR2':8, 'NORM':9,
-       'SET1':10, 'COPY':11, 'CHKNZ':12}
+       'CHKLT':5, 'CHKZ':6, 'INV':7, 'NORM':8,
+       'SET1':9, 'COPY':10, 'CHKNZ':11}
+
+def MULR2(dst, s1): return ('Fmul', dst, s1, 15)
 
 def emit(stream_name, ops, reserved_write=frozenset()):
     print(f"{stream_name}:")
@@ -128,8 +132,8 @@ V1 = [
     ('Fadd', 10, 10,  4),  # b_mont → 10
 
     # ── 3. Qx, Qy → Montgomery-p ──
-    ('MULR2', 5,  5, 15),
-    ('MULR2', 6,  6, 15),
+    MULR2(5, 5),
+    MULR2(6, 6),
 
     # ── 4. On-curve: Qy² − Qx³ + 3Qx − b ≡ 0 ──
     ('Fmul',  4,  6,  6),
@@ -156,19 +160,19 @@ V1 = [
     # u1,u2 ≥ 0 always: the mod-n chain (e,r,s decoded canonical;
     # cR2_n canonical; MontMul(nonneg,nonneg)=nonneg). And pt_mul
     # computes (k mod n)·G for any k ≥ 0 in 264 bits. No NORMN.
-    ('MULR2', 14, 11, 15), # r_mont → 14
+    MULR2(14, 11),         # r_mont → 14
     ('Nmul', 12, 11,  1),  # u2 → 12 (r,w still live — Nmul reads only)
     ('Nmul', 11,  7,  1),  # u1 → 11 (r overwritten; e,w dead)
 
     # ── 7. Z = 1_mont_p for slots 4, 7  (must run BEFORE step 8) ──
     # Per HANDOFF Z-test: real-point Z must be 1_mont, not plain 1.
     ('SET1',  7,  0,  0),
-    ('MULR2', 7,  7, 15),
+    MULR2(7, 7),
     ('COPY',  4,  7,  0),
 
-    # ── 8. n_mont = MontMul_p(n, R²_p).  LAST MULR2 — reads & writes 15;
-    # safe because fe_mul11 copies inputs to its stack acc first. ──
-    ('MULR2', 15,  9, 15),
+    # ── 8. n_mont = MontMul_p(n, R²_p).  Reads & writes 15; safe
+    # because fe_mul11 copies inputs to its stack acc first. ──
+    MULR2(15, 9),
 ]
 
 
@@ -201,9 +205,8 @@ V3 = [
 # ──────────────────────────────────────────────────────────────────────
 READS  = {'Fmul':(1,2), 'SQR':(1,2), 'Fadd':(1,2), 'Fsub':(1,2),
           'Nmul':(1,2), 'CHKLT':(1,2), 'CHKZ':(1,), 'INV':(0,1),
-          'MULR2':(1,), 'NORM':(1,), 'SET1':(), 'COPY':(1,),
-          'CHKNZ':(1,)}
-WRITES = {'Fmul', 'SQR', 'Fadd', 'Fsub', 'Nmul', 'INV', 'MULR2',
+          'NORM':(1,), 'SET1':(), 'COPY':(1,), 'CHKNZ':(1,)}
+WRITES = {'Fmul', 'SQR', 'Fadd', 'Fsub', 'Nmul', 'INV',
           'NORM', 'SET1', 'COPY'}
 
 def simulate(name, ops, initial, must_survive):
@@ -217,9 +220,6 @@ def simulate(name, ops, initial, must_survive):
             s = args[idx]
             if s not in live:
                 errors.append(f"  op{i:2} {op:6} reads dead slot {s}")
-        # MULR2 also reads slot 15 implicitly (handler hardcodes rdx)
-        if op == 'MULR2' and 15 not in live:
-            errors.append(f"  op{i:2} MULR2 reads dead slot 15 (cR2_p)")
         if op in WRITES:
             live[dst] = f'{name}[{i}]'
     for s, lbl in must_survive.items():

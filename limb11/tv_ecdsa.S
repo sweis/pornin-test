@@ -88,7 +88,6 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
 	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt, .Lop7-.Ljt
 	.byte	.Lop8-.Ljt, .Lop9-.Ljt, .Lop10-.Ljt, .Lop11-.Ljt
-	.byte	.Lop12-.Ljt
 
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cP.
@@ -98,27 +97,26 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
  * rcx high bytes are DIRTY (bc_run lea's a stack address) — every
  * `mov cl,N` would leave a huge rcx. Use push;pop for loop counters. */
 
-.Lop8:  /* MULR2 — Fmul with s2 = slot 15 (cR2_p). */
-	lea	rdx, [r14 + oR2]
-	/* falls through */
-.Lop0:  /* Fmul — MontMul mod p. m0inv = 1. */
+.Lop0:  /* Fmul — MontMul mod p. m0inv = 1.  (MULR2 = Fmul with s2=15
+ * encoded — bc_run already sets rdx=r14+15*SLOT, no handler needed.) */
 .Lop1:
 	push	1
 	pop	r11
 	jmp	fe_mul11
 
-.Lop4:  /* Nmul — MontMul mod n. */
+.Lop4:  /* Nmul — MontMul mod n. (INV calls this directly, so can't
+ * rely on bc_run's rcx=&cP preload — fe_mul11 clobbers rcx.) */
 	lea	rcx, [r14 + oCN]
 	mov	r11d, 0xBC4F
 	jmp	fe_mul11
 
-.Lop11: /* COPY — dst = s1. */
+.Lop10: /* COPY — dst = s1. */
 	push	K
 	pop	rcx
 	rep	movsq
 	ret
 
-.Lop10: /* SET1 — dst = {1, 0, ..., 0}. */
+.Lop9:  /* SET1 — dst = {1, 0, ..., 0}. */
 	xor	eax, eax
 	push	K
 	pop	rcx
@@ -148,7 +146,7 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	loop	1b
 	ret
 
-.Lop12: /* CHKNZ — bpl |= (s1 == 0). */
+.Lop11: /* CHKNZ — bpl |= (s1 == 0). */
 	call	.Lorall
 	cmc                         /* CF ← zero */
 	jmp	.Ladc
@@ -223,7 +221,7 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
  * top-limb-equality trap). r8 holds the modulus (not rcx, which
  * gets clobbered by loop counters). */
 
-.Lop9:  /* NORM — rcx = &cP preloaded by bc_run. */
+.Lop8:  /* NORM — rcx = &cP preloaded by bc_run. */
 	mov	r8, rcx
 	push	rsi
 	pop	rdi                 /* in-place on s1 */
