@@ -434,7 +434,7 @@ bc_run:
 	xor	ebp, ebp            /* fail-bit accumulator */
 	/* r12 = &.Ljt inherited from verify (set once, fe_mul11 preserves). */
 .Lbc:
-	movzx	eax, word ptr [rbx]
+	mov	eax, [rbx]          /* over-reads 2 B — and eax,0xF later clears */
 	add	rbx, 2
 	test	al, al
 	jz	.Lbce
