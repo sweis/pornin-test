@@ -55,16 +55,16 @@ bench20: tv_ecdsa.o
 # ── Regenerate derived files ──
 regen: bytecode.inc vectors_mul.h
 
-bytecode.inc: gen_bytecode.py
-	python3 gen_bytecode.py > $@ 2>/tmp/limb11_bc_check.txt
+bytecode.inc: ../common/gen_bytecode.py
+	python3 ../common/gen_bytecode.py > $@ 2>/tmp/limb11_bc_check.txt
 	@cat /tmp/limb11_bc_check.txt
 
-vectors_mul.h: range_proof.py
+vectors_mul.h: ../common/range_proof.py
 	@echo "Run the vector-gen snippet in range_proof.py context if vectors need regenerating."
 
 # ── Range proof (re-verify the convergence + correctness) ──
 check:
-	python3 range_proof.py
+	python3 ../common/range_proof.py
 
 clean:
 	rm -f *.o /tmp/limb11_*

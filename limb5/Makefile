@@ -51,13 +51,13 @@ bench20: tv_ecdsa.o
 # ── Regenerate derived files ──
 regen: bytecode.inc
 
-bytecode.inc: gen_bytecode.py
-	python3 gen_bytecode.py > $@ 2>/tmp/limb5_bc_check.txt
+bytecode.inc: ../common/gen_bytecode.py
+	python3 ../common/gen_bytecode.py > $@ 2>/tmp/limb5_bc_check.txt
 	@cat /tmp/limb5_bc_check.txt
 
 # ── Range proof ──
 check:
-	python3 -c "import sys; sys.path.insert(0,'../limb11'); \
+	python3 -c "import sys; sys.path.insert(0,'../common'); \
 		from range_proof import Cfg, rcb_fixpoint; \
 		cfg = Cfg(K=5, W=54, acc_bits=128); \
 		wl, wa, out, trace, ok = rcb_fixpoint(cfg); \
