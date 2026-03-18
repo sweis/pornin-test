@@ -22,4 +22,17 @@
 #define CR2_Q2 0xfffbffffffff0000ULL
 #define CR2_Q3 0x0000000000030000ULL
 
-#define N_M0INV 0xbc4f  /* 0xBC4F */
+/* R² mod n — for s → Montgomery-n (the ONLY mod-n conversion needed;
+ * e and r stay plain because MontMul(plain, mont) = plain). */
+#define CR2N_Q0 0x2d955aba561fc164ULL
+#define CR2N_Q1 0xb2392b6bec596190ULL
+#define CR2N_Q2 0x6ab8c68a2abb372eULL
+#define CR2N_Q3 0x0f80d88a9a9fedcfULL
+
+#define N_M0INV 0xbc4f  /* fits imm16 but imul needs imm32 encoding */
+
+/* ── If switching to LE-stored constants (bt-on-cN fix option 1): ──
+ * recompute ALL of the above with LE byte order. The values are the
+ * same integers; only the .quad byte layout changes. fe_from_be
+ * becomes fe_from_le (reads from low byte up, no bswap needed).
+ * See HANDOFF.md "bt-on-cN — three options ranked". */
