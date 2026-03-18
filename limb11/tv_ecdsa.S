@@ -279,26 +279,24 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 
 /* ── Decoders ── */
 
-/* fe_from_be — 32 BE bytes → 11 limbs. Exits with rsi = src+32,
- * rdi = dst+88 — chains Qx→Qy→e and r→s with no setup between. */
+/* fe_from_be — byte-reverse into the unused top of the dst slot
+ * (bytes 56-87), then decode from there with fe_from_le. Write
+ * region [8i,8i+8) trails read region [56+3i,56+3i+4) by 5i−56 ≥ 0
+ * for i < 11, so in-place is safe. Exits rsi = src+32, rdi = dst+88. */
 fe_from_be:
-	lea	rsi, [rsi + 29]
-	push	K-1
+	lea	rdx, [rdi + 87]
+	push	32
 	pop	rcx
-1:	mov	eax, [rsi - 1]      /* reads one byte behind — in bounds */
-	bswap	eax
-	and	eax, MASK           /* keep low 3 bytes, not shr (drops wrong end) */
-	stosq
-	sub	rsi, 3
+1:	lodsb
+	mov	[rdx], al
+	dec	rdx
 	loop	1b
-	movzx	eax, word ptr [rsi + 1]   /* top limb: bytes 0,1 (16 bits) */
-	xchg	al, ah
-	stosq
-	add	rsi, 33             /* src-1 → src+32 */
+	push	rsi                 /* = src+32 */
+	lea	rsi, [rdx + 1]      /* = dst+56 */
+	call	fe_from_le
+	pop	rsi
 	ret
 
-/* fe_from_le — 32 LE bytes → 11 limbs. For constants (cGX, cGY, cN,
- * cR2, cR2N). Clobbers rsi. */
 fe_from_le:
 	push	K-1
 	pop	rcx
@@ -462,7 +460,8 @@ pt_mul:
 	lea	r12, [r14 + oU1]
 	push	K-1
 	pop	r13
-.Lpo:	mov	ebx, W-1
+.Lpo:	push	W-1
+	pop	rbx
 .Lpi:	/* Double: acc → addend, RCB(acc, acc). */
 	mov	rsi, r14
 	call	.Lcadd
