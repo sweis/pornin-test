@@ -148,18 +148,15 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	loop	1b
 	ret
 
-.Lop13: /* CHKNZ — bpl |= (s1 == 0).  s1 canonical (fresh decode). */
-	xor	eax, eax
-	push	K
-	pop	rcx
-1:	or	rax, [rsi]
-	lea	rsi, [rsi+8]
-	loop	1b
-	sub	rax, 1              /* CF = (rax was 0) */
-	adc	bpl, 0
+.Lop13: /* CHKNZ — bpl |= (s1 == 0). */
+	call	.Lorall
+	cmc                         /* CF ← zero */
+	jmp	.Ladc
+.Lop6:  /* CHKZ — bpl |= (s1 != 0). */
+	call	.Lorall             /* CF ← nonzero */
+.Ladc:	adc	bpl, 0
 	ret
-
-.Lop6:  /* CHKZ — bpl |= (s1 != 0).  s1 must be NORMALIZED first. */
+.Lorall:
 	xor	eax, eax
 	push	K
 	pop	rcx
@@ -167,7 +164,6 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	lea	rsi, [rsi+8]
 	loop	1b
 	neg	rax                 /* CF = (rax != 0) */
-	adc	bpl, 0
 	ret
 
 .Lop5:  /* CHKLT — bpl |= (s1 >= s2). Both canonical limb form. */
@@ -193,7 +189,8 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	push	rbx
 	push	rsi                 /* s_mont */
 	push	rdi                 /* working accumulator (dst) */
-	mov	ebx, 255
+	xor	ebx, ebx
+	dec	bl                  /* ebx = 255 */
 .Le:	mov	rsi, [rsp]
 	mov	rdi, rsi
 	mov	rdx, rsi
@@ -461,6 +458,8 @@ bc_run:
  * ====================================================================== */
 pt_mul:
 	call	.Lai
+	/* r12 hoists &u1; bc_run push/pops r12 so it survives .Lcadd. */
+	lea	r12, [r14 + oU1]
 	push	K-1
 	pop	r13
 .Lpo:	mov	ebx, W-1
@@ -468,14 +467,12 @@ pt_mul:
 	mov	rsi, r14
 	call	.Lcadd
 	/* u1 bit */
-	lea	rax, [r14 + oU1]
-	bt	[rax + r13*8], ebx
+	bt	[r12 + r13*8], ebx
 	jnc	1f
 	lea	rsi, [r14 + oBAK]
 	call	.Lcadd
-1:	/* u2 bit */
-	lea	rax, [r14 + oU2]
-	bt	[rax + r13*8], ebx
+1:	/* u2 bit — u2 at oU1+SLOT; 88 fits disp8. */
+	bt	[r12 + r13*8 + SLOT], ebx
 	jnc	2f
 	lea	rsi, [r14 + oBAK + 3*SLOT]
 	call	.Lcadd
@@ -511,7 +508,6 @@ tv_ecdsa_p256_verify_asm:
 	push	r12
 	push	r13
 	push	r14
-	push	r15
 
 	xor	eax, eax
 	cmp	rsi, 64
@@ -605,7 +601,6 @@ tv_ecdsa_p256_verify_asm:
 .Lout:
 	mov	rsp, rbp
 .Lfail:
-	pop	r15
 	pop	r14
 	pop	r13
 	pop	r12
