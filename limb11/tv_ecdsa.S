@@ -191,7 +191,8 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	push	rdi                 /* accumulator — pre-seeded with s_mont */
 	xor	ebx, ebx
 	mov	bl, 254             /* bit 255 is implicit (seed = s_mont) */
-.Le:	mov	rsi, [rsp]
+.Le:	pop	rsi
+	push	rsi                 /* rsi = dst, stack unchanged */
 	push	rsi
 	push	rsi
 	pop	rdi
@@ -202,10 +203,12 @@ cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
 	je	.Lnx                /* bit 4: n-2 has 0 */
 	bt	dword ptr [rip + cN], ebx
 	jnc	.Lnx
-.Lmul:	mov	rdi, [rsp]
+.Lmul:	pop	rdi
+	pop	rdx                 /* rdx = src */
+	push	rdx
+	push	rdi                 /* stack restored */
 	push	rdi
 	pop	rsi
-	mov	rdx, [rsp + 8]
 	call	.Lop4
 .Lnx:	dec	ebx
 	jns	.Le
