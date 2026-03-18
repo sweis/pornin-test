@@ -451,7 +451,13 @@ bc_run:
  * top 8 bits are zero so the extra doublings hit ∞ → harmless.
  * ====================================================================== */
 pt_mul:
-	call	.Lai
+	/* acc = ∞ = (0:1:0). Plain Y=1 works for ∞ per HANDOFF. */
+	mov	rdi, r14
+	xor	eax, eax
+	push	3*K
+	pop	rcx
+	rep	stosq
+	inc	qword ptr [r14 + SLOT]
 	/* r12 hoists &u1; bc_run push/pops r12 so it survives .Lcadd. */
 	lea	r12, [r14 + oU1]
 	push	K-1
@@ -479,18 +485,6 @@ pt_mul:
 	push	obc_v3
 	pop	rdi
 	jmp	bcrun_off
-
-/* .Lai — acc = ∞ = (0:1:0). Per HANDOFF: plain Y=1 works for ∞
- * (X=Z=0 zeroes the products; Y's R-factor only scales the output,
- * which is projective). Real-point Z's MUST be 1_mont (bc_v1 sets). */
-.Lai:
-	mov	rdi, r14
-	xor	eax, eax
-	push	3*K
-	pop	rcx
-	rep	stosq
-	inc	qword ptr [r14 + SLOT]
-	ret
 
 /* ======================================================================
  * verify — entry point
