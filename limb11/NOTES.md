@@ -1,5 +1,27 @@
 # limb11 notes — architectural insights
 
+## Binary size measurement — eh_frame gotcha (2026-03-18)
+
+GCC/Clang on amd64 emit an `.eh_frame` section by default (C++
+exception unwinding, stack-trace support). The `size` tool lumps it
+into the `text` column. For code-golfed C, this can be 400-500 B of
+phantom weight. Fix: `-fno-asynchronous-unwind-tables`.
+
+**Does NOT affect pure .S.** Verified on `tv_ecdsa.o` assembled from
+`.S`: no `.eh_frame` present, `size` output = `.text` + `.rodata`
+exactly. Our 1217 B is real.
+
+Matters if:
+- Comparing against any C-compiled reference (tv_ecdsa.c, tv_ecdsa_small.c).
+- Thomas's 928 B — if his is partly C, his real code might be smaller
+  than 928. If pure asm, 928 is real.
+- Any future C glue/wrapper around our asm.
+
+The parent project's `tiny.S` / `fast.S` etc. are all `.S` — clean.
+
+---
+
+
 ## R² elimination via projective scale-invariance (2026-03-18)
 
 **The hint (from user, 2026-03-18):** "In projective-coordinate ECDSA
