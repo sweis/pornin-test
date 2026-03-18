@@ -1,198 +1,93 @@
-# Session handoff — 2026-03-18
+# Session handoff — 2026-03-18 (session 2)
 
 **Read this first.** Then `PLAN.md` for the trick catalog.
 
-## Where we stopped
+## Where we are
 
-Phase 1 (reference baseline) partially complete. fe_mul11 works;
-the full verifier does not build yet.
+**1319 B, 607/607 pass, ~12.2M cycles.** Phase 1 complete (1488 B
+baseline at commit 1260a47), Phase 2 grind in progress (−169 B over
+10 commits). Target: < 928 B (Thomas's 5×54). Still **391 B to go**.
 
-| Phase 1 step | Status |
-|---|---|
-| 1.1 fe_mul11 | ✅ 158 B, 103/103 (`make test-mul`) |
-| 1.2 decoder | sketched in tv_ecdsa.S, not unit-tested |
-| 1.3 Fadd/Fsub | sketched, not tested |
-| 1.4 NORM | sketched, not tested |
-| 1.5 fe_inv_n | sketched, has bt-on-BE bug |
-| 1.6 bc_rcb | ✅ generator validated (87 B, slot-lifetime clean) |
-| 1.7 bc_v1 | ⚠️ draft has slot collision, fix known |
-| 1.8–1.10 | not started |
+## What worked this session
 
-## The exact next action
+| Trick | Δ | Commit |
+|---|---|---|
+| Decode chaining (fe_from_be exits rsi+32, rdi+88) | −48 | 376d2e3 |
+| enter/leave + .Lfail-in-middle (rel8 length checks) | −28 | d247ad6 |
+| .Lcp_shared (fe_mul11 ↔ NORM carry-prop identical) | −17 | 1ab794a |
+| fe_from_be → reverse-into-slot + call fe_from_le | −13 | f34f5ce |
+| CHKZ/CHKNZ via cmc; r12-hoist in pt_mul | −20 | 758ff4e |
+| Qx,Qy,e → cP rdi chain (reorder decodes) | −10 | 7b25aa4 |
+| .Laddm/.Lsubm via xor-neg (r9=0/−1) | −7 | 1ab794a |
+| cP build: rep stosq×2 instead of stosq×8 | −5 | c767b2f |
+| INV: pop;push stack-read trick | −7 | bcdebac |
+| .Lai inline; fe_mul11 rdx direct-load; drop .Lfail2 | −12 | 89f89c2 |
 
-```
-cd limb11
-# Fix bc_v1 slot collision in gen_bytecode.py (see below), then:
-make regen         # → bytecode.inc
-# Paste bytecode.inc into tv_ecdsa.S (replacing the .error),
-# add missing handlers (SET1/COPY/NORMN), try to build.
-make size          # first buildable number goes in progress.csv
-```
+## Biggest untried ideas (ordered by risk-adjusted expected Δ)
 
-## bc_v1 slot collision — the fix
+### ~20-30 B potential
 
-`gen_bytecode.py` line ~230 writes u1→4, u2→3. Slot 3 holds Gy_mont
-which the Shamir backup (step 9) needs. Fix the destination slots:
+- **NORMN → single conditional add-n.** u1,u2 are Nmul outputs. If
+  value ∈ [-n, 4n], pt_mul computes (val mod n)·G correctly because
+  n·G = ∞. Only need val ≥ 0 (bt on 2's-comp negative = wrong bits).
+  One conditional add-n instead of full normalize. Would drop NORMN
+  stub (~9 B) + 2 bc ops (4 B) + maybe share more with .Laddm.
+  **RISK: verify the value range. fe_mul11 output can be < −n if
+  inputs are extreme.** range_proof.py should answer this.
 
-```python
-# u1 = e · w. e @ 14 (plain), w_mont @ 1.
-('Nmul', 12, 14,  1),  # u1 → 12 (s is dead after INV)
-# u2 = r · w. r @ 11 (plain).
-('Nmul', 11, 11,  1),  # u2 → 11 (r dead after THIS op — can overwrite)
-('NORMN', 12, 12, 0),
-('NORMN', 11, 11, 0),
-```
+- **Table-driven decode.** verify has ~91 B of decode calls (4 lea
+  rdi's × 7 B + 10 calls × 5 B + misc). A table of slot offsets +
+  loop could be ~50 B. The rsi management (pops for hv/sig, lea rip
+  for cN) is the hard part — need a uniform source model.
 
-Then verify copies 12→22, 11→23 in native code (rep movsq × 2).
+- **Fadd/Fsub share via copy-then-.Lasmod.** Commute bc_rcb's dst==s2
+  Fadds to dst==s1 (copy is no-op). Then Fadd = rep movsq (s1→dst) +
+  .Lasmod(s2, r9=0). Fsub same with r9=−1. ~10-15 B if the bc_rcb
+  audit confirms no dst==s2 Fsub's (preliminary check says none).
 
-Also: n_mont for bc_v3 must go in a slot RCB never writes. Available:
-5,6,7,8,9,10,14,15. 15 is cR2_p — dead after the MULR2 ops. Put
-n_mont @ 15:
+### ~5-10 B potential
 
-```python
-# In bc_v1, after the last MULR2 (cR2_p dead):
-('MULR2', 15, 9, 15),  # n_mont = MontMul(n, R²_p) → 15
-# (reads cN @ 9 — but cN is LIMB FORM there, already decoded.
-#  MULR2 expects s2 = cR2 slot. This is reading slot 15 which is
-#  being overwritten! Need to do this BEFORE the last MULR2, or
-#  use a different slot for n_mont. Sequence carefully.)
-```
+- **pt_mul lea rsi hoist.** The two `lea rsi,[r14+oBAK...]` are 7 B
+  each. Could hoist to a register that survives .Lcadd. r12 is used
+  for oU1; need another. r15 push/pop = +4 B, limits the win.
 
-**Open question:** the MULR2 op is `Fmul with s2 = slot 15`. If we
-want to compute n_mont = n·R² / R, we need n as s1 and R² as s2.
-n is at slot 9 (limb form). R² is at slot 15. So `MULR2 dst, 9, 15`
-— but MULR2 hardcodes s2=15 in the handler (`lea rdx,[r14+sR2]`).
-The bytecode's s2 nibble is IGNORED by MULR2. So we CAN do this
-even after slot 15 is overwritten, as long as the HANDLER reads
-from the right place.
+- **bc_run lodsb.** rsi as bc ptr, `lodsb;lodsb` = 2 B vs `movzwl
+  [rbx];add rbx,2` = 7 B. But rsi is s1 for handlers. Register
+  reassignment cascades through ~6 handlers using lodsq.
 
-Wait no — if MULR2's handler does `lea rdx,[r14+sR2]`, it reads
-whatever is CURRENTLY in slot 15. If we've overwritten 15, it reads
-the overwritten value.
+- **SET1/COPY merge.** Only 2 COPY uses (INV seed, Z_G). Can't drop
+  COPY — INV seed must be distinct from s1. COPY handler is 6 B.
 
-**Resolution:** do `MULR2 15, 9, 15` (n_mont → 15) as the LAST
-MULR2 op. It reads R² from 15, computes n·R²/R, writes to 15. The
-read happens before the write (fe_mul11 copies inputs). ✓
+- **.Lfail tail `jmp` → rel8.** Currently rel32 (5 B) because .Lfail
+  is 192 B back. Need body to shrink another ~70 B for rel8.
 
-## bt-on-cN — the three options ranked
+### Structural tax we're paying vs tiny.S (~55 B)
 
-fe_inv_n needs `bt [cN], bit` where cN is the packed integer n.
-`bt` indexes bits little-endian (bit i is bit i%8 of byte i/8).
-Our cN is stored as 4 BE qwords (for fe_from_be to decode).
+- cR2_n constant (32 B) + decode (5 B) — Montgomery-n is mandatory
+  with 11×24 (n's top limb is 0xffff, not all-ones; q=t[top] fails).
+- bc_v1 ops for Montgomery conversions: s_mont, 1_mont_p (6 B bc).
+- NORMN ops (4 B bc) — maybe droppable per above.
+- r_mont, n_mont derivation (4 B bc) — structural for Montgomery-p
+  projective check.
 
-1. **Store cN as LE bytes in .rodata** (not BE qwords). Then `bt`
-   works directly. fe_from_be needs to handle LE input OR we decode
-   cN with a different path. Cost: ~5 B for a LE-mode branch in
-   the decoder, or 0 B if fe_from_be is LE-native and ALL constants
-   are stored LE (Gx_mont, Gy_mont, R² too — just recompute the
-   .quad values as LE).  **← LEAN THIS WAY.** Recompute consts.h
-   with LE byte order.
+## Size breakdown (current)
 
-2. Store cN twice (BE + LE). +32 B data. Simplest.
-
-3. Byteswap the `bt` index at each call. `bt` reads from byte i/8;
-   for a BE-stored value, the bit is at byte 31−i/8. Compute the
-   swapped byte offset: `mov eax, ebx; shr eax, 3; xor al, 31;
-   bt [cN + rax], bl_low3bits`. ~10 B extra in the inner loop. Loses
-   to option 1.
-
-## .Lai (∞ = (0:1:0)) — ✅ RESOLVED: plain Y=1 works
-
-Tested in range_proof.py (end of session 2026-03-18):
-
-```
-RCB(0:1_plain:0, G) = G?  True  ✓
-RCB(0:1_mont:0,  G) = G?  True  ✓
-RCB(∞_plain, ∞_plain): Z out = 0  ✓ still ∞
-RCB(∞_mont,  ∞_mont):  Z out = 0  ✓ still ∞
-```
-
-Both work. With X₁=Z₁=0, all X₁·? and Z₁·? products vanish; Y₁'s
-R-factor is irrelevant to the output's correctness (it scales Y₃ but
-projective points are defined up to scale). **`.Lai` stays simple:
-`inc qword [r14+SLOT]`. No 1_mont needed.** Saves a MULR2 op in bc_v1
-and removes one open question.
-
-**Corollary:** the Z-coordinates in the Shamir backup (slots 4 and 7
-set to "1") can ALSO be plain 1, not 1_mont. bc_v1's `SET1 7,0,0` +
-`MULR2 7,7,15` + `COPY 4,7,0` simplifies to `SET1 7,0,0; SET1 4,0,0`.
-−4 B bytecode + we don't need MULR2 for the Z's.
-
-**Tested — Z must be 1_mont for actual points:**
-
-```
-RCB Z=1_mont both:     ✓ = 2G
-RCB Z₁=mont, Z₂=plain: ✗ WRONG
-RCB Z=1_plain both:    ✗ WRONG
-```
-
-The ∞ case works because X=Z=0 zeroes all the products involving
-them (Y's R-factor scales the output but projective is scale-
-invariant). For REAL points Z enters multiplications (t2 = Z₁·Z₂)
-and the R-factors must match.
-
-**Resolution:**
-- `.Lai` (acc = ∞): Y=1 plain is fine. `inc qword [r14+SLOT]`. ✓
-- Shamir backup Z's (slots 4, 7): MUST be 1_mont = R. Keep the
-  `SET1 7,0,0; MULR2 7,7,15; COPY 4,7,0` sequence in bc_v1. Or:
-  store 1_mont as a constant and COPY it (saves 2 bytecode ops,
-  costs +32 B data). Bytecode is cheaper — keep MULR2.
-
-## R²_n — ✅ COMPUTED, added to consts.h
-
-R²_n = 0x2d955aba561fc164b2392b6bec5961906ab8c68a2abb372e0f80d88a9a9fedcf
-
-BE qwords (current storage convention):
-```
-  .quad 0x2d955aba561fc164
-  .quad 0xb2392b6bec596190
-  .quad 0x6ab8c68a2abb372e
-  .quad 0x0f80d88a9a9fedcf
-```
-
-LE qwords (if switching per bt-on-cN option 1):
-```
-  .quad 0xcfed9f9a8ad8800f
-  .quad 0x2e37bb2a8ac6b86a
-  .quad 0x906159ec6b2b39b2
-  .quad 0x64c11f56ba5a952d
-```
-
-Slot for cR2_n: 13 (RCB scratch, but bc_v1 runs BEFORE pt_mul so
-RCB hasn't touched it yet). verify decodes cR2_n → slot 13.
-
-## Handlers missing from tv_ecdsa.S
-
-```asm
-.Lop10:  /* SET1: dst = {1, 0, ..., 0} */
-    xor  eax, eax
-    mov  cl, K
-    push rdi
-    rep  stosq
-    pop  rdi
-    inc  qword ptr [rdi]
-    ret
-    /* ~13 B */
-
-.Lop11:  /* COPY: dst = s1 */
-    mov  cl, K
-    rep  movsq
-    ret
-    /* ~6 B — but needs rsi/rdi already set, which bc_run does */
-
-.Lop12:  /* NORMN: like NORM but modulus = cN (slot 9) */
-    lea  rcx, [r14 + sN]
-    jmp  .Lop9+<offset past the rcx-already-set point>
-    /* Or: .Lop9 expects rcx=&modulus. bc_run preloads rcx=&cP.
-     * NORMN overwrites rcx to &cN then falls through to NORM body.
-     * Same pattern as Nmul vs Fmul. ~7 B. */
-```
+| Chunk | B | Notes |
+|---|---|---|
+| .rodata bytecode | 183 | 87 RCB + 21 v3 + 75 v1 |
+| .rodata constants | 160 | 5 × 32 |
+| .Ljt + handlers | ~334 | INV 53, NORM+helpers ~85, small ops ~130 |
+| fe_from_be + fe_from_le | ~55 | merged via reverse-into-slot |
+| fe_mul11 + .Lcnt | ~133 | shares .Lcp with NORM |
+| .Lcadd + bcrun_off + bc_run | ~100 | |
+| pt_mul | ~93 | .Lai inlined |
+| verify | ~245 | |
 
 ## Files you should NOT touch
 
-Outside this directory. Per PLAN.md §5.
+Outside `limb11/`. Per PLAN.md §5.
 
-## Commit messages
+## Commit discipline
 
-Granular. One commit per distinct technique or fix. Update
-progress.csv at each WORKING checkpoint. **DO NOT PUSH** (competitive).
+Granular. One trick per commit. progress.csv at working checkpoints.
+**DO NOT PUSH.**

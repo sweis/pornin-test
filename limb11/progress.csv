@@ -4,4 +4,4 @@ commit,bytes,cycles,note
 # Pre-607 milestones use cycles=0.
 a1f8ce0,158,0,fe_mul11 standalone (103/103 unit test)
 1260a47,1488,0,PHASE 1 BASELINE — 607/607 pass. Not golfed.
-7b25aa4,1345,12185000,Phase 2 grind: decode chaining + .Lcp share + enter/leave + .Lfail-in-middle
+89f89c2,1319,12185000,Phase 2 grind: −169 B. Chaining + .Lcp share + enter/leave + xor-neg add/sub + INV stack tricks
