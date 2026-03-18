@@ -19,20 +19,26 @@ Montgomery. Every signed-limb W needs Montgomery for mod-n:
 
 So **5×54 pays the same Montgomery tax as 11×24.** Thomas paid it too.
 
-## The Montgomery tax (both architectures)
+## The Montgomery tax — REVISED (2026-03-18, commit d1a05bc)
+
+**cR2_p ELIMINATED via projective scale-invariance.** See
+`../limb11/NOTES.md`. RCB is homogeneous — preserves "all three
+coords same scale." G at level 1 (Montgomery), Q at level 0 (plain),
+b at level 1 all work. Level drifts data-dep but X,Y,Z always match.
+Final check: X·1 aligns with r·Z at L−1.
 
 | Item | B |
 |---|---|
 | cR2_n constant | 32 |
-| cR2_p constant | 32 |
-| bc_v1 conversion ops (Qx,Qy,r,n,1→mont; s→mont-n) | ~16 |
-| SET1/COPY for 1_mont_p | ~4 |
-| Two decoders (LE for constants, BE for inputs) | ~25 |
-| **Total** | **~109** |
+| ~~cR2_p constant~~ | ~~32~~ → **0** |
+| bc_v1 ops: projective on-curve (+12) − Q-convert (−4) − n_mont (−2) | +6 |
+| bc_v3 ops: X·1 + SET1 | +4 |
+| G-scale (Z_G = Gx_mont) vs 1_mont_p | 0 (swap) |
+| Two decoders | ~25 |
+| **Total** | **~67** |
 
-This is **irreducible** as long as we're doing Montgomery. The only
-escape is W=32 (tiny.S's choice), which doesn't converge for
-signed-limb RCB (KW=256 < 263.2).
+The trick applies EQUALLY to 5×54 — same Montgomery architecture.
+**Thomas may have already found this.**
 
 ## Where 11×24 and 5×54 differ
 
