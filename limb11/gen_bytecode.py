@@ -135,21 +135,20 @@ V1 = [
     ('Fadd', 10, 10,  4),
 
     # ── On-curve: Y²Z − X³ + 3XZ² − bZ³ ≡ 0, all @ level −2 ──
-    # Q @ 0, b @ 1. Plain Z=1 in slot 12. Z-mults are degree-balancers:
-    #   Y²Z = (−1)+0−1 = −2.  X³ = −2.  3X·Z² = 0+(−1)−1 = −2.
-    #   bZ³ = 1+(−2)−1 = −2.
-    ('SET1', 12,  0,  0),  # Z = 1 (plain)
+    # Q @ 0, b @ 1. Plain Z=1 in slot 15 (RCB-safe — survives pt_mul
+    # for bc_v3's X·1). Z-mults are degree-balancers.
+    ('SET1', 15,  0,  0),  # Z = 1 (plain)
     ('Fmul',  4,  6,  6),  # Qy²  @ −1
-    ('Fmul',  4,  4, 12),  # Qy²·Z  @ −2
+    ('Fmul',  4,  4, 15),  # Qy²·Z  @ −2
     ('Fmul', 13,  5,  5),  # Qx²  @ −1
     ('Fmul', 13, 13,  5),  # Qx³  @ −2
     ('Fsub',  4,  4, 13),
-    ('Fmul', 13, 12, 12),  # Z²  @ −1
-    ('Fadd', 11,  5,  5),  # 2Qx  @ 0   (slot 11 free — was cR2_p)
+    ('Fmul', 13, 15, 15),  # Z²  @ −1
+    ('Fadd', 11,  5,  5),  # 2Qx  @ 0
     ('Fadd', 11, 11,  5),  # 3Qx  @ 0
     ('Fmul', 11, 11, 13),  # 3Qx·Z²  @ −2
     ('Fadd',  4,  4, 11),
-    ('Fmul', 13, 13, 12),  # Z³  @ −2
+    ('Fmul', 13, 13, 15),  # Z³  @ −2
     ('Fmul', 13, 10, 13),  # b·Z³  @ −2
     ('Fsub',  4,  4, 13),
     ('NORM',  4,  4,  0),
@@ -169,8 +168,8 @@ V1 = [
     ('Fmul',  2,  2,  2),  # Gx² → 2
     ('Fmul',  3,  4,  3),  # Gx·Gy → 3
 
-    # ── Z_Q = plain 1 (reuse on-curve's Z @ 12) ──
-    ('COPY',  7, 12,  0),
+    # ── Z_Q = plain 1 (reuse on-curve's Z @ 15) ──
+    ('COPY',  7, 15,  0),
 
     # ── Shamir backup ──
     ('COPYHI', 0,  2, 0),  # 2,3 → 16,17 (Gx², Gx·Gy)
@@ -193,8 +192,8 @@ V1 = [
 # X·1 = Fmul(X@L, 1@0) = L−1. Now both sides match.
 
 V3 = [
-    ('SET1',  5,  0,  0),  # 1 → 5 (plain; slot 5 = addend, dead post-pt_mul)
-    ('Fmul',  5,  0,  5),  # X·1  @ L−1
+    # 1 @ slot 15 survives pt_mul (RCB-safe, on-curve put it there).
+    ('Fmul',  5,  0, 15),  # X·1  @ L−1
     # d1 = X·1 − r·Z
     ('Fmul',  3, 14,  2),  # r·Z  @ L−1  (r@0 · Z@L)
     ('Fsub',  3,  5,  3),
@@ -284,7 +283,7 @@ if __name__ == '__main__':
           f"15={out.get(15)} */", file=sys.stderr)
 
     # V3 slot lifetime
-    v3_init = {0:'X', 1:'Y', 2:'Z', 8:'cP', 9:'cN', 14:'r_plain'}
+    v3_init = {0:'X', 1:'Y', 2:'Z', 8:'cP', 9:'cN', 14:'r_plain', 15:'one'}
     errs, _ = simulate('v3', V3, v3_init, {})
     if errs:
         print("/* V3 LIFETIME ERRORS: */", file=sys.stderr)

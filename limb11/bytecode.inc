@@ -48,8 +48,7 @@ bc_rcb:
 	/* 87 B */
 
 bc_v3:
-	.byte	0x08, 0x50  /* SET1    5 ←  0,  0 */
-	.byte	0x50, 0x50  /* Fmul    5 ←  0,  5 */
+	.byte	0xf0, 0x50  /* Fmul    5 ←  0, 15 */
 	.byte	0x20, 0x3e  /* Fmul    3 ← 14,  2 */
 	.byte	0x32, 0x35  /* Fsub    3 ←  5,  3 */
 	.byte	0x91, 0x4e  /* Fadd    4 ← 14,  9 */
@@ -61,7 +60,7 @@ bc_v3:
 	.byte	0x07, 0x22  /* NORM    2 ←  2,  0 */
 	.byte	0x0a, 0x02  /* CHKNZ   0 ←  2,  0 */
 	.byte	0x00  /* END */
-	/* 25 B */
+	/* 23 B */
 
 bc_v1:
 	.byte	0x94, 0x00  /* CHKLT   0 ←  0,  9 */
@@ -76,18 +75,18 @@ bc_v1:
 	.byte	0x21, 0x42  /* Fadd    4 ←  2,  2 */
 	.byte	0x21, 0x44  /* Fadd    4 ←  4,  2 */
 	.byte	0x41, 0xaa  /* Fadd   10 ← 10,  4 */
-	.byte	0x08, 0xc0  /* SET1   12 ←  0,  0 */
+	.byte	0x08, 0xf0  /* SET1   15 ←  0,  0 */
 	.byte	0x60, 0x46  /* Fmul    4 ←  6,  6 */
-	.byte	0xc0, 0x44  /* Fmul    4 ←  4, 12 */
+	.byte	0xf0, 0x44  /* Fmul    4 ←  4, 15 */
 	.byte	0x50, 0xd5  /* Fmul   13 ←  5,  5 */
 	.byte	0x50, 0xdd  /* Fmul   13 ← 13,  5 */
 	.byte	0xd2, 0x44  /* Fsub    4 ←  4, 13 */
-	.byte	0xc0, 0xdc  /* Fmul   13 ← 12, 12 */
+	.byte	0xf0, 0xdf  /* Fmul   13 ← 15, 15 */
 	.byte	0x51, 0xb5  /* Fadd   11 ←  5,  5 */
 	.byte	0x51, 0xbb  /* Fadd   11 ← 11,  5 */
 	.byte	0xd0, 0xbb  /* Fmul   11 ← 11, 13 */
 	.byte	0xb1, 0x44  /* Fadd    4 ←  4, 11 */
-	.byte	0xc0, 0xdd  /* Fmul   13 ← 13, 12 */
+	.byte	0xf0, 0xdd  /* Fmul   13 ← 13, 15 */
 	.byte	0xd0, 0xda  /* Fmul   13 ← 10, 13 */
 	.byte	0xd2, 0x44  /* Fsub    4 ←  4, 13 */
 	.byte	0x07, 0x44  /* NORM    4 ←  4,  0 */
@@ -100,7 +99,7 @@ bc_v1:
 	.byte	0x09, 0x42  /* COPY    4 ←  2,  0 */
 	.byte	0x20, 0x22  /* Fmul    2 ←  2,  2 */
 	.byte	0x30, 0x34  /* Fmul    3 ←  4,  3 */
-	.byte	0x09, 0x7c  /* COPY    7 ← 12,  0 */
+	.byte	0x09, 0x7f  /* COPY    7 ← 15,  0 */
 	.byte	0x0b, 0x02  /* COPYHI  0 ←  2,  0 */
 	.byte	0x0b, 0x24  /* COPYHI  2 ←  4,  0 */
 	.byte	0x0b, 0x46  /* COPYHI  4 ←  6,  0 */
@@ -113,4 +112,4 @@ bc_v1:
 
 	.equ	obc_rcb, 0
 	.equ	obc_v3,  87
-	.equ	obc_v1,  112
+	.equ	obc_v1,  110
