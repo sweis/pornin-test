@@ -384,14 +384,50 @@ fe_mul11:
  * bc_run — bytecode interpreter
  * ====================================================================== */
 
-/* .Lcadd: copy 3 slots from [rsi] → addend (slots 5-7), dispatch bc_rcb. */
+/* .Lcadd: copy 3 slots from [rsi] → addend (slots 5-7), dispatch bc_rcb.
+ * pt_mul sits between here and bcrun_off so its tail can fall through. */
 .Lcadd:
 	lea	rdi, [r14 + oADD]
 	push	3*K
 	pop	rcx
 	rep	movsq
 	xor	edi, edi            /* obc_rcb = 0 */
-	/* falls through */
+	jmp	bcrun_off           /* rel8 over pt_mul (~90 B) */
+
+pt_mul:
+	/* acc = ∞ = (0:1:0). Plain Y=1 works for ∞ per HANDOFF. */
+	mov	rdi, r14
+	xor	eax, eax
+	push	3*K
+	pop	rcx
+	rep	stosq
+	inc	qword ptr [r14 + SLOT]
+	/* r12 hoists &u1; bc_run push/pops r12 so it survives .Lcadd. */
+	lea	r12, [r14 + oU1]
+	push	K-1
+	pop	r13
+.Lpo:	push	W-1
+	pop	rbx
+.Lpi:	/* Double: acc → addend, RCB(acc, acc). */
+	mov	rsi, r14
+	call	.Lcadd
+	/* u1 bit */
+	bt	[r12 + r13*8], ebx
+	jnc	1f
+	lea	rsi, [r14 + oBAK]
+	call	.Lcadd
+1:	/* u2 bit — u2 at oU1+SLOT; 88 fits disp8. */
+	bt	[r12 + r13*8 + SLOT], ebx
+	jnc	2f
+	lea	rsi, [r14 + oBAK + 3*SLOT]
+	call	.Lcadd
+2:	dec	ebx
+	jns	.Lpi
+	dec	r13
+	jns	.Lpo
+	/* Dispatch final check — falls through. */
+	push	obc_v3
+	pop	rdi
 
 bcrun_off:
 	lea	rax, [rip + bc_rcb]
@@ -438,46 +474,6 @@ bc_run:
 	pop	rbx
 	pop	rbp
 	ret
-
-/* ======================================================================
- * pt_mul — u1·G + u2·Q via Shamir. 264 iterations (11 limbs × 24 bits);
- * top 8 bits are zero so the extra doublings hit ∞ → harmless.
- * ====================================================================== */
-pt_mul:
-	/* acc = ∞ = (0:1:0). Plain Y=1 works for ∞ per HANDOFF. */
-	mov	rdi, r14
-	xor	eax, eax
-	push	3*K
-	pop	rcx
-	rep	stosq
-	inc	qword ptr [r14 + SLOT]
-	/* r12 hoists &u1; bc_run push/pops r12 so it survives .Lcadd. */
-	lea	r12, [r14 + oU1]
-	push	K-1
-	pop	r13
-.Lpo:	push	W-1
-	pop	rbx
-.Lpi:	/* Double: acc → addend, RCB(acc, acc). */
-	mov	rsi, r14
-	call	.Lcadd
-	/* u1 bit */
-	bt	[r12 + r13*8], ebx
-	jnc	1f
-	lea	rsi, [r14 + oBAK]
-	call	.Lcadd
-1:	/* u2 bit — u2 at oU1+SLOT; 88 fits disp8. */
-	bt	[r12 + r13*8 + SLOT], ebx
-	jnc	2f
-	lea	rsi, [r14 + oBAK + 3*SLOT]
-	call	.Lcadd
-2:	dec	ebx
-	jns	.Lpi
-	dec	r13
-	jns	.Lpo
-	/* Dispatch final check. */
-	push	obc_v3
-	pop	rdi
-	jmp	bcrun_off
 
 /* ======================================================================
  * verify — entry point
