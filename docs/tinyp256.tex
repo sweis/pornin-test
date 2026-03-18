@@ -547,10 +547,9 @@ whenever they differ by a common nonzero scale factor: $(X:Y:Z)$ and
 $(\lambda X:\lambda Y:\lambda Z)$ are the same thing, which is what
 the colons signal. Infinity is
 the class with $Z = 0$, which on this curve forces $X = 0$ too: any
-$(0:Y:0)$ with $Y \neq 0$ will do. The key property: feeding the
-formula $(0:1:0) + Q$ really does produce~$Q$, and $(0:1:0) +
-(0:1:0)$ really does produce $(0:1:0)$. The edge cases are handled by
-the \emph{algebra}, not by \emph{code}.
+$(0:Y:0)$ with $Y \neq 0$ will do. Feeding the formula $(0:1:0) + Q$
+really does produce~$Q$, and $(0:1:0) + (0:1:0)$ really does produce
+$(0:1:0)$ --- the edge cases are handled by the algebra, not by code.
 
 \subsection{The demolition}
 
@@ -566,11 +565,11 @@ accumulator, copy it into the addend slots and call the \emph{same}
 routine --- $P + P = 2P$, and RCB handles that case like any other.
 
 The three bytecode streams (\bytes{102} total) collapse into one
-43-operation stream (\bytes{87}: 86 bytes of ops plus a one-byte
-terminator). The 62-byte branch tree becomes
-an 11-byte dispatch. \saved{59} and a whole category of bugs
-(forget to handle one edge case, accept a forged signature)
-structurally eliminated.
+43-operation stream (\bytes{88}). The 62-byte branch tree becomes
+an 11-byte dispatch. Setup bookkeeping for the new $Z$ coordinate
+eats \spent{6} of that back; net \saved{59}, and a whole category
+of bugs (forget to handle one edge case, accept a forged
+signature) structurally eliminated.
 
 \subsection{The fine print}
 
@@ -596,13 +595,13 @@ The bytecode interpreter addresses 16 slots by a 4-bit index. Which
 slot is ``slot~5'' is completely arbitrary --- it's a nibble in a
 data table. Renumbering slots costs \textbf{zero bytes} in the
 bytecode. But slot numbers show up in \emph{native} code too, as
-memory displacements --- and those are \emph{not} free.
+memory displacements --- and those are not free.
 
 \subsection{Shamir's trick and its setup cost}
 
 Shamir's trick~\cite[\S 14.88]{hac} (due originally to
-Straus~\cite{straus}) computes $u_1 G + u_2 Q$ with a
-\emph{single} 256-iteration loop instead of two: at each bit
+Straus~\cite{straus}) computes $u_1 G + u_2 Q$ with a single
+256-iteration loop instead of two: at each bit
 position, double once, then conditionally add $G$, conditionally
 add~$Q$. It halves the number of doublings.
 
@@ -631,9 +630,8 @@ Part (a) costs 2 extra bytes of bytecode (one more ``copy 1 here''
 op). Part (b) is a \textbf{pure nibble permutation}: swap some
 4-bit fields in \texttt{bc\_rcb}, zero-byte cost. Net: \saved{16}.
 
-This is the general principle: \emph{data layout changes inside the
-bytecode are free; exploit that freedom to make the native code
-shorter}.
+The general principle: data layout changes inside the bytecode are
+free; exploit that freedom to make the native code shorter.
 
 % ======================================================================
 \section{Building constants at runtime}
@@ -689,21 +687,21 @@ within 255 bytes of the table base. The largest handler
 headroom before the whole scheme breaks and every table entry doubles
 in size.
 
-The \texttt{cP} constant lived \emph{between} the jump table and the
+The \texttt{cP} constant lived between the jump table and the
 handlers. Deleting it from \texttt{.rodata} moved every handler 32
 bytes closer to the table. Suddenly there's 36 bytes of headroom ---
 enough to inline a small \texttt{fe\_iszero} helper into its only
-caller, for \saved{6}. \emph{That} is the whole \saved{6} in the
-section header.
+caller, for \saved{6}. That is the entire saving in the section
+header.
 
 (We had already done the related trick for the curve coefficient $b$,
 computed \emph{in bytecode} from the curve equation itself: since $G$
 is on the curve, $b = G_y^2 - G_x^3 + 3 G_x \pmod p$. Four field ops,
-8 bytes of bytecode, replacing \bytes{32} of constant --- and that one
-\emph{is} a direct saving, because bytecode costs no plumbing.)
+8 bytes of bytecode, replacing \bytes{32} of constant --- a direct
+saving this time, because bytecode costs no plumbing.)
 
-\textbf{Lesson:} size optimisations interact. Freeing space in one
-region can unblock a seemingly unrelated win elsewhere. Keep a list
+Size optimisations interact: freeing space in one region can
+unblock a seemingly unrelated win elsewhere. Keep a list
 of ``things I'd do if only I had 10 more bytes of headroom at $X$.''
 
 % ======================================================================
@@ -718,8 +716,8 @@ x86-64 memory operands with a small displacement ($-128 \le d \le
 three-byte tax because slot~5 is $5 \times 32 = 160$ bytes from the
 slot base, and $160 > 127$.
 
-If we had a register that already pointed \emph{near} slot~5, we
-could use a short displacement from \emph{that}. And \texttt{r8} was
+If we had a register that already pointed near slot~5, we could
+use a short displacement from that register. And \texttt{r8} was
 already holding \texttt{\&cP} --- but \texttt{cP} was at slot~22, way
 too far.
 
@@ -776,19 +774,20 @@ maybe five such swaps over the project: \saved{15}.
 
 \subsection{Fall-through instead of jump}
 
-Even better than a short jump is \emph{no} jump. If function~A always
+Even better than a short jump is no jump. If function~A always
 ends by calling function~B, and nothing else sits between them,
 delete the \texttt{call} from~A and let execution fall through.
-The \texttt{Fadd} handler falls through into the conditional-subtract
-epilogue; \texttt{pt\_mul} falls through into the final-check
-dispatch. Each fall-through is \saved{2} to \saved{5}.
+\texttt{Fadd} falls through into the conditional-subtract epilogue;
+\texttt{Nmul} overwrites the modulus pointer and falls through into
+\texttt{Fmul}. Each fall-through is \saved{2} to \saved{5}; four or
+five over the project comes to roughly \saved{15}.
 
 \subsection{\texttt{rep movsq} is a free \texttt{memcpy}}
 
 \texttt{rep movsq} is 3 bytes and copies \texttt{rcx} quadwords from
 \texttt{[rsi]} to \texttt{[rdi]}. If you can get \texttt{rsi},
-\texttt{rdi}, and \texttt{rcx} into the right state as a
-\emph{side-effect} of surrounding code --- \texttt{lodsb} leaves
+\texttt{rdi}, and \texttt{rcx} into the right state as a side
+effect of surrounding code --- \texttt{lodsb} leaves
 \texttt{rsi} advanced, \texttt{stosq} leaves \texttt{rdi} advanced,
 loop counters naturally end at zero --- then a block copy is nearly
 free.
