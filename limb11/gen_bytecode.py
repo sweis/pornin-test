@@ -161,10 +161,10 @@ V1 = [
     ('COPY',  3, 14,  0),
     ('INV',   3, 14,  0),
 
-    # ── r_plain → 14 (overwrite s_mont, dead); u1,u2 → 0,1 ──
-    ('COPY', 14, 13,  0),  # r_plain → 14 (RCB-safe)
+    # ── (r+n) → 14 for bc_v3 (r·Z derived as (r+n)Z − nZ); u1,u2 → 0,1 ──
+    ('Fadd', 14, 13,  9),  # (r+n) @ level 0 → 14. r<n, n<2^256 → r+n<2^257.
     ('Nmul',  1, 13,  3),  # u2 = r·w → 1
-    ('Nmul',  0,  7,  3),  # u1 = e·w → 0 (e,w dead; r@13 dead after u2 read)
+    ('Nmul',  0,  7,  3),  # u1 = e·w → 0
 
     # ── G-scale: (Gx², Gx·Gy, Gx_mont) → 2,3,4. Gx² already @ 2 from b-derive. ──
     ('COPY',  4, 11,  0),  # Gx_mont → 4 (Z_G)
@@ -194,20 +194,18 @@ V1 = [
 # X·1 = Fmul(X@L, 1@0) = L−1. Now both sides match.
 
 V3 = [
-    # 1 @ slot 15 survives pt_mul (RCB-safe, on-curve put it there).
+    # 1 @ 15, (r+n) @ 14 — both RCB-safe, bc_v1 put them there.
+    # r·Z derived as (r+n)·Z − n·Z (saves storing r separately).
     ('Fmul',  5,  0, 15),  # X·1  @ L−1
-    # d1 = X·1 − r·Z
-    ('Fmul',  3, 14,  2),  # r·Z  @ L−1  (r@0 · Z@L)
-    ('Fsub',  3,  5,  3),
-    # d2 = X·1 − (r+n)·Z
-    ('Fadd',  4, 14,  9),  # r+n  @ 0  (n from slot 9, RCB-safe)
-    ('Fmul',  4,  4,  2),  # (r+n)·Z  @ L−1
-    ('Fsub',  4,  5,  4),
-    # d1·d2 ≡ 0
-    ('Fmul',  3,  3,  4),
+    ('Fmul',  4, 14,  2),  # (r+n)·Z  @ L−1
+    ('Fmul',  3,  9,  2),  # n·Z  @ L−1  (n @ slot 9, level 0)
+    ('Fsub',  3,  4,  3),  # r·Z = (r+n)·Z − n·Z
+    ('Fsub',  3,  5,  3),  # d1 = X·1 − r·Z
+    ('Fsub',  4,  5,  4),  # d2 = X·1 − (r+n)·Z
+    ('Fmul',  3,  3,  4),  # d1·d2
     ('NORM',  3,  3,  0),
     ('CHKZ',  0,  3,  0),
-    # ∞ check: Z ≠ 0 (Wycheproof tcId=292 — Z can be kp, NORM required)
+    # ∞ check (Wycheproof tcId=292 — Z can be kp, NORM required)
     ('NORM',  2,  2,  0),
     ('CHKNZ', 0,  2,  0),
 ]
@@ -285,7 +283,7 @@ if __name__ == '__main__':
           f"15={out.get(15)} */", file=sys.stderr)
 
     # V3 slot lifetime
-    v3_init = {0:'X', 1:'Y', 2:'Z', 8:'cP', 9:'cN', 14:'r_plain', 15:'one'}
+    v3_init = {0:'X', 1:'Y', 2:'Z', 8:'cP', 9:'cN', 14:'r_plus_n', 15:'one'}
     errs, _ = simulate('v3', V3, v3_init, {})
     if errs:
         print("/* V3 LIFETIME ERRORS: */", file=sys.stderr)
