@@ -1,0 +1,5 @@
+commit,bytes,cycles,note
+# 11×24 signed-limb Montgomery track. Thomas at 928/4482467 with 5×54.
+# Target: < 928. Each row is a working checkpoint (607/607 pass).
+# Pre-607 milestones use cycles=0.
+a1f8ce0,158,0,fe_mul11 standalone (103/103 unit test)
