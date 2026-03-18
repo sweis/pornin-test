@@ -192,7 +192,8 @@ V3 = [
     ('Fmul',  3,  3,  4),
     ('NORM',  3,  3,  0),
     ('CHKZ',  0,  3,  0),
-    # ∞ check: Z ≠ 0
+    # ∞ check: Z ≠ 0.  RCB's Z is an Fadd output — can be kp ≠ 0
+    # for small k (Wycheproof tcId=292 confirms). NORM required.
     ('NORM',  2,  2,  0),
     ('CHKNZ', 0,  2,  0),
 ]
