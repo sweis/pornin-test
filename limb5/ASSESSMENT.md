@@ -101,24 +101,54 @@ Unknown. Specifically:
   chains for the 128-bit accumulator. fast2.S uses this; could be
   smaller than add;adc for 5-limb products.
 
-## Recommendation
+## VERDICT (2026-03-18, commit 6f07517)
 
-1. **Keep grinding 11×24** — ~177 B of honest work remaining. Each
-   win teaches us about the problem even if 928 is out of reach.
-   Realistic target: **1070-1100 B**.
+**5×54 baseline: 1324 B, 607/607, ~3.2M cycles.** No golf.
 
-2. **Build 5×54 baseline in parallel.** No golf — get 607/607 and
-   measure. The first-pass number decides:
-   - < 1350 B baseline → 5×54 is the horse.
-   - > 1450 B baseline → 11×24's constraint shape is better.
-   - Between → build both to ~1150 and compare.
+| | Baseline | After grind | Cycles |
+|---|---:|---:|---:|
+| limb11 (11×24) | 1488 | 1194 (−294) | ~12.0M |
+| **limb5 (5×54)** | **1324** | — | **~3.2M** |
+| Thomas (5×54) | — | 928 | ~4.5M |
 
-3. **Accept that <928 may need a NEW idea.** Neither architecture
-   obviously reaches it from where I'm standing. Thomas found
-   something. The only way to find it is to build.
+**5×54 is the horse.** The baseline is 164 B smaller than 11×24's
+baseline AND ~4× faster (K²=25 vs 121 products per multiply). If
+the limb11 grind catalogue ports at ~70% efficiency, limb5 lands
+around 1120 B. With 5×54-specific wins (MASK-register flipping from
+tax to win), likely lower. Thomas's 928 is ~200 B of grind away —
+ambitious but the constraint shape supports it.
 
-## Caveat
+### Estimates corrected by the build
 
-My size estimates have been 86-400 B wrong before. The assembler
-tells the truth. This assessment is a HYPOTHESIS to test, not a
-verdict.
+| Prediction | Actual | Note |
+|---|---|---|
+| MASK tax +5-10 B | **WASH (slight win)** | `and rax, r13` is 3 B vs imm32's 5 B. 10 B movabs recouped after 5 sites; ~10 exist. |
+| Decoders +10-15 B | **+44 B** | 54-bit non-byte-aligned unroll is chunky. Real tax. |
+| fe_mul +40 B | **+60 B** | 128-bit carry (shrd/sar/add/adc per row) + 128→54 final prop. |
+| cP built | **stored** | 5×54 p limbs denser (only limb 2 zero). +32 B rodata, −25 B build. |
+
+The decoders are the worst miss — PLAN.md's "(offset, shift) loop
+would be nearly as bad" assumption was wrong; unrolled 5× with
+hardcoded offsets is where the bytes went. Prime golf target.
+
+### The build found (not predicted)
+
+- **MASK register discipline**: r13 holds MASK (one movabs in verify).
+  pt_mul's outer counter moved to r15. 5 pushes → FRAME +8 for
+  16-alignment. This is the invariant to protect during golf.
+- **54-bit decoder overread fix**: limb 4 at `(offset 27, shift 0)`
+  would read 3 B past a 32-B input. `(offset 24, shift 24)` keeps
+  the read in-bounds and shifts the extras out. No padding needed.
+- **gen_bytecode.py ports verbatim** — slot-indexed, limb-width-agnostic.
+
+## Next step
+
+Port limb11's trick catalogue to limb5. Priority order (biggest
+expected Δ, known-portable first):
+1. enter/leave + .Lfail-in-middle (−28 B in limb11)
+2. .Lcp_shared carry-prop dedup (−17 B)
+3. CIOS merge in fe_mul (−7 B in limb11; may be more with 128-bit acc)
+4. Decode chaining + rodata reorder (−48 B in limb11; different shape)
+5. CHKZ/CHKNZ merge, rcl/inc ebp, mov al encoding wins (all portable)
+6. COPYHI Shamir backup (portable)
+7. **5×54-specific**: decoder loop vs unroll; disp8 slot layout.

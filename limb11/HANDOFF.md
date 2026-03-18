@@ -2,10 +2,14 @@
 
 **Read this first.** Then `PLAN.md` for the full trick catalog.
 
-## State
+## State — SECONDARY TRACK as of 2026-03-18
 
-**1244 B, 607/607 pass, ~11.9M cycles.** −244 B this session
-(1488 baseline). Target < 928 B. **316 B to go.**
+**1194 B, 607/607 pass, ~12.0M cycles.** limb5 baseline landed at
+1324 B / 3.2M cycles (commit 6f07517) — 164 B smaller baseline AND
+~4× faster. See `../limb5/ASSESSMENT.md`. **5×54 is the horse.**
+
+limb11 remains useful as the trick catalogue — every win here is a
+port candidate for limb5. But the primary effort moves to limb5.
 
 Pushing now (repo private).
 
