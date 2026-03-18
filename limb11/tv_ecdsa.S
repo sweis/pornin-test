@@ -326,9 +326,9 @@ fe_from_le:
 fe_mul11:
 	push	rbx
 	push	r12
+	mov	r12, rdx            /* b — load before rdx clobbered by imul */
 	push	rdi
-	push	rcx                 /* m → [rbp+16] */
-	push	rdx                 /* b → [rbp+8]  */
+	push	rcx                 /* m → [rbp+8] */
 	enter	2*K*8, 0
 
 	xor	eax, eax
@@ -338,7 +338,6 @@ fe_mul11:
 	rep	stosq               /* rcx = 0 out */
 
 	lea	r8, [rsi + K*8]
-	mov	r12, [rbp + 8]
 
 	push	-K*8
 	pop	r9
@@ -351,7 +350,7 @@ fe_mul11:
 
 	push	rsp
 	pop	rsi
-	mov	r8, [rbp + 16]
+	mov	r8, [rbp + 8]
 	mov	cl, K               /* rcx was 0 from rep stosq */
 .Lro:	push	rsi
 	pop	rdi
@@ -371,11 +370,10 @@ fe_mul11:
 	add	[rsi], rax
 	loop	.Lro
 
-	mov	rdi, [rbp + 24]
+	mov	rdi, [rbp + 16]
 	call	.Lcp_shared
 
 	leave
-	pop	rax
 	pop	rax
 	pop	rax
 	pop	r12
