@@ -570,7 +570,11 @@ tv_ecdsa_p256_verify_asm:
 	push	obc_v1
 	pop	rdi
 	call	bcrun_off
-	jc	.Lfail2
+	/* Carry bc_v1's fail flag on the stack — pt_mul on garbage is
+	 * safe (fixed 264 iters, no bounds issues), and the OR below
+	 * guarantees we return 0 regardless of bc_v3's verdict. */
+	sbb	eax, eax
+	push	rax
 
 	/* Shamir backup: 2-7 → 16-21 (6 slots = 66 qw). */
 	lea	rsi, [r14 + 2*SLOT]
@@ -587,11 +591,9 @@ tv_ecdsa_p256_verify_asm:
 	/* ── pt_mul (dispatches bc_v3 at the end) ── */
 	call	pt_mul
 	sbb	eax, eax
-	inc	eax                 /* eax = !CF = (fail bits were 0) */
-	jmp	.Lfail
-
-.Lfail2:
-	xor	eax, eax
+	pop	rdx
+	or	eax, edx            /* −1 if either bc_v1 or bc_v3 failed */
+	inc	eax
 	jmp	.Lfail
 
 	.section .note.GNU-stack,"",@progbits
