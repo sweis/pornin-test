@@ -107,11 +107,14 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	mov	r11d, 0xBC4F
 	jmp	fe_mul11
 
-.Lcopyhi: /* dst nibble means slot(dst+16) — Shamir backup reach. */
+.Lcopyhi: /* 2 slots from s1 → slot(dst+16). Shamir sources pair:
+ * (2,3)→(16,17), (4,5)→(18,19), (6,7)→(20,21), (0,1)→(22,23). */
 	add	rdi, 16*SLOT
-	/* falls through */
+	push	2*K
+	jmp	.Lcopy_n
 .Lcopy:
 	push	K
+.Lcopy_n:
 	pop	rcx
 	rep	movsq
 	ret

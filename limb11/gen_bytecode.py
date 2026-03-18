@@ -150,9 +150,11 @@ V1 = [
     ('INV',  13,  1,  0),  # w_mont → 13
 
     # ── u1, u2, r_mont  (e @ 7, r @ 0, w @ 13) ──
+    # u2 → 1 (s_mont @ 1 dead after INV — only read, never written).
+    # u1,u2 adjacent at 0,1 so COPYHI can do 2-slot copies.
     MULR2(14, 0),          # r_mont → 14 (reads r @ 0, cR2_p @ 11)
-    ('Nmul', 12,  0, 13),  # u2 → 12 (r,w still live — reads only)
-    ('Nmul',  0,  7, 13),  # u1 → 0  (r overwritten; e,w dead)
+    ('Nmul',  1,  0, 13),  # u2 → 1 (r,w still live — reads only)
+    ('Nmul',  0,  7, 13),  # u1 → 0 (r overwritten; e,w dead)
 
     # ── 1_mont_p for Z ──
     ('SET1',  7,  0,  0),
@@ -162,15 +164,11 @@ V1 = [
     # ── n_mont (LAST read of cR2_p @ 11) ──
     MULR2(15, 9),
 
-    # ── Shamir backup via COPYHI ──
-    ('COPYHI', 0,  2, 0),
-    ('COPYHI', 1,  3, 0),
-    ('COPYHI', 2,  4, 0),
-    ('COPYHI', 3,  5, 0),
-    ('COPYHI', 4,  6, 0),
-    ('COPYHI', 5,  7, 0),
-    ('COPYHI', 6,  0, 0),  # u1 @ 0 → 22
-    ('COPYHI', 7, 12, 0),  # u2 @ 12 → 23
+    # ── Shamir backup — COPYHI copies 2 slots per op ──
+    ('COPYHI', 0,  2, 0),  # 2,3 → 16,17 (Gx,Gy)
+    ('COPYHI', 2,  4, 0),  # 4,5 → 18,19 (Z_G, Qx)
+    ('COPYHI', 4,  6, 0),  # 6,7 → 20,21 (Qy, Z_Q)
+    ('COPYHI', 6,  0, 0),  # 0,1 → 22,23 (u1, u2)
 ]
 
 
