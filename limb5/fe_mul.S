@@ -1,24 +1,20 @@
-/* Standalone 5×54-bit signed-limb Montgomery multiply mod P-256.
- * For SIZE measurement vs current fe_mul_m (143 B).
+/* 5×54 signed-limb Montgomery multiply. R = 2^270.
+ * Output ≡ a·b·R⁻¹ (mod m). SOS: full schoolbook → reduce.
  *
- * Representation: 5 qwords per field element. Limb k holds a signed
- * value nominally in [0, 2^54) but can grow via lazy add/sub. The
- * represented integer is Σ limb[k] · 2^(54k).
+ * Ranges (range_proof.py, K=5 W=54):
+ *   input limbs: |limb| ≤ 2^59 (canonical 54 + RCB ×12 growth)
+ *   products:    |prod| ≤ 2^118 (signed)
+ *   accumulator: 128-bit, peak ~2^119 (signed — fits with 8 bits spare)
+ *   output val:  ~4m (top limb signed, limbs 0..3 in [0, 2^54))
  *
- * Montgomery: R = 2^270. Output ≡ a·b/R (mod p). For p's low 54 bits
- * all-ones, -p^(-1) ≡ 1 (mod 2^54), so the Montgomery quotient is
- * just q = acc[i] & MASK54 — no multiply.
+ * p m0inv = 1 (low 54 bits of p are all-ones → −p⁻¹ ≡ 1 mod 2^54).
+ * n m0inv = 0x11c8aaee00bc4f (doesn't fit imm32 — movabs or r11 preload).
  *
- * SOS structure: full 5×5 schoolbook into a 10-slot × 128-bit
- * accumulator, then 5 reduce iterations.
- *
- * Ranges (from range_limbs.py):
- *   input limbs: |limb| ≤ 2^59 (canonical 2^54 + ×12 RCB growth)
- *   products:    |prod| ≤ 2^118
- *   accumulator: ≤ 2^119 (5 products + reduce contributions)
- *   output val:  ≤ 2^258 ≈ 4p  (NOT reduced to [0,p) — caller lives with it)
- *
- * API: fe_mul5(rdi=dst, rsi=a, rdx=b, rcx=m). r13=MASK54 preloaded.
+ * API: fe_mul5(rdi=dst, rsi=a, rdx=b, rcx=m)
+ *   r11 = m0inv (preloaded by caller: 1 for p, 0x11c8aaee00bc4f for n)
+ *   r13 = MASK  (preloaded, preserved — 0x3fffffffffffff)
+ * Preserves: rbx, rbp, r12, r13, r14, r15 (SysV + r13 invariant).
+ * Restores rcx on exit (INV's 384 calls rely on stable &m).
  */
 
 	.intel_syntax noprefix
@@ -26,118 +22,106 @@
 
 	.equ	W,   54
 	.equ	K,   5
-	.equ	ACC_QW, 2*K*2      /* 10 slots × 2 qwords = 20 qwords */
+	.equ	ACC_QW, 2*K*2      /* 10 slots × 2 qwords = 20 */
 
 .globl fe_mul5
 fe_mul5:
 	push	rbx
-	push	rbp
 	push	r12
-	push	rdi                /* dst — pop at epilogue */
-	push	rcx                /* m — peek via [rsp] */
-	mov	r12, rdx           /* b */
+	mov	r12, rdx           /* b — before rdx clobbered */
+	push	rdi                /* dst */
+	push	rcx                /* m */
+	enter	ACC_QW*8, 0        /* 160 B — 128-bit × 10 accumulator */
 
-	/* Zero the 128-bit × 10 accumulator: 20 qwords. rcx=0 assumed on
-	 * entry (same invariant as current fe_mul_m). */
+	/* Zero accumulator. */
+	xor	eax, eax
+	push	rsp
+	pop	rdi
+	lea	ecx, [rax + ACC_QW]
+	rep	stosq              /* leaves rcx = 0 */
+
+	/* rsi = a (entry value, untouched). Walk a[i] via negative offset
+	 * from end, same trick as limb11 for a tight i-loop. */
+	lea	r8, [rsi + K*8]    /* a + K*8 */
+
+	/* ── Schoolbook: acc[i+j] += a[i] * b[j] ── */
+	push	-K*8
+	pop	r9                 /* r9 = i*8 − K*8, counts to 0 */
+.Lsb:
+	mov	rbx, [r8 + r9]     /* a[i] */
+	lea	rdi, [rbp + r9*2 - K*16]   /* &acc[i] (16 B stride) */
+	mov	rsi, r12           /* b */
+	mov	cl, K              /* rcx = 0 from rep stosq / loop exit */
+	call	.Lin
+	add	r9, 8
+	jnz	.Lsb
+	/* rcx = 0 again. */
+
+	/* ── Reduce: q = (acc[i].lo * m0inv) & MASK; acc += q*m ── */
+	mov	r8, [rbp + 8]      /* m (saved above frame: rbp+8) */
+	lea	r9, [rbp - ACC_QW*8]   /* &acc[0] */
+	mov	cl, K
+.Lrd:
+	push	rcx
+	mov	rbx, [r9]          /* acc[i].lo */
+	imul	rbx, r11           /* * m0inv (low 64 → low 54 OK) */
+	and	rbx, r13           /* q */
+	mov	rdi, r9
+	mov	rsi, r8
+	mov	cl, K              /* rcx.hi was set from push/pop — zero it */
 	xor	ecx, ecx
-.rept ACC_QW
-	push	rcx
-.endr
-	mov	rbp, rsp           /* acc base */
-
-/* ── Schoolbook: for i in 0..5, for j in 0..5: acc[i+j] += a[i]*b[j] ──
- * a[i] loaded into rbx. Inner loop advances rsi (b) and rdi (acc). */
-	push	-K*8               /* i*8, as a negative offset from a+40 */
-	pop	r10
-	add	rsi, K*8           /* rsi → a+40, so [rsi+r10] = a[i] */
-.Lso:
-	mov	rbx, [rsi + r10]   /* a[i], signed */
-	lea	rdi, [rbp + r10*2] /* acc + i*16 */
-	push	r12
 	mov	cl, K
 	call	.Lin
-	pop	r12
-	add	r10, 8
-	jnz	.Lso
-	/* rcx=0 via loop exit. */
 
-/* ── Reduce: for i in 0..5: q = acc[i]&MASK; acc[i..i+4] += q*m;
- *           carry acc[i]>>54 into acc[i+1]. ──
- * Same inner loop (ADD), different multiplier source. */
-	mov	cl, K
-.Lro:
-	mov	rbx, [rbp]         /* acc[i] low64 — low 54 bits are what we need */
-	and	rbx, r13           /* q = acc[i] & MASK54. m0inv=1 for p. */
-	push	rcx
-	push	rbp
-	pop	rdi                /* rdi = acc[i] */
-	mov	rsi, [rsp + ACC_QW*8 + 16]  /* m, past acc+dst+savedrcx on stack */
-	mov	cl, K
-	call	.Lin
-	pop	rcx
-	/* Carry acc[i] >> 54 into acc[i+1]. acc[i] is 128-bit;
-	 * after adding q*m, low 54 bits are 0. High bits carry. */
-	mov	rax, [rbp]
-	mov	rdx, [rbp+8]
-	shrd	rax, rdx, W        /* bits 54-117 of acc[i] */
+	/* acc[i] low 54 bits now 0. Carry acc[i]>>54 into acc[i+1]. */
+	mov	rax, [r9]
+	mov	rdx, [r9 + 8]
+	shrd	rax, rdx, W        /* bits 54..117 of 128-bit acc */
 	sar	rdx, W             /* bits 118+ (signed) */
-	add	[rbp+16], rax
-	adc	[rbp+24], rdx
-	lea	rbp, [rbp+16]      /* advance to acc[i+1] */
-	loop	.Lro
-	/* rbp now points at acc[K] = acc[5]. */
+	add	[r9 + 16], rax
+	adc	[r9 + 24], rdx
 
-/* ── Final carry-propagate: acc[5..9] → 5 output limbs ──
- * Each 128-bit acc slot is bounded ≤ 2^119. After carry-prop, limbs
- * 0..3 are in [0, 2^54), limb 4 absorbs the rest (signed, ≤ 2^42). */
-	mov	rdi, [rsp + ACC_QW*8 + 8]  /* dst */
-	xor	edx, edx           /* carry_lo */
-	xor	ebx, ebx           /* carry_hi */
-	mov	cl, K
+	lea	r9, [r9 + 16]
+	pop	rcx
+	loop	.Lrd
+	/* r9 now at &acc[K]. rcx = 0. */
+
+	/* ── Final carry-prop: acc[K..2K-1] → dst[0..K-1] ──
+	 * 128-bit carry through the chain. Last limb absorbs residual
+	 * (no mask, signed). Running 128-bit carry in r10:rax. */
+	mov	rdi, [rbp + 16]    /* dst */
+	xor	eax, eax           /* carry.lo */
+	xor	r10d, r10d         /* carry.hi */
+	mov	cl, K-1
 .Lcp:
-	mov	rax, [rbp]
-	add	rax, rdx           /* + carry_lo */
-	mov	rdx, [rbp+8]
-	adc	rdx, rbx           /* + carry_hi (128-bit add) */
-	/* rdx:rax = acc[K+k] + carry. Extract low 54, carry rest. */
-	mov	rbx, rax
-	and	rbx, r13           /* low 54 → output limb */
-	mov	[rdi], rbx
-	shrd	rax, rdx, W        /* new carry_lo = bits 54-117 */
-	sar	rdx, W             /* new carry_hi = bits 118+ */
-	mov	rbx, rdx           /* save hi for next iter's adc */
-	mov	rdx, rax           /*       lo for next iter's add */
-	lea	rbp, [rbp+16]
-	scasq                      /* rdi += 8 */
+	add	rax, [r9]
+	adc	r10, [r9 + 8]      /* r10:rax = acc[K+k] + carry */
+	mov	rdx, rax
+	and	rdx, r13           /* low 54 → output limb */
+	mov	[rdi], rdx
+	shrd	rax, r10, W        /* new carry.lo */
+	sar	r10, W             /* new carry.hi */
+	lea	r9, [r9 + 16]
+	scasq
 	loop	.Lcp
-	/* Final carry (rbx:rdx) absorbed into top limb. */
-	add	[rdi-8], rdx       /* limb 4 += final carry_lo << 0... */
-	/* Actually: limb 4 already got (acc[9]+carry)&MASK. The residual
-	 * carry >> 54 is what we add. But we want limb 4 to be the FULL
-	 * (acc[9]+carry)>>0 not just low 54 bits. Redo last iteration
-	 * differently: don't mask the last one.
-	 *
-	 * Simpler: after the loop, undo the mask on limb 4 and add the
-	 * carry that was shifted out. limb[4]_stored = (v & MASK54);
-	 * we want limb[4] = v = (v & MASK) | (carry << 54). So: */
-	shl	rdx, W
-	add	[rdi-8], rdx
-	/* (carry_hi in rbx is 0 here — acc[9] is small enough that
-	 * after >>54 there's nothing in bits 64+. Range analysis gives
-	 * acc[9] ≤ ~2^65; >>54 = ~2^11. rbx=0 holds.) */
+	/* Last limb: value + carry.lo, no mask. carry.hi provably fits
+	 * (max output value ~4m < 2^258; after 4 carry shifts, carry ≪ 2^64). */
+	add	rax, [r9]
+	stosq
 
-	add	rsp, ACC_QW*8 + 16  /* discard acc + m + dst */
+	leave
+	pop	rcx                /* restore m — INV relies on this */
+	pop	rax                /* discard dst */
 	pop	r12
-	pop	rbp
 	pop	rbx
 	ret
 
-/* ── Inner loop: acc[k] += rbx * [rsi++], K times. 128-bit acc. ──
- * rdi → acc slot (advances by 16). rsi → operand (advances by 8).
- * rbx = multiplier. rcx = count. Clobbers rax, rdx, rsi, rdi, rcx. */
+/* ── Inner loop: K iterations of acc += rbx * operand. ──
+ * rdi → acc (128-bit slots, +16 stride). rsi → operand (+8).
+ * rbx = scalar. rcx = count. Clobbers rax, rdx, rsi, rdi, rcx. */
 .Lin:
-	lodsq                      /* rax = next limb */
-	imul	rbx                /* rdx:rax = rax * rbx, signed 128-bit */
+	lodsq
+	imul	rbx                /* rdx:rax = signed 128-bit product */
 	add	[rdi], rax
 	adc	[rdi+8], rdx
 	lea	rdi, [rdi+16]
@@ -146,3 +130,14 @@ fe_mul5:
 
 .globl fe_mul5_end
 fe_mul5_end:
+
+/* ── Test shim: preloads r13 = MASK, r11 = m0inv. ──
+ * C signature: fe_mul5_shim(dst, a, b, m, m0inv) */
+.globl fe_mul5_shim
+fe_mul5_shim:
+	push	r13
+	movabs	r13, (1<<W)-1
+	mov	r11, r8            /* m0inv (5th arg) */
+	call	fe_mul5
+	pop	r13
+	ret

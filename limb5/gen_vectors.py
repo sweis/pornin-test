@@ -34,27 +34,34 @@ for _ in range(50):
     al, bl = split(a), split(b)
     vecs.append((al, bl, mont_mul(al, bl)))
 
-# Lazy-carry inputs: limbs grown to ±2^59 (RCB worst case per range_proof).
-# Value stays in a ~4p range.
+# Lazy-carry inputs: limbs grown beyond 54 bits via carry-borrow perturbation.
+# l[i] += k*2^W, l[i+1] -= k preserves value exactly. With W=54 and
+# |k| ≤ 31, |perturbation| ≤ 2^59 (matches range_proof bound) and
+# the sum still fits signed-int64.
 for _ in range(40):
     a = random.randrange(P)
     b = random.randrange(P)
     al, bl = split(a), split(b)
-    # Perturb: add noise to one limb, subtract equivalent from next.
-    # Keeps value congruent mod P but limbs go signed/large.
     def perturb(l):
         l = list(l)
         for _ in range(3):
             i = random.randrange(K-1)
-            d = random.randrange(-(1<<57), 1<<57)
-            l[i] += d << W
-            l[i+1] -= d
+            k = random.randrange(-31, 32)
+            l[i]   += k << W
+            l[i+1] -= k
+        # Fits int64 check (avoid silent overflow in C).
+        for v in l: assert -(1<<62) < v < (1<<62), v
         return l
     alp, blp = perturb(al), perturb(bl)
-    # Verify perturbation preserved value
-    assert join(alp) % P == a, "perturb broke a"
-    assert join(blp) % P == b, "perturb broke b"
+    assert join(alp) == join(al) and join(blp) == join(bl), "perturb broke value"
     vecs.append((alp, blp, mont_mul(alp, blp)))
+
+# Values beyond p (≤ 4p — RCB feeds these back in).
+for _ in range(10):
+    a = random.randrange(P) + random.randrange(4) * P
+    b = random.randrange(P) + random.randrange(4) * P
+    al, bl = split(a), split(b)
+    vecs.append((al, bl, mont_mul(al, bl)))
 
 # Edge cases.
 zero = split(0)
