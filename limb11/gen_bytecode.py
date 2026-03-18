@@ -151,12 +151,11 @@ V1 = [
     ('INV',   1, 12,  0),  # w_mont → 1
 
     # ── 6. u1 = e·w, u2 = r·w  (MontMul(plain, mont) = plain) ──
-    # e, r stay plain. Sequencing: u1→temp, r_mont, u2, then u1→final
-    # so that 11,12 end up contiguous for one rep-movsq to 22,23.
-    ('Nmul',  0,  7,  1),  # u1 → 0 (temp)           — e @ 7 dead
-    ('MULR2', 14, 11, 15), # r_mont → 14             — cR2_n already dead
-    ('Nmul', 12, 11,  1),  # u2 → 12                 — r, w dead
-    ('COPY', 11,  0,  0),  # u1 → 11
+    # r_mont first (reads r@11). Then u2 (reads r, w — both still live
+    # after this since Nmul writes to 12). Then u1 → 11 overwrites r.
+    ('MULR2', 14, 11, 15), # r_mont → 14
+    ('Nmul', 12, 11,  1),  # u2 → 12 (r,w still live — Nmul reads only)
+    ('Nmul', 11,  7,  1),  # u1 → 11 (r overwritten; e,w dead)
     ('NORMN', 11, 11, 0),
     ('NORMN', 12, 12, 0),
 

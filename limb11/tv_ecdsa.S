@@ -543,15 +543,12 @@ tv_ecdsa_p256_verify_asm:
 
 	/* cP → slot 8 — rdi inherited. Leaves rdi at slot 9. */
 	mov	eax, MASK
-	stosq
-	stosq
-	stosq
-	stosq
+	push	4
+	pop	rcx
+	rep	stosq               /* limbs 0-3 = 0xffffff */
 	xor	eax, eax
-	stosq
-	stosq
-	stosq
-	stosq
+	mov	cl, 4               /* rcx = 0 from rep */
+	rep	stosq               /* limbs 4-7 = 0 */
 	inc	eax
 	stosq
 	mov	eax, 0xffff00
