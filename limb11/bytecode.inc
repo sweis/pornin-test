@@ -87,11 +87,11 @@ bc_v1:
 	.byte	0xa3, 0x44  /* Fsub    4 ←  4, 10 */
 	.byte	0x09, 0x44  /* NORM    4 ←  4,  0 */
 	.byte	0x06, 0x04  /* CHKZ    0 ←  4,  0 */
-	.byte	0xd4, 0xcc  /* Nmul   12 ← 12, 13 */
+	.byte	0xe4, 0xcc  /* Nmul   12 ← 12, 14 */
 	.byte	0x0a, 0x10  /* SET1    1 ←  0,  0 */
-	.byte	0xd4, 0x11  /* Nmul    1 ←  1, 13 */
+	.byte	0xe4, 0x11  /* Nmul    1 ←  1, 14 */
 	.byte	0x07, 0x1c  /* INV     1 ← 12,  0 */
-	.byte	0x14, 0x0e  /* Nmul    0 ← 14,  1 */
+	.byte	0x14, 0x07  /* Nmul    0 ←  7,  1 */
 	.byte	0xf8, 0xeb  /* MULR2  14 ← 11, 15 */
 	.byte	0x14, 0xcb  /* Nmul   12 ← 11,  1 */
 	.byte	0x0b, 0xb0  /* COPY   11 ←  0,  0 */

@@ -93,10 +93,10 @@ for op, d, s1, s2 in RCB:
 # Entry (native verify decodes these):
 #   slot  2,3  = Gx_mont, Gy_mont
 #   slot  5,6  = Qx, Qy (plain, from pub)
+#   slot  7    = e (hash, plain) — chains rdi after Qy
 #   slot  8,9  = cP, cN (limb form)
 #   slot 11,12 = r, s (plain, from sig)
-#   slot 13    = cR2_n (for s → Montgomery-n; dead after INV seed)
-#   slot 14    = e (hash, plain)
+#   slot 14    = cR2_n (chains with cR2_p; dead before r_mont writes 14)
 #   slot 15    = cR2_p
 #
 # Exit:
@@ -144,16 +144,17 @@ V1 = [
     ('CHKZ',  0,  4,  0),
 
     # ── 5. w = s⁻¹ mod n  (Montgomery-n; only s needs conversion) ──
-    ('Nmul', 12, 12, 13),  # s_mont = MontMul_n(s, R²_n)
+    ('Nmul', 12, 12, 14),  # s_mont = MontMul_n(s, R²_n)
     ('SET1',  1,  0,  0),
-    ('Nmul',  1,  1, 13),  # 1_mont_n = R_n  (cR2_n @ 13 dead)
+    ('Nmul',  1,  1, 14),  # 1_mont_n = R_n  (cR2_n @ 14 dead — 3 ops
+                           # before r_mont writes 14, no conflict)
     ('INV',   1, 12,  0),  # w_mont → 1  (s_mont @ 12 dead)
 
     # ── 6. u1 = e·w, u2 = r·w  (MontMul(plain, mont) = plain) ──
     # e, r stay plain. Sequencing: u1→temp, r_mont, u2, then u1→final
     # so that 11,12 end up contiguous for one rep-movsq to 22,23.
-    ('Nmul',  0, 14,  1),  # u1 → 0 (temp)           — e @ 14 dead
-    ('MULR2', 14, 11, 15), # r_mont → 14             — r @ 11 still live
+    ('Nmul',  0,  7,  1),  # u1 → 0 (temp)           — e @ 7 dead
+    ('MULR2', 14, 11, 15), # r_mont → 14             — cR2_n already dead
     ('Nmul', 12, 11,  1),  # u2 → 12                 — r, w dead
     ('COPY', 11,  0,  0),  # u1 → 11
     ('NORMN', 11, 11, 0),
@@ -257,8 +258,8 @@ if __name__ == '__main__':
           file=sys.stderr)
 
     # V1 slot lifetime
-    v1_init = {2:'Gx', 3:'Gy', 5:'Qx', 6:'Qy', 8:'cP', 9:'cN',
-               11:'r', 12:'s', 13:'cR2n', 14:'e', 15:'cR2p'}
+    v1_init = {2:'Gx', 3:'Gy', 5:'Qx', 6:'Qy', 7:'e', 8:'cP', 9:'cN',
+               11:'r', 12:'s', 14:'cR2n', 15:'cR2p'}
     v1_survive = {2:'Gx', 3:'Gy', 8:'cP', 9:'cN'}
     errs, out = simulate('v1', V1, v1_init, v1_survive)
     if errs:

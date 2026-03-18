@@ -3,4 +3,4 @@ commit,bytes,cycles,note
 # Target: < 928. Each row is a working checkpoint (607/607 pass).
 # Pre-607 milestones use cycles=0.
 a1f8ce0,158,0,fe_mul11 standalone (103/103 unit test)
-PENDING,1488,0,PHASE 1 BASELINE — 607/607 pass. Not golfed.
+1260a47,1488,0,PHASE 1 BASELINE — 607/607 pass. Not golfed.

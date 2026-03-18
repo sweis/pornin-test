@@ -62,18 +62,19 @@
 .include "bytecode.inc"
 
 /* Constants — 32 LE bytes each (4 quads, low-qword-first = natural LE).
- * This gives byte 0 = bit 0 of the integer, so bt [cN],ebx indexes
- * bits of n directly. */
+ * Order chosen for rdi chaining: cP-build ends at slot 9 → cN decodes
+ * there; cGX/cGY → 2,3 chain; cR2N/cR2 → 14,15 chain (cR2_n @ 14 is
+ * consumed before r_mont writes 14). */
+cN:	.quad	0xf3b9cac2fc632551, 0xbce6faada7179e84
+	.quad	0xffffffffffffffff, 0xffffffff00000000
 cGX:	.quad	0xe730d418a9143c18, 0xba95fc47edb60179
 	.quad	0xfb732b7762251075, 0x905f76bd3755c661
 cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	.quad	0xe88688dd21f3258b, 0x71ff18aa885d854d
-cN:	.quad	0xf3b9cac2fc632551, 0xbce6faada7179e84
-	.quad	0xffffffffffffffff, 0xffffffff00000000
-cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
-	.quad	0xfffffffffffeffff, 0x0004fffffffdffff
 cR2N:	.quad	0x0f80d88a9a9fedcf, 0x6ab8c68a2abb372e
 	.quad	0xb2392b6bec596190, 0x2d955aba561fc164
+cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
+	.quad	0xfffffffffffeffff, 0x0004fffffffdffff
 
 /* ======================================================================
  * TEXT
@@ -281,10 +282,9 @@ cR2N:	.quad	0x0f80d88a9a9fedcf, 0x6ab8c68a2abb372e
 
 /* ── Decoders ── */
 
-/* fe_from_be — 32 BE bytes → 11 limbs. For sig, pub, hash (all BE per
- * SEC1/FIPS). Preserves rsi for chained decodes (Qx→Qy, r→s). */
+/* fe_from_be — 32 BE bytes → 11 limbs. Exits with rsi = src+32,
+ * rdi = dst+88 — chains Qx→Qy→e and r→s with no setup between. */
 fe_from_be:
-	push	rsi
 	lea	rsi, [rsi + 29]
 	push	K-1
 	pop	rcx
@@ -297,7 +297,7 @@ fe_from_be:
 	movzx	eax, word ptr [rsi + 1]   /* top limb: bytes 0,1 (16 bits) */
 	xchg	al, ah
 	stosq
-	pop	rsi
+	add	rsi, 33             /* src-1 → src+32 */
 	ret
 
 /* fe_from_le — 32 LE bytes → 11 limbs. For constants (cGX, cGY, cN,
@@ -531,10 +531,10 @@ tv_ecdsa_p256_verify_asm:
 	mov	r14, rsp
 
 	push	rdi                 /* sig */
-	push	rdx                 /* pub */
 	push	r8                  /* hv  */
+	push	rdx                 /* pub */
 
-	/* Build cP → slot 8.  p limbs: [FF×4, 0×4, 1, FF00, FFFF]. */
+	/* Build cP → slot 8.  11 stosq's leave rdi at slot 9 = cN's dest. */
 	lea	rdi, [r14 + oCP]
 	mov	eax, MASK
 	stosq
@@ -553,37 +553,28 @@ tv_ecdsa_p256_verify_asm:
 	mov	eax, 0xffff
 	stosq
 
-	/* Decode constants (LE) → slots.
-	 * cGX,cGY,cN,cR2,cR2N are adjacent in .rodata; rsi flows. */
-	lea	rsi, [rip + cGX]
+	/* Constants (LE). rodata order matches rdi-chain opportunities. */
+	lea	rsi, [rip + cN]
+	call	fe_from_le          /* cN → 9         (rdi inherited) */
 	lea	rdi, [r14 + 2*SLOT]
-	call	fe_from_le          /* Gx_mont → 2 */
-	lea	rdi, [r14 + 3*SLOT]
-	call	fe_from_le          /* Gy_mont → 3 */
-	lea	rdi, [r14 + oCN]
-	call	fe_from_le          /* cN → 9 */
-	lea	rdi, [r14 + oR2]
-	call	fe_from_le          /* cR2_p → 15 */
-	lea	rdi, [r14 + 13*SLOT]
-	call	fe_from_le          /* cR2_n → 13 */
-
-	/* Decode user inputs (BE). */
-	pop	rsi                 /* hv */
+	call	fe_from_le          /* cGX → 2 */
+	call	fe_from_le          /* cGY → 3  chain */
 	lea	rdi, [r14 + 14*SLOT]
-	call	fe_from_be          /* e → 14 */
+	call	fe_from_le          /* cR2_n → 14 */
+	call	fe_from_le          /* cR2_p → 15  chain */
+
+	/* User inputs (BE). pub → Qx,Qy,e chain to slots 5,6,7. */
 	pop	rsi                 /* pub */
 	inc	rsi
 	lea	rdi, [r14 + 5*SLOT]
 	call	fe_from_be          /* Qx → 5 */
-	add	rsi, 32
-	lea	rdi, [r14 + 6*SLOT]
-	call	fe_from_be          /* Qy → 6 */
+	call	fe_from_be          /* Qy → 6   chain (rsi+32, rdi+88) */
+	pop	rsi                 /* hv */
+	call	fe_from_be          /* e  → 7   rdi chained */
 	pop	rsi                 /* sig */
 	lea	rdi, [r14 + 11*SLOT]
-	call	fe_from_be          /* r → 11 */
-	add	rsi, 32
-	lea	rdi, [r14 + 12*SLOT]
-	call	fe_from_be          /* s → 12 */
+	call	fe_from_be          /* r  → 11 */
+	call	fe_from_be          /* s  → 12  chain */
 
 	/* ── bc_v1 ── */
 	push	obc_v1
