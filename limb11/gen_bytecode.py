@@ -26,9 +26,10 @@ import sys
 
 # MULR2 = Fmul with s2=15 (bc_run already sets rdx). SQR never used.
 # COPYHI: dst nibble means slot(dst+16) — reaches Shamir backup slots.
+# ZERO/SET1: write 0 or 1 to limb 0, zero the rest. Shared tail.
 OPS = {'Fmul':0, 'Fadd':1, 'Fsub':2, 'Nmul':3,
        'CHKLT':4, 'CHKZ':5, 'INV':6, 'NORM':7,
-       'SET1':8, 'COPY':9, 'CHKNZ':10, 'COPYHI':11}
+       'SET1':8, 'COPY':9, 'CHKNZ':10, 'COPYHI':11, 'ZERO':12}
 
 def MULR2(dst, s1): return ('Fmul', dst, s1, 11)  # cR2_p @ slot 11
 
@@ -169,6 +170,11 @@ V1 = [
     ('COPYHI', 2,  4, 0),  # 4,5 → 18,19 (Z_G, Qx)
     ('COPYHI', 4,  6, 0),  # 6,7 → 20,21 (Qy, Z_Q)
     ('COPYHI', 6,  0, 0),  # 0,1 → 22,23 (u1, u2)
+
+    # ── acc = ∞ = (0:1:0) for pt_mul — replaces pt_mul's 15-B init ──
+    ('ZERO', 0, 0, 0),
+    ('SET1', 1, 0, 0),
+    ('ZERO', 2, 0, 0),
 ]
 
 
@@ -203,9 +209,9 @@ V3 = [
 READS  = {'Fmul':(1,2), 'Fadd':(1,2), 'Fsub':(1,2),
           'Nmul':(1,2), 'CHKLT':(1,2), 'CHKZ':(1,), 'INV':(0,1),
           'NORM':(1,), 'SET1':(), 'COPY':(1,), 'CHKNZ':(1,),
-          'COPYHI':(1,)}
+          'COPYHI':(1,), 'ZERO':()}
 WRITES = {'Fmul', 'Fadd', 'Fsub', 'Nmul', 'INV',
-          'NORM', 'SET1', 'COPY'}  # COPYHI writes high slots, not tracked
+          'NORM', 'SET1', 'COPY', 'ZERO'}
 
 def simulate(name, ops, initial, must_survive):
     """Track what each slot holds. Flag reads of dead slots and
@@ -258,7 +264,7 @@ if __name__ == '__main__':
     # V1 slot lifetime
     v1_init = {0:'r', 1:'s', 2:'Gx', 3:'Gy', 5:'Qx', 6:'Qy', 7:'e',
                8:'cP', 9:'cN', 10:'cR2n', 11:'cR2p'}
-    v1_survive = {2:'Gx', 3:'Gy', 8:'cP', 9:'cN'}
+    v1_survive = {8:'cP', 9:'cN'}  # Gx,Gy dead after COPYHI; slot 2 zeroed for acc
     errs, out = simulate('v1', V1, v1_init, v1_survive)
     if errs:
         print("/* V1 LIFETIME ERRORS: */", file=sys.stderr)

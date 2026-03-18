@@ -87,6 +87,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, .Lnmul-.Ljt
 	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv-.Ljt, .Lnorm-.Ljt
 	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lchknz-.Ljt, .Lcopyhi-.Ljt
+	.byte	.Lzero-.Ljt
 
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cP.
@@ -119,14 +120,18 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	rep	movsq
 	ret
 
-.Lset1:
+.Lzero: /* dst = {0, 0, ..., 0}.  Shares tail with SET1. */
 	xor	eax, eax
-	push	K
+	jmp	.Lset_limb0
+.Lset1: /* dst = {1, 0, ..., 0}. */
+	push	1
+	pop	rax
+.Lset_limb0:
+	stosq                       /* limb 0 = rax, rdi → limb 1 */
+	xor	eax, eax
+	push	K-1
 	pop	rcx
-	push	rdi
 	rep	stosq
-	pop	rdi
-	inc	qword ptr [rdi]
 	ret
 
 .Lfadd: /* limbwise, no carry */
@@ -393,14 +398,7 @@ fe_mul11:
 	jmp	bcrun_off           /* rel8 over pt_mul (~90 B) */
 
 pt_mul:
-	/* acc = ∞ = (0:1:0). Plain Y=1 works for ∞ per HANDOFF. */
-	mov	rdi, r14
-	xor	eax, eax
-	push	3*K
-	pop	rcx
-	rep	stosq
-	inc	qword ptr [r14 + SLOT]
-	/* r12 hoists &u1; bc_run push/pops r12 so it survives .Lcadd. */
+	/* acc = ∞ = (0:1:0) done by bc_v1's tail (ZERO/SET1/ZERO ops). */
 	lea	r12, [r14 + oU1]
 	push	K-1
 	pop	r13
