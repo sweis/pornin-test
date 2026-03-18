@@ -61,15 +61,13 @@
 
 .include "bytecode.inc"
 
-/* Constants — 32 LE bytes each. rodata order: cN,cR2N,cR2,cGX,cGY
- * so cP-build → cN(9) → cR2N(10) → cR2_p(11) all chain, then one
- * lea for cGX/cGY → 2,3. r,s decode to 0,1 via mov rdi,r14 (3 B). */
+/* Constants — 32 LE bytes each. cR2_p DROPPED — projective scale-
+ * invariance lets Q stay plain (level 0) and G scale by Gx_mont.
+ * rodata: cN,cR2N,cGX,cGY → 4 constants (128 B). Chain 9,10 → 2,3. */
 cN:	.quad	0xf3b9cac2fc632551, 0xbce6faada7179e84
 	.quad	0xffffffffffffffff, 0xffffffff00000000
 cR2N:	.quad	0x0f80d88a9a9fedcf, 0x6ab8c68a2abb372e
 	.quad	0xb2392b6bec596190, 0x2d955aba561fc164
-cR2:	.quad	0x0000000000030000, 0xfffbffffffff0000
-	.quad	0xfffffffffffeffff, 0x0004fffffffdffff
 cGX:	.quad	0xe730d418a9143c18, 0xba95fc47edb60179
 	.quad	0xfb732b7762251075, 0x905f76bd3755c661
 cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
@@ -535,11 +533,10 @@ tv_ecdsa_p256_verify_asm:
 	shr	eax, 8              /* 0xffff */
 	stosq
 
-	/* Constants (LE). 9 → 10 → 11 chain, then 2 → 3. */
+	/* Constants (LE). cN → 9, cR2_n → 10 chain; then cGX,cGY → 2,3. */
 	lea	rsi, [rip + cN]
 	call	fe_from_le          /* cN → 9 */
 	call	fe_from_le          /* cR2_n → 10 */
-	call	fe_from_le          /* cR2_p → 11 */
 	lea	rdi, [r14 + 2*SLOT]
 	call	fe_from_le          /* cGX → 2 */
 	call	fe_from_le          /* cGY → 3 */

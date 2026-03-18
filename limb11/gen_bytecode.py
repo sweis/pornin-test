@@ -31,7 +31,8 @@ OPS = {'Fmul':0, 'Fadd':1, 'Fsub':2, 'Nmul':3,
        'CHKLT':4, 'CHKZ':5, 'INV':6, 'NORM':7,
        'SET1':8, 'COPY':9, 'CHKNZ':10, 'COPYHI':11, 'ZERO':12}
 
-def MULR2(dst, s1): return ('Fmul', dst, s1, 11)  # cR2_p @ slot 11
+# cR2_p DROPPED — projective scale-invariance. Q stays plain (level 0),
+# G scales by Gx_mont: backup = (Gx², Gx·Gy, Gx_mont), all level 1.
 
 def emit(stream_name, ops, reserved_write=frozenset()):
     print(f"{stream_name}:")
@@ -96,20 +97,23 @@ for op, d, s1, s2 in RCB:
 # bc_v1: validation + setup. Runs before pt_mul.
 # ──────────────────────────────────────────────────────────────────────
 # Entry (native verify decodes these):
-#   slot  0,1  = r, s (plain) — via mov rdi,r14 (3 B)
+#   slot  0,1  = r, s (plain)
 #   slot  2,3  = Gx_mont, Gy_mont
-#   slot  5,6  = Qx, Qy plain
+#   slot  5,6  = Qx, Qy PLAIN — never converted
 #   slot  7    = e
 #   slot  8,9  = cP, cN
-#   slot 10    = cR2_n (chains after cN; consumed before b-derive)
-#   slot 11    = cR2_p (chains after cR2_n; consumed by all MULR2's)
+#   slot 10    = cR2_n (consumed before b-derive writes there)
 #
 # Exit (for pt_mul):
-#   slot  2-7  stage Gx,Gy,Z,Qx,Qy,Z — COPYHI'd to 16-21
+#   slot 2,3,4 = Gx², Gx·Gy, Gx_mont — backup G scaled by Gx (all level 1)
+#   slot 5,6,7 = Qx, Qy, 1 — Q plain (level 0), Z_Q = plain 1
 #   slot 10    = b_mont (RCB-safe)
-#   slot 14    = r_mont (RCB-safe)
-#   slot 15    = n_mont (RCB-safe)
-#   slots 0,12 hold u1,u2 — COPYHI'd to 22,23
+#   slot 14    = r_plain (RCB-safe) — bc_v3 reads it
+#   slots 0,1  = u1, u2 — COPYHI'd to 22,23
+#
+# LEVEL TRACKING: G@1, Q@0, b@1. RCB products of G-coord·Q-coord → level 0.
+# b·t = 1+0−1 = 0 matches. Doubles: L → 4L−3. Level drifts data-dep but
+# X,Y,Z always same level. Final check: X·1 vs r·Z both at L−1.
 
 V1 = [
     # ── Range checks ──
@@ -118,10 +122,10 @@ V1 = [
     ('CHKLT', 0,  5, 8),  # Qx < p
     ('CHKLT', 0,  6, 8),  # Qy < p
 
-    # ── s_mont FIRST — consumes cR2_n @ 10 so b-derive can write there ──
-    ('Nmul',  1,  1, 10),  # s_mont → 1 (cR2_n @ 10 dead)
+    # ── s_mont — consume cR2_n @ 10 before b-derive writes there ──
+    ('Nmul',  1,  1, 10),
 
-    # ── b-derive — writes slot 10 ──
+    # ── b-derive (G @ level 1; b ends @ level 1) ──
     ('Fmul', 10,  3,  3),
     ('Fmul',  4,  2,  2),
     ('Fmul',  4,  4,  2),
@@ -130,48 +134,51 @@ V1 = [
     ('Fadd',  4,  4,  2),
     ('Fadd', 10, 10,  4),
 
-    # ── Qx, Qy → Montgomery-p (cR2_p @ 11) ──
-    MULR2(5, 5),
-    MULR2(6, 6),
-
-    # ── On-curve check ──
-    ('Fmul',  4,  6,  6),
-    ('Fmul', 13,  5,  5),
-    ('Fmul', 13, 13,  5),
+    # ── On-curve: Y²Z − X³ + 3XZ² − bZ³ ≡ 0, all @ level −2 ──
+    # Q @ 0, b @ 1. Plain Z=1 in slot 12. Z-mults are degree-balancers:
+    #   Y²Z = (−1)+0−1 = −2.  X³ = −2.  3X·Z² = 0+(−1)−1 = −2.
+    #   bZ³ = 1+(−2)−1 = −2.
+    ('SET1', 12,  0,  0),  # Z = 1 (plain)
+    ('Fmul',  4,  6,  6),  # Qy²  @ −1
+    ('Fmul',  4,  4, 12),  # Qy²·Z  @ −2
+    ('Fmul', 13,  5,  5),  # Qx²  @ −1
+    ('Fmul', 13, 13,  5),  # Qx³  @ −2
     ('Fsub',  4,  4, 13),
-    ('Fadd', 13,  5,  5),
-    ('Fadd', 13, 13,  5),
-    ('Fadd',  4,  4, 13),
-    ('Fsub',  4,  4, 10),
+    ('Fmul', 13, 12, 12),  # Z²  @ −1
+    ('Fadd', 11,  5,  5),  # 2Qx  @ 0   (slot 11 free — was cR2_p)
+    ('Fadd', 11, 11,  5),  # 3Qx  @ 0
+    ('Fmul', 11, 11, 13),  # 3Qx·Z²  @ −2
+    ('Fadd',  4,  4, 11),
+    ('Fmul', 13, 13, 12),  # Z³  @ −2
+    ('Fmul', 13, 10, 13),  # b·Z³  @ −2
+    ('Fsub',  4,  4, 13),
     ('NORM',  4,  4,  0),
     ('CHKZ',  0,  4,  0),
 
-    # ── INV  (s_mont @ 1) ──
+    # ── INV ──
     ('COPY', 13,  1,  0),
     ('INV',  13,  1,  0),  # w_mont → 13
 
-    # ── u1, u2, r_mont  (e @ 7, r @ 0, w @ 13) ──
-    # u2 → 1 (s_mont @ 1 dead after INV — only read, never written).
-    # u1,u2 adjacent at 0,1 so COPYHI can do 2-slot copies.
-    MULR2(14, 0),          # r_mont → 14 (reads r @ 0, cR2_p @ 11)
-    ('Nmul',  1,  0, 13),  # u2 → 1 (r,w still live — reads only)
-    ('Nmul',  0,  7, 13),  # u1 → 0 (r overwritten; e,w dead)
+    # ── u1, u2, r_plain ──
+    ('COPY', 14,  0,  0),  # r_plain → 14 (RCB-safe; bc_v3 reads it)
+    ('Nmul',  1,  0, 13),  # u2 → 1
+    ('Nmul',  0,  7, 13),  # u1 → 0 (e @ 7 dead)
 
-    # ── 1_mont_p for Z ──
-    ('SET1',  7,  0,  0),
-    MULR2(7, 7),
-    ('COPY',  4,  7,  0),
+    # ── G-scale: backup = (Gx², Gx·Gy, Gx_mont) — all level 1 ──
+    ('COPY',  4,  2,  0),  # Gx_mont → 4 (Z_G)
+    ('Fmul',  2,  2,  2),  # Gx² → 2
+    ('Fmul',  3,  4,  3),  # Gx·Gy → 3
 
-    # ── n_mont (LAST read of cR2_p @ 11) ──
-    MULR2(15, 9),
+    # ── Z_Q = plain 1 (reuse on-curve's Z @ 12) ──
+    ('COPY',  7, 12,  0),
 
-    # ── Shamir backup — COPYHI copies 2 slots per op ──
-    ('COPYHI', 0,  2, 0),  # 2,3 → 16,17 (Gx,Gy)
-    ('COPYHI', 2,  4, 0),  # 4,5 → 18,19 (Z_G, Qx)
-    ('COPYHI', 4,  6, 0),  # 6,7 → 20,21 (Qy, Z_Q)
+    # ── Shamir backup ──
+    ('COPYHI', 0,  2, 0),  # 2,3 → 16,17 (Gx², Gx·Gy)
+    ('COPYHI', 2,  4, 0),  # 4,5 → 18,19 (Gx_mont=Z_G, Qx)
+    ('COPYHI', 4,  6, 0),  # 6,7 → 20,21 (Qy, 1=Z_Q)
     ('COPYHI', 6,  0, 0),  # 0,1 → 22,23 (u1, u2)
 
-    # ── acc = ∞ = (0:1:0) for pt_mul — replaces pt_mul's 15-B init ──
+    # ── acc = (0:1:0) ──
     ('ZERO', 0, 0, 0),
     ('SET1', 1, 0, 0),
     ('ZERO', 2, 0, 0),
@@ -179,25 +186,27 @@ V1 = [
 
 
 # ──────────────────────────────────────────────────────────────────────
-# bc_v3: projective final check. X ≡ r·Z ∨ X ≡ (r+n)·Z  (mod p)
+# bc_v3: projective final check with level-alignment.
 # ──────────────────────────────────────────────────────────────────────
-# After pt_mul: (X:Y:Z) at slots 0,1,2. RCB has clobbered 3,4,11,12,13.
-# r_mont @ 14, n_mont @ 15 — both survived (RCB never writes them).
+# X,Z at unknown level L (data-dep). r_plain @ 14, n @ 9. Both level 0.
+# r·Z = Fmul(r@0, Z@L) = L−1. X is at L — mismatch.
+# X·1 = Fmul(X@L, 1@0) = L−1. Now both sides match.
 
 V3 = [
-    # d1 = X − r·Z
-    ('Fmul',  3, 14,  2),
-    ('Fsub',  3,  0,  3),
-    # d2 = X − (r+n)·Z
-    ('Fadd',  4, 14, 15),
-    ('Fmul',  4,  4,  2),
-    ('Fsub',  4,  0,  4),
+    ('SET1',  5,  0,  0),  # 1 → 5 (plain; slot 5 = addend, dead post-pt_mul)
+    ('Fmul',  5,  0,  5),  # X·1  @ L−1
+    # d1 = X·1 − r·Z
+    ('Fmul',  3, 14,  2),  # r·Z  @ L−1  (r@0 · Z@L)
+    ('Fsub',  3,  5,  3),
+    # d2 = X·1 − (r+n)·Z
+    ('Fadd',  4, 14,  9),  # r+n  @ 0  (n from slot 9, RCB-safe)
+    ('Fmul',  4,  4,  2),  # (r+n)·Z  @ L−1
+    ('Fsub',  4,  5,  4),
     # d1·d2 ≡ 0
     ('Fmul',  3,  3,  4),
     ('NORM',  3,  3,  0),
     ('CHKZ',  0,  3,  0),
-    # ∞ check: Z ≠ 0.  RCB's Z is an Fadd output — can be kp ≠ 0
-    # for small k (Wycheproof tcId=292 confirms). NORM required.
+    # ∞ check: Z ≠ 0 (Wycheproof tcId=292 — Z can be kp, NORM required)
     ('NORM',  2,  2,  0),
     ('CHKNZ', 0,  2,  0),
 ]
@@ -263,8 +272,8 @@ if __name__ == '__main__':
 
     # V1 slot lifetime
     v1_init = {0:'r', 1:'s', 2:'Gx', 3:'Gy', 5:'Qx', 6:'Qy', 7:'e',
-               8:'cP', 9:'cN', 10:'cR2n', 11:'cR2p'}
-    v1_survive = {8:'cP', 9:'cN'}  # Gx,Gy dead after COPYHI; slot 2 zeroed for acc
+               8:'cP', 9:'cN', 10:'cR2n'}
+    v1_survive = {8:'cP', 9:'cN'}
     errs, out = simulate('v1', V1, v1_init, v1_survive)
     if errs:
         print("/* V1 LIFETIME ERRORS: */", file=sys.stderr)
@@ -275,7 +284,7 @@ if __name__ == '__main__':
           f"15={out.get(15)} */", file=sys.stderr)
 
     # V3 slot lifetime
-    v3_init = {0:'X', 1:'Y', 2:'Z', 8:'cP', 14:'r_mont', 15:'n_mont'}
+    v3_init = {0:'X', 1:'Y', 2:'Z', 8:'cP', 9:'cN', 14:'r_plain'}
     errs, _ = simulate('v3', V3, v3_init, {})
     if errs:
         print("/* V3 LIFETIME ERRORS: */", file=sys.stderr)
