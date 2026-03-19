@@ -64,7 +64,10 @@
 /* Constants — 32 LE bytes each. cR2_p DROPPED — projective scale-
  * invariance lets Q stay plain (level 0) and G scale by Gx_mont.
  * rodata: cN,cR2N,cGX,cGY → 4 constants (128 B). Chain 9,10 → 2,3. */
-cN:	.quad	0xf3b9cac2fc632551, 0xbce6faada7179e84
+/* cN stores n−2 (not n) — INV's bt reads the Fermat exponent directly,
+ * no cmp/jb/je special-case. verify +2's slot 9 after decode (only low
+ * byte differs: 0x4f vs 0x51). */
+cN:	.quad	0xf3b9cac2fc63254f, 0xbce6faada7179e84
 	.quad	0xffffffffffffffff, 0xffffffff00000000
 cR2N:	.quad	0x0f80d88a9a9fedcf, 0x6ab8c68a2abb372e
 	.quad	0xb2392b6bec596190, 0x2d955aba561fc164
@@ -166,8 +169,9 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
  * s2 in ANY limb form (signed cP, unsigned cN) since carry-prop
  * gives the true sign of value(s1)−value(s2). Writes to dst slot
  * (bc_v1 uses slot 0, overwritten by Fadd 0,5,5 before next read). */
+	push	rdi
 	call	.Lfsub
-	sub	rdi, SLOT           /* back to dst start */
+	pop	rdi                 /* back to dst; push/pop beats sub rdi,SLOT */
 	call	.Lcprop
 	test	byte ptr [rdi + K*8 - 1], 0x80
 	jnz	2f                  /* negative → s1 < s2 → pass */
@@ -189,10 +193,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	pop	rdi
 	pop	rdx
 	call	.Lnmul              /* dst = dst² */
-	cmp	ebx, 4
-	jb	.Lmul               /* bits 0-3: n-2 has 1111 */
-	je	.Lnx                /* bit 4: n-2 has 0 */
-	bt	dword ptr [rip + cN], ebx
+	bt	dword ptr [rip + cN], ebx   /* rodata IS n-2 now */
 	jnc	.Lnx
 .Lmul:	pop	rdi
 	pop	rdx                 /* rdx = src */
@@ -531,7 +532,8 @@ tv_ecdsa_p256_verify_asm:
 	/* Constants (LE). cN,cR2_n,cGX,cGY → 9,10,11,12 — all chain.
 	 * Then r,s → 13,14 chain too. ZERO lea's after the Qx start. */
 	lea	rsi, [rip + cN]
-	call	fe_from_le          /* cN → 9 */
+	call	fe_from_le          /* cN (= n−2) → 9; rdi now at slot 10 */
+	add	byte ptr [rdi - SLOT], 2   /* slot 9 limb 0: 0x63254f → 0x632551 */
 	call	fe_from_le          /* cR2_n → 10 */
 	call	fe_from_le          /* cGX → 11 */
 	call	fe_from_le          /* cGY → 12 */
