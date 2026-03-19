@@ -85,7 +85,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, .Lnmul-.Ljt
 	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv-.Ljt, .Lnorm-.Ljt
 	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lchknz-.Ljt, .Lcopyhi-.Ljt
-	.byte	.Lzero-.Ljt
+	/* ZERO dropped — Fsub(x,x)=0 does the same job. */
 
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cN.
@@ -115,13 +115,9 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	rep	movsq
 	ret
 
-.Lzero:
-	xor	eax, eax
-	jmp	.Lset_l0
 .Lset1:
 	push	1
 	pop	rax
-.Lset_l0:
 	stosq
 	xor	eax, eax
 	push	K-1
@@ -330,13 +326,11 @@ fe_mul5:
 	pop	r9
 .Lcios:	mov	rbx, [r8 + r9]              /* a[i] */
 	lea	r10, [rbp + r9*2 - K*16]    /* &acc[i] — disp8 (-80) */
-	mov	rdi, r10
 	mov	rsi, r12                    /* b */
-	call	.Lcnt
+	call	.Lcnt                       /* .Lcnt sets rdi = r10 itself */
 	mov	rbx, [r10]                  /* acc[i].lo */
 	imul	rbx, r11
 	and	rbx, r13                    /* q */
-	mov	rdi, r10
 	mov	rsi, [rbp + 8]              /* m */
 	call	.Lcnt
 	mov	rax, [r10]                  /* acc[i] ≡ 0 mod 2^W now */
@@ -379,7 +373,8 @@ fe_mul5:
 	pop	rbx
 	ret
 
-.Lcnt:	mov	cl, K       /* rcx high bytes zero — from rep stosq / prior .Lin */
+.Lcnt:	mov	rdi, r10    /* both CIOS call sites need rdi = &acc[i] */
+	mov	cl, K       /* rcx high bytes zero — from rep stosq / prior .Lin */
 .Lin:	lodsq
 	imul	rbx
 	add	[rdi], rax

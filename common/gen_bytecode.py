@@ -179,10 +179,11 @@ V1 = [
     ('COPYHI', 4,  6, 0),  # 6,7 → 20,21 (Qy, 1=Z_Q)
     ('COPYHI', 6,  0, 0),  # 0,1 → 22,23 (u1, u2)
 
-    # ── acc = (0:1:0) ──
-    ('ZERO', 0, 0, 0),
+    # ── acc = (0:1:0). Fsub(x,x)=0 — ZERO handler not needed. Both
+    # slots hold valid values here (0=u1, 2=Gx²) so self-subtract is safe. ──
+    ('Fsub', 0, 0, 0),
     ('SET1', 1, 0, 0),
-    ('ZERO', 2, 0, 0),
+    ('Fsub', 2, 2, 2),
 ]
 
 
