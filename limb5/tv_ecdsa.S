@@ -102,8 +102,9 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
  * jt entry lands at ~223. No stub needed (−5 B). .Lnmul pays +2 B for
  * its jmp but that's still net −3 B. */
 
-.Lcopyhi: /* 8 slots from s1 → slot(dst+16). Single call in bc_v1. */
-	add	rdi, 16*SLOT
+.Lcopyhi: /* 8 slots from s1 → slots 16..23. Single call: dst=15 encoded
+ * in bc_v1 so bc_run gives rdi = r14+600; +SLOT → 640 (disp8 imm). */
+	add	rdi, SLOT
 	push	8*K
 	jmp	.Lcopy_n
 .Lcopy:

@@ -101,7 +101,7 @@ bc_v1:
 	.byte	0xc0, 0x1b  /* Fmul    1 ← 11, 12 */
 	.byte	0x09, 0x2b  /* COPY    2 ← 11,  0 */
 	.byte	0x09, 0x5f  /* COPY    5 ← 15,  0 */
-	.byte	0x0a, 0x00  /* COPYHI  0 ←  0,  0 */
+	.byte	0x0a, 0xf0  /* COPYHI 15 ←  0,  0 */
 	.byte	0x02, 0x00  /* Fsub    0 ←  0,  0 */
 	.byte	0x08, 0x10  /* SET1    1 ←  0,  0 */
 	.byte	0x22, 0x22  /* Fsub    2 ←  2,  2 */

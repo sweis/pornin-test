@@ -193,7 +193,10 @@ V1 = [
     ('COPY',  5, 15,  0),
 
     # ── Shamir backup: slots 0-7 contiguous → one COPYHI (8 slots). ──
-    ('COPYHI', 0,  0, 0),  # 0..7 → 16..23
+    # dst=15: bc_run gives rdi = r14+15·SLOT = r14+600; handler adds
+    # one more SLOT (4B disp8 vs 7B disp32 for +640 directly). dst is
+    # overwritten before rep movsq — slot 15 not actually touched.
+    ('COPYHI', 15,  0, 0),  # 0..7 → 16..23
 
     # ── acc = (0:1:0). ──
     ('Fsub', 0, 0, 0),
