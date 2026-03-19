@@ -532,9 +532,12 @@ tv_ecdsa_p256_verify_asm:
 	lea	rsi, [rip + cN]
 	call	fe_from_le          /* cN (= n−2) → 9; rdi now at slot 10 */
 	add	byte ptr [rdi - SLOT], 2   /* slot 9 limb 0: 0x63254f → 0x632551 */
-	call	fe_from_le          /* cR2_n → 10 */
-	call	fe_from_le          /* cGX → 11 */
-	call	fe_from_le          /* cGY → 12 */
+	push	3                   /* loop cR2_n, cGX, cGY — fe_from_le zeroes */
+	pop	rcx                 /*   rcx (loop decrements) so push/pop each */
+1:	push	rcx
+	call	fe_from_le
+	pop	rcx
+	loop	1b
 
 	pop	rsi                 /* sig */
 	call	fe_from_be          /* r → 13 */

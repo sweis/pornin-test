@@ -25,4 +25,5 @@ fec3c0d,1201,0,Full-chain decodes (zero lea's post-Qx); Gx² shared b-derive→G
 2bbb851,1137,12090000,fe_from_le: lodsd+dec rsi beats mov+add for +3 advance (−2).
 3fee5eb,1129,12090000,Hoist sign-test into .Lcprop tail — 3 callers branch on returned flags (−8).
 4728422,1127,12090000,bcrun_off: lea directly into rbx after push (drops push rdi;pop rbx). Ported from limb8.
-HEAD,1120,12090000,SF from Lcp_shared's add (−4, no test needed); COPYHI dst=15 disp8 (−3). Ported from limb5.
+8629b61,1120,12090000,SF from Lcp_shared's add (−4, no test needed); COPYHI dst=15 disp8 (−3). Ported from limb5.
+HEAD,1119,12090000,Lasmod: imul rax,rdx (4B) for ±1 conditional negate beats xor+sub (6B). Laddm +1B for push 1. Net −1.
