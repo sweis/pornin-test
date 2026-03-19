@@ -327,56 +327,48 @@ fe_mul5:
 
 	lea	r8, [rsi + K*8]
 
-	/* Schoolbook: acc[i+j] += a[i]·b[j] (128-bit). */
+	/* CIOS: schoolbook row + reduce row per iteration. r10 = &acc[i]
+	 * (survives .Lin). r9 indexes a[] (stride 8); ·2 gives acc stride. */
 	push	-K*8
 	pop	r9
-.Lsb:	mov	rbx, [r8 + r9]
-	lea	rdi, [rbp + r9*2 - K*16]
-	mov	rsi, r12
-	mov	cl, K
-	call	.Lin
-	add	r9, 8
-	jnz	.Lsb
-
-	/* Reduce: q = (acc[i].lo · m0inv) & MASK; acc += q·m; carry >>54. */
-	mov	r8, [rbp + 8]       /* m */
-	lea	r9, [rbp - ACC_QW*8]
-	mov	cl, K
-.Lrd:	push	rcx
-	mov	rbx, [r9]
+.Lcios:	mov	rbx, [r8 + r9]              /* a[i] */
+	lea	r10, [rbp + r9*2 - K*16]    /* &acc[i] — disp8 (-80) */
+	mov	rdi, r10
+	mov	rsi, r12                    /* b */
+	call	.Lcnt
+	mov	rbx, [r10]                  /* acc[i].lo */
 	imul	rbx, r11
-	and	rbx, r13
-	mov	rdi, r9
-	mov	rsi, r8
-	xor	ecx, ecx
-	mov	cl, K
-	call	.Lin
-	mov	rax, [r9]
-	mov	rdx, [r9 + 8]
+	and	rbx, r13                    /* q */
+	mov	rdi, r10
+	mov	rsi, [rbp + 8]              /* m */
+	call	.Lcnt
+	mov	rax, [r10]                  /* acc[i] ≡ 0 mod 2^W now */
+	mov	rdx, [r10 + 8]
 	shrd	rax, rdx, W
 	sar	rdx, W
-	add	[r9 + 16], rax
-	adc	[r9 + 24], rdx
-	lea	r9, [r9 + 16]
-	pop	rcx
-	loop	.Lrd
+	add	[r10 + 16], rax
+	adc	[r10 + 24], rdx
+	add	r9, 8
+	jnz	.Lcios
 
-	/* Carry-prop: acc[K..2K-1] (128-bit) → dst[0..K-1] (54-bit + top). */
+	/* Carry-prop: acc[K..2K-1] (128-bit) → dst[0..K-1]. r10 ended
+	 * at &acc[K-1]; source = r10+16. rbx = hi accumulator (free). */
+	lea	rsi, [r10 + 16]
 	mov	rdi, [rbp + 16]
 	xor	eax, eax
-	xor	r10d, r10d
+	xor	ebx, ebx
 	mov	cl, K-1
-.Lcp5:	add	rax, [r9]
-	adc	r10, [r9 + 8]
+.Lcp5:	add	rax, [rsi]
+	adc	rbx, [rsi + 8]
 	mov	rdx, rax
 	and	rdx, r13
 	mov	[rdi], rdx
-	shrd	rax, r10, W
-	sar	r10, W
-	lea	r9, [r9 + 16]
+	shrd	rax, rbx, W
+	sar	rbx, W
+	lea	rsi, [rsi + 16]
 	scasq
 	loop	.Lcp5
-	add	rax, [r9]
+	add	rax, [rsi]
 	stosq
 
 	leave
@@ -386,6 +378,7 @@ fe_mul5:
 	pop	rbx
 	ret
 
+.Lcnt:	mov	cl, K       /* rcx high bytes zero — from rep stosq / prior .Lin */
 .Lin:	lodsq
 	imul	rbx
 	add	[rdi], rax
