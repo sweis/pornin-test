@@ -18,3 +18,5 @@ a9f95b3,914,4686000,bc_run: mov eax,[rbx] over-reads 4B (was movzx WORD). and ea
 93ceaad,898,5134000,fe_from_be_pair: call fe_from_be falls through to _next. 2× 10B call-pair → 5B. Helper +5B. −5 B. UNDER 900.
 15e27f7,912,3954000,DEFAULT build (64-bit product). DOMINATES THOMAS 928/4.48M. Shared-code grind shrunk all 3 variants.
 15e27f7,970,3470000,SOLINAS_P build. Same shared-code shrink.
+9e717ab,916,3401000,DEFAULT: #ifdef .Lop3 loop→dec;jnz. +4 B −560K cyc. SMALL_MUL8 floor 898 B untouched. 12 B + 1.08M cyc under Thomas.
+9e717ab,974,2917000,SOLINAS_P: same #ifdef. +4 B −553K cyc (also benefits from .Lop3 fix).
