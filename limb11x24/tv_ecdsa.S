@@ -117,30 +117,8 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	ret
 
 /* Fadd/Fsub merged: r8 ∈ {+1,−1}; imul r9,r8 conditionally negates.
- * 34→32 B (ported from limb5x56 fc89ce3). imul adds ~3 cyc/iter but
- * FAST keeps them separate with dec;jnz (see #ifdef below). */
-#ifdef FAST
-.Lfadd:
-	push	K
-	pop	rcx
-1:	lodsq
-	add	rax, [rdx]
-	stosq
-	lea	rdx, [rdx+8]
-	dec	ecx
-	jnz	1b
-	ret
-.Lfsub:
-	push	K
-	pop	rcx
-1:	lodsq
-	sub	rax, [rdx]
-	stosq
-	lea	rdx, [rdx+8]
-	dec	ecx
-	jnz	1b
-	ret
-#else
+ * 34→32 B (ported from limb5x56 fc89ce3). imul ~3 cyc/iter but the
+ * `loop` it shares a body with is ~7 — FAST swaps just the loop. */
 .Lfsub:
 	push	-1
 	jmp	1f
@@ -155,9 +133,13 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	add	rax, r9
 	stosq
 	lea	rdx, [rdx+8]
+#ifdef FAST
+	dec	ecx
+	jnz	2b
+#else
 	loop	2b
-	ret
 #endif
+	ret
 
 .Lchkz:  /* ebp bit 0 ← (s1 != 0) XOR (dst == 1). CHKNZ = CHKZ with dst=1.
   * bc_run sets rdi = r14 + dst·SLOT.  dst·SLOT ∈ {0, 88}; 88>>6 = 1. */
@@ -333,18 +315,29 @@ fe_mul11:
 	pop	rbx
 	ret
 
+/* .Lin is THE hotspot: 2 calls/CIOS row × 11 rows × ~7K fe_mul11 ≈ 1.7M
+ * iterations. `loop` (~7 cyc microcoded) + `scasq` (~3 cyc + store-fwd
+ * stall from the add [rdi] right above) dominate. FAST costs +4 B.
+ * (lodsq→mov;add tested: +5 B, ~30K cyc — OoO hides it behind imul.) */
 .Lcnt:	mov	cl, K               /* callers have rcx=0 */
 .Lin:	lodsq
 	imul	rbx
 	add	[rdi], rax
+#ifdef FAST
+	add	rdi, 8
+	dec	ecx
+	jnz	.Lin
+#else
 	scasq
 	loop	.Lin
+#endif
 	ret
 
 /* ── .Lcp_shared + decoders — moved here (after fe_mul11) to keep
  * the handler region under 256 B for the jt u8 constraint. ── */
 
-.Lcp_shared:	/* out-of-place carry-prop rsi → rdi. */
+.Lcp_shared:	/* out-of-place carry-prop rsi → rdi. ~77K iters —
+ * FAST doesn't touch: +3 B bought <10K cyc (store-fwd handles push;pop). */
 	xor	edx, edx
 	push	K-1
 	pop	rcx
