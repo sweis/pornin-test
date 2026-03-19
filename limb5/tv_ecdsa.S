@@ -149,22 +149,19 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	loop	1b
 	ret
 
-.Lchknz:
-	call	.Lorall
-	cmc
-	jmp	.Ladc
-.Lchkz:
-	call	.Lorall
-.Ladc:	rcl	ebp, 1
+.Lchknz: /* bit 0 ← (s1 == 0).  CHKZ sets bit 0 = (s1≠0); xor flips. */
+	call	.Lchkz
+	xor	ebp, 1
 	ret
-.Lorall:
+.Lchkz:
 	xor	edx, edx
 	push	K
 	pop	rcx
 1:	lodsq
 	or	rdx, rax
 	loop	1b
-	neg	rdx
+	neg	rdx                 /* CF = (rdx != 0) */
+	rcl	ebp, 1
 	ret
 
 .Lchklt:
@@ -417,18 +414,20 @@ fe_mul5:
 	jmp	bcrun_off
 
 pt_mul:
-	lea	r12, [r14 + oU1]
+	/* r12 holds &.Ljt (set in verify) — use direct disp32 bt's here.
+	 * The two bt encodings are 9 B each; prior lea+bt+bt was 7+5+6=18.
+	 * Wash on pt_mul, but frees r12 for bc_run to inherit. */
 	push	K-1
 	pop	r15
 .Lpo:	push	W-1
 	pop	rbx
 .Lpi:	mov	rsi, r14
 	call	.Lcadd
-	bt	[r12 + r15*8], ebx
+	bt	[r14 + r15*8 + oU1], ebx
 	jnc	1f
 	lea	rsi, [r14 + oBAK]
 	call	.Lcadd
-1:	bt	[r12 + r15*8 + SLOT], ebx
+1:	bt	[r14 + r15*8 + oU1 + SLOT], ebx
 	jnc	2f
 	lea	rsi, [r14 + oBAK + 3*SLOT]
 	call	.Lcadd
@@ -447,13 +446,12 @@ bcrun_off:
 bc_run:
 	push	rbp
 	push	rbx
-	push	r12
 	push	rdi
 	pop	rbx
 	xor	ebp, ebp
-	lea	r12, [rip + .Ljt]
+	/* r12 = &.Ljt inherited from verify; fe_mul5 preserves it. */
 .Lbc:
-	movzx	eax, word ptr [rbx]
+	mov	eax, [rbx]          /* over-read 2 B — and eax,0xF later clears */
 	add	rbx, 2
 	test	al, al
 	jz	.Lbce
@@ -473,7 +471,7 @@ bc_run:
 	add	rdx, r14
 
 	and	eax, 0xF
-	movzx	eax, byte ptr [r12 + rax]
+	mov	al, [r12 + rax]     /* high bytes zero from the `and` above */
 	add	rax, r12
 	lea	rcx, [r14 + oCN]
 	call	rax
@@ -481,7 +479,6 @@ bc_run:
 
 .Lbce:	neg	ebp
 	sbb	eax, eax
-	pop	r12
 	pop	rbx
 	pop	rbp
 	ret
@@ -523,6 +520,7 @@ tv_ecdsa_p256_verify_asm:
 .Lok:
 	mov	r14, rsp
 	movabs	r13, (1<<W)-1       /* MASK — preserved by everything below */
+	lea	r12, [rip + .Ljt]   /* jump table — preserved by handlers + fe_mul5 */
 
 	push	rdi                 /* sig */
 	push	r8                  /* hv */
