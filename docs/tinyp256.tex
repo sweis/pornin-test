@@ -38,7 +38,7 @@
 \newcommand{\saved}[1]{\textcolor{green!50!black}{\textbf{$-$#1\,B}}}
 \newcommand{\spent}[1]{\textcolor{red!70!black}{\textbf{$+$#1\,B}}}
 
-\title{\bfseries Shrinking an ECDSA Verifier to 898 Bytes\\[0.3em]
+\title{\bfseries Shrinking an ECDSA Verifier to 890 Bytes\\[0.3em]
        \large A beginner's guide to the tricks that worked}
 \author{}
 \date{March 2026}
@@ -48,7 +48,7 @@
 
 \begin{abstract}\noindent
 This report walks through how an ECDSA/P-256 signature verifier was
-shrunk from \bytes{3076} of portable C down to \bytes{898} of x86-64
+shrunk from \bytes{3076} of portable C down to \bytes{890} of x86-64
 machine code --- a factor of 3.4$\times$. The target context is a
 boot~ROM: the code must fit in a tiny mask-programmed memory, has no
 libc, and verifies exactly one signature before jumping to firmware.
@@ -183,6 +183,7 @@ Size & $\Delta$ & What changed \\
  942\,B & $-$43    & \S\ref{sec:runtimecp}: \textbf{Build $p$ at runtime} + fe\_iszero inlines \\
  933\,B & $-$9     & \S\ref{sec:efd}: \textbf{EFD reschedule} --- reorder for disp8 reach \\
  898\,B & $-$35    & \S\ref{sec:below}: \textbf{Over-copy, decoder preload, paired decode} \\
+ 890\,B & $-$8     & \S\ref{sec:grind}: \texttt{repe scasq} zero-check, suffix-sharing \\
 \bottomrule
 \end{tabular}
 \caption{Major milestones. Sizes between rows are connected by dozens
@@ -747,7 +748,7 @@ allocation to shrink an addressing mode in unrelated native code.}
 \section{Below what looked like the floor}
 \label{sec:below}
 
-\noindent\emph{From \bytes{933} to \bytes{898}.}
+\noindent\emph{From \bytes{933} to \bytes{890}.}
 
 The 933-byte build sat unchanged for long enough that it started to
 feel like a hard limit for this architecture. It wasn't. None of the
@@ -892,8 +893,16 @@ source has comments at every point where the invariant is consumed.
 
 % ======================================================================
 \section{Things that didn't work}
+\label{sec:deadends}
 
-Not every idea pans out. A few instructive failures:
+This section is longer than most ``negative results'' sections because
+several of the failures were more informative than the successes. The
+architecture we ended up with --- RCB, Shamir's trick, bytecode
+interpreter, $q=t[\text{top}]$ --- was not a foregone conclusion. We
+built prototypes of three alternative architectures to find out whether
+it was the right one. It was.
+
+\subsection{Implementation-level failures}
 
 \begin{description}[leftmargin=1em,style=nextline]
 \item[Merging schoolbook and reduce into one loop.] The multiply
@@ -918,6 +927,168 @@ Not every idea pans out. A few instructive failures:
   reducer serving both moduli is smaller.
 \end{description}
 
+\subsection{Dropping Shamir's trick}
+
+The scalar multiplication loop computes $u_1 \cdot G + u_2 \cdot Q$.
+Shamir's trick (\S\ref{sec:slotshift}) does this in one pass: at each
+bit, double once, then conditionally add $G$ or $Q$ or both. The
+alternative is simpler: compute $u_1 \cdot G$, compute $u_2 \cdot Q$,
+add the results. One routine called twice instead of a two-scalar
+loop with its backup tables and dual bit-tests.
+
+This seemed promising for size. The reference implementation
+\texttt{p256-m}~\cite{p256m} does exactly this, and its README says
+``in order to minimize code size.'' There is also a neat theorem
+(Hamburg~\cite{hamburg}) showing that if you prepare the scalar
+carefully --- force it odd, initialise the ladder to a specific state
+--- then inside the loop the running point can never coincide with the
+base point or its negative. That means the edge cases RCB exists to
+handle (\S\ref{sec:rcb}) never occur, and you can use an older,
+simpler, faster addition formula with no branches at all.
+
+We built it. It measured \spent{277}. Here is where the bytes went:
+
+\begin{center}
+\begin{tabular}{@{}lrl@{}}
+\toprule
+Component & $\Delta$ & Why it costs \\
+\midrule
+Bytecode for the two formulas & \saved{7} & About what you'd expect \\
+Conditional ladder setup       & \spent{50} & Bytecode can't branch \\
+Two-call verify tail           & \spent{117} & Arg setup $\times$ 2; combining add \\
+Coordinate-system mismatch     & \spent{33} & Needs a mod-$p$ inversion back \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The bytecode saving is real --- RCB's 43-operation complete formula
+compresses to \bytes{87}, and the two simpler incomplete formulas
+together compress to \bytes{80}. Seven bytes is the cost of
+completeness at the bytecode level. That is astonishingly cheap.
+
+Everything else is infrastructure we already have for free and would
+have to rebuild. The ladder setup needs a branch (is the scalar odd or
+even?), but the bytecode interpreter is straight-line --- so the
+branch lives in assembly, and each arm is a full setup sequence. The
+two results need combining with a final add, but that add \emph{can}
+hit the edge cases the ladder avoided --- so the three-way branch
+comes back for one call. And the simpler formulas use a different
+coordinate system (Jacobian) than ours (homogeneous), so converting
+for the final combine brings back the mod-$p$ inversion we deleted in
+\S\ref{sec:projcheck}.
+
+The lesson is not that \texttt{p256-m}'s authors were wrong. Their
+baseline is C with separate functions and a branchy verify tail; adding
+a three-way combine costs them twenty bytes. Our baseline is 27 bytes
+of fall-through. The same structural change has wildly different cost
+against different baselines.
+
+\subsection{Single-kernel modular multiply}
+
+The modular multiply (\S\ref{sec:nomont}) interleaves product and
+reduction row by row. Gueron~\cite{gueron} notes, for the general
+Montgomery case, that you can deinterleave: compute the full product,
+then the full reduction, using one big multiply routine called twice.
+The appeal for size is code reuse --- one kernel, two call sites.
+
+For P-256 specifically there seemed to be a bonus. Montgomery
+reduction computes a correction factor by multiplying by a magic
+constant, $-p^{-1}$ mod $2^W$ where $W$ is the limb width. For $W \le
+96$, $p$'s low bits are all ones, so this constant is exactly 1 and
+the multiply is free. If we take $W = 256$ --- one giant limb --- would
+the constant still be 1, making the correction step a no-op?
+
+It would not:
+\[
+-p^{-1} \bmod 2^{256} = \texttt{0xffffffff\,00000002}\cdots\texttt{00000001}
+\]
+The 96-bit all-ones run stops at bit 96. Beyond that, $p$ has
+structure, and its inverse has structure too. The free correction
+disappears.
+
+The deeper problem: our inner loop already \emph{is} the factored
+form. One small routine (\texttt{.Lcnt}, 15 bytes) is called twice per
+row --- once for product, once for reduction. Deinterleaving would mean
+two outer loops instead of one, duplicating the loop counter and tail
+machinery. We know this costs bytes because an earlier commit went the
+other direction, merging two separate loops into the current
+interleaved form, and measured \saved{7}.
+
+\subsection{Scalar splitting and sparse recodings}
+
+Two standard speedups for scalar multiplication:
+\begin{itemize}
+\item Some curves have a cheap ``endomorphism'' --- a way to multiply
+  any point by a fixed large constant almost for free --- and you can
+  split a 256-bit scalar into two 128-bit halves, halving the loop.
+  P-256 has no such endomorphism. This is a property of the curve's
+  algebraic structure (its $j$-invariant) and is not fixable.
+\item Recoding the scalar in a sparser base (non-adjacent form, window
+  methods) reduces the number of additions, because more digits are
+  zero. This saves arithmetic operations --- but our bytecode is two
+  bytes per operation whether you execute it once or a thousand times.
+  Fewer \emph{executions} of the add step saves time, not code. The
+  recoder itself is pure overhead.
+\end{itemize}
+Both are genuine speedups; neither touches the size axis in the
+direction we want.
+
+\subsection{Finding bytecode hidden in other bytes}
+
+The bytecode is 2-byte operations, and we have hundreds of bytes of
+constants and instruction encodings sitting in the binary. Could any
+of those bytes, by accident, already encode a useful bytecode
+sequence? If three consecutive operations from our add formula happened
+to appear inside the bytes of a curve constant, we could point the
+interpreter there and save six bytes of storage.
+
+We scanned exhaustively. Nothing matches. The bytecode encoding is
+dense --- roughly two-thirds of all byte values are valid first bytes
+of \emph{some} operation --- which means random bytes produce long runs
+of syntactically valid but semantically useless operations. There is a
+16-operation ``valid'' run inside one of the constants; it does
+nothing useful.
+
+The same question one level down: x86 instructions are
+variable-length, so the bytes of one instruction, starting at an
+offset, decode as a different instruction. If a useful instruction is
+hidden inside another, you can jump to the offset and get it for free.
+We found exactly one such gadget: inside the four-byte encoding of
+\texttt{imul eax, r11d}, starting at byte three, is \texttt{scasd;
+ret} --- a legitimate two-instruction function. It advances \texttt{rdi}
+by four. We work in eight-byte words. Useless.
+
+A tamer version did find something: two functions that end with the
+same three bytes (\texttt{stosq; ret}) and sit 43 bytes apart. One
+jumps to the other's tail. \saved{1}.
+
+\subsection{The non-portability of tricks}
+
+One of the Montgomery tracks (\S\ref{sec:limbs}) found a neat
+consolidation: merge two loops (``add the modulus while the value is
+negative'' and ``subtract the modulus until it goes negative'') into
+one, using the CPU's sign-extend instruction to pick the direction
+each iteration. The termination test is a single \texttt{or edx, eax;
+js} --- if we just subtracted, the \texttt{or} is negative regardless
+(loop); if we just added, the \texttt{or} equals the top limb, and the
+sign flag tracks it (exit when non-negative). \saved{3} there.
+
+Porting to the other Montgomery tracks saved only one byte, or
+nothing. Two costs materialised that the original track didn't have.
+First, its carry-propagation routine happened to end with the top limb
+already in a register --- the trick got its input for free. The other
+tracks' routines don't end that way and need an extra load. Second,
+the original track has eleven 24-bit limbs; the top limb after carry
+propagation fits in 18 bits, so bit 31 of a 32-bit register is
+genuinely the sign bit and a 2-byte \texttt{or} works. The five-limb
+tracks have wider top limbs --- up to 44 bits --- and bit 31 is data,
+not sign. They need the 3-byte REX-prefixed \texttt{or}.
+
+The trick was not ``merge the loops.'' It was ``merge the loops when
+your carry-prop tail happens to leave the operand loaded and your limb
+count happens to fit in half a register.'' Architectural coincidences
+compound; so does their absence.
+
 % ======================================================================
 \section{Other limb widths: 11$\times$24, 5$\times$54, 5$\times$56}
 \label{sec:limbs}
@@ -926,7 +1097,7 @@ Everything above is one architecture: eight 32-bit words per field
 element, plain (non-Montgomery) reduction. That choice was made early
 and then optimised hard. But it's a choice, and other choices carve
 up the problem differently. This section sketches the alternatives
-explored in parallel --- none has beaten \bytes{898} yet, but each
+explored in parallel --- none has beaten \bytes{890}, but each
 taught something about where the bytes actually go.
 
 \subsection{What a limb is and why its width matters}
@@ -1014,17 +1185,41 @@ that made it expensive.
 Montgomery constant. But inversion runs once; the field multiplier
 runs thousands of times.)
 
+\subsection{Proving the limbs don't overflow}
+
+A limb representation can be correct on every test vector and still
+be wrong. The failure mode: some intermediate value overflows its
+accumulator on roughly one input in $2^{30}$, and your test suite
+never hits it. We know this happens because it happened
+(\S\ref{sec:deadends}).
+
+So for each $(K, W)$ pair we prove the bounds symbolically. The RCB
+formula (\S\ref{sec:rcb}) is a fixed sequence of 43 multiplies and
+adds; with lazy carrying, each add can grow its output's limbs
+beyond $W$ bits, and the question is whether any limb ever exceeds
+what the multiplier can handle. For $K = 11$, $W = 24$, a 64-bit
+accumulator holds $K$ products of $29 \times 29$ bits with room to
+spare --- but only if the inputs really are 29 bits. Tracing the
+formula operation by operation, the worst case is a $\times 12$
+growth chain that lands the output at about $2^{258}$, or four times
+$p$: the top limb reaches 18 bits, the rest stay under 29. At $K
+\cdot W = 264$ bits of capacity, this converges; at 260 it would not.
+
+The proof is a few dozen lines of Python that walks the formula and
+tracks interval bounds. It runs in the build. A configuration that
+doesn't converge doesn't compile.
+
 \subsection{The tracks}
 
 \begin{center}
-\begin{tabular}{@{}lccl@{}}
+\begin{tabular}{@{}lccrl@{}}
 \toprule
-Track & $K$ & $W$ & Reduction strategy \\
+Track & $K$ & $W$ & Size & Reduction strategy \\
 \midrule
-$8 \times 32$  & 8  & 32 & non-Montgomery, $q=t[\text{top}]$ \\
-$11 \times 24$ & 11 & 24 & Montgomery, $c_p = 1$, 64-bit accumulators \\
-$5 \times 54$  & 5  & 54 & Montgomery, $c_p = 1$, 128-bit products \\
-$5 \times 56$  & 5  & 56 & Montgomery, $c_p = 1$, byte-aligned decode \\
+$8 \times 32$  & 8  & 32 & \bytes{890}  & non-Montgomery, $q=t[\text{top}]$ \\
+$11 \times 24$ & 11 & 24 & \bytes{1068} & Montgomery, $c_p = 1$, 64-bit accumulators \\
+$5 \times 56$  & 5  & 56 & \bytes{1084} & Montgomery, $c_p = 1$, byte-aligned decode \\
+$5 \times 54$  & 5  & 54 & \bytes{1097} & Montgomery, $c_p = 1$, 128-bit products \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -1055,9 +1250,17 @@ loop, no bit-offset bookkeeping. Two extra bits of width per limb
 buys back a chunk of the parsing machinery for nearly nothing, and
 $56 < 96$ so the Montgomery constant is still 1.
 
-This track is the newest and the least-ground-down. Whether the
-byte-aligned decode saves more than the slightly wider products cost
-is not yet settled.
+It does save: $5 \times 56$ finished \bytes{13} smaller than
+$5 \times 54$. The byte-aligned decode is worth more than the
+slightly wider products cost. The $5 \times 54$ track has one
+consolation prize: because its bytecode pointer happens to live in
+\texttt{rsi} rather than \texttt{rbx}, the \texttt{rbx} register is
+free to hold the jump-table base, enabling the one-byte
+\texttt{xlatb} instruction for dispatch (\S\ref{sec:grind}). That
+trick ports to $5 \times 56$ too, but only after moving the bytecode
+pointer --- and $5 \times 56$ already had it moved, for a different
+reason, so the net was larger there. Tricks compound with
+architectural accidents.
 
 \subsection{Why $8 \times 32$ is still ahead}
 
@@ -1069,12 +1272,17 @@ Montgomery track needs the $c_p = 1$ trick for the field and
 something else for the order --- two reducers, or one reducer with a
 mode switch.
 
-That, plus a substantial head start in accumulated encoding tricks,
-keeps $8 \times 32$ in front. But the lead is not structural
-inevitability; it's accumulated effort. The other tracks have tricks
-the main build can't use --- Montgomery cancellations that only exist
-when there are $R$-factors to cancel --- and some of those haven't
-been fully mined.
+All four tracks now have roughly the same tricks applied --- the
+encoding wins cross-pollinated freely once discovered --- and the gap
+held at about \bytes{180}. The two-reducer cost is real. The
+Montgomery tracks did find things the $8 \times 32$ build cannot use:
+cancelling $R$-factors in the projective check (\saved{27}), a
+signed-limb representation of $p$ built from six increment/decrement
+instructions (\saved{4}). Not enough to close the gap, but enough to
+make the comparison fair.
+
+The Montgomery tracks are faster. At the same size, they would win on
+both axes. They are not the same size.
 
 % ======================================================================
 \section{General principles}
@@ -1163,6 +1371,23 @@ Agner Fog.
 \textit{Instruction tables: Lists of instruction latencies,
 throughputs and micro-operation breakdowns}.
 \url{https://www.agner.org/optimize/instruction_tables.pdf}
+
+\bibitem{hamburg}
+Mike Hamburg.
+\textit{Faster Montgomery and double-add ladders for short Weierstrass curves}.
+Talk at ECC 2015, Bordeaux.
+\url{http://ecc2015.math.u-bordeaux1.fr/documents/hamburg.pdf}
+
+\bibitem{p256m}
+Manuel P\'egouri\'e-Gonnard.
+\textit{p256-m: Minimal P-256 ECDSA / ECDH in portable C}.
+\url{https://github.com/mpg/p256-m}
+
+\bibitem{gueron}
+Shay Gueron.
+\textit{Efficient software implementations of modular exponentiation}.
+IACR ePrint 2011/239.
+\url{https://eprint.iacr.org/2011/239}
 
 \end{thebibliography}
 
