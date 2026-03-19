@@ -1,7 +1,7 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 916 B default build; 898 B with -DSMALL_MUL8.  The SMALL_MUL8 knob
+ * 908 B default build; 890 B with -DSMALL_MUL8.  The SMALL_MUL8 knob
  * trades −18 B for ~+50% cycles — `scasd` + `loop` in .Lop3 (both
  * microcoded).  cP built at runtime (r8 = &cP, slot22 = rbp−40).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
@@ -925,10 +925,15 @@ tv_ecdsa_p256_verify_asm:
 	pop	rdi
 	call	bcrun_r14
 	/* bc_v1 fail: fall through into .Lf2.  Every other fail
-	 * (length checks, 0x04 check) reaches .Lf2 as rel8. */
+	 * (length checks, 0x04 check) reaches .Lf2 as rel8.
+	 * .Lf2 reuses the success path's sbb;inc: sbb eax,eax with
+	 * CF=1 gives eax=−1, inc→0.  stc forces CF=1 for the jne/jb
+	 * callers (CF undetermined from cmp); bc_v1 fall-through
+	 * already has CF=1 (neg ebp set it) — stc is a no-op there.
+	 * 3 B (stc + jmp rel8) vs 4 B (xor + jmp).  −1 B. */
 	jnc	1f
-.Lf2:	xor	eax, eax
-	jmp	.Ld2
+.Lf2:	stc
+	jmp	.Lsbb
 1:
 	/* bc_v1 also ran INV + the two Nmuls (u1,u2 now in 13,14).
 	 * NO cond_sub of the hash: e might be ≥ n but Nmul computes
@@ -949,7 +954,7 @@ tv_ecdsa_p256_verify_asm:
 	 * pt_mul tail-jumps into bc_v3 dispatch — returns HERE with
 	 * CF set by bc_run's neg ebp.  See pt_mul epilogue. */
 	call	pt_mul              /* acc = u1·G + u2·Q, then bc_v3 check */
-	sbb	eax, eax            /* CF=1 → eax=−1; CF=0 → eax=0 */
+.Lsbb:	sbb	eax, eax            /* CF=1 → eax=−1; CF=0 → eax=0 */
 	inc	eax                 /* −1→0 (fail), 0→1 (valid) */
 .Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
 	pop	r14

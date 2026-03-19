@@ -24,3 +24,4 @@ d05d1a6,897,5134000,bc_run: mov al (4B) not movzx (5B) for table lookup. and eax
 d3e0868,893,5134000,.Lop6: repe scasq (3B) replaces or-loop (5+2B). Scans for first nonzero qword; ZF=1 iff all-zero. rdi clobbered but dead. rax stays 0 (scasq read-only). −4 B.
 8a109b1,892,5134000,fe_mul_m: tail-jmp to .Lop3. pop rbp/rbx FIRST (.Lop3 touches neither) then jmp rel32. .Lop3 ret → caller. Stack: pushes land [retaddr-24..-8]; t buf at [-104..-32]. −1 B.
 db6dad8,891,5242000,bc_run: bcptr in rsi via lodsw. Drops add rbx,2 (4B) + push/pop rbx (2B). rbx unused by bc_run (handlers preserve). Adds push/pop rsi (+2B) + r9d byte0 stash (+3B) for .Lop6 xor. −1 B. 37 B under Thomas.
+PENDING,890,5245000,.Lf2: stc;jmp .Lsbb (3B) reuses success path's sbb;inc. sbb eax,eax with CF=1 → eax=−1; inc → 0. stc forces CF for jne/jb callers; bc_v1 fallthrough already CF=1 (harmless). All 3 variants −1 B.
