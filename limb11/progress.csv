@@ -12,3 +12,4 @@ d1a05bc,1219,0,PROJECTIVE R-CANCELLATION: cR2_p dropped. G@1 Q@0 b@1; RCB preser
 fec3c0d,1201,0,Full-chain decodes (zero lea's post-Qx); Gx² shared b-derive→G-scale; rcl/inc ebp (no REX)
 4777e87,1194,12030000,CHKNZ=call CHKZ+xor ebp,1; mov al/[rbx] encoding wins (high bytes pre-zeroed by and)
 206341d,1191,12030000,Speculative setup before checks → tail jmp rel8 (disp8=−127, just fits)
+6ed59f9,1182,12030000,fe_mul11 b on stack (no r12) — limb5 agent's trick ported back
