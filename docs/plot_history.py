@@ -245,20 +245,30 @@ if LIMB5_TRACK:
                 ec='#008b8b', lw=0.8))
 
 # limb8 continues tiny.S — same blue dots as the main optimization trail.
+# Filter to points that expanded the frontier at commit time (keeps order).
 if LIMB8_TRACK:
-    l8x = [p[0] for p in LIMB8_TRACK]
-    l8y = [p[1] for p in LIMB8_TRACK]
+    prior = THOMAS_TRACK + [(b, c) for b, c, _ in TRAIL]
+    shown = []
+    for p in LIMB8_TRACK:
+        b, c = p
+        if not any(b2 <= b and c2 <= c and (b2 < b or c2 < c)
+                   for b2, c2 in prior):
+            shown.append(p)
+            prior.append(p)
+    l8x = [p[0] for p in shown]
+    l8y = [p[1] for p in shown]
     # Connect from tiny.S's last point (933, SMALL_MUL8) to the new work.
     prev = (933, 4674)  # tiny.S SMALL_MUL8 median
     ax.plot([prev[0]] + l8x, [prev[1]] + l8y, ':', color='#b0b0b0',
             linewidth=0.7, zorder=2)
     ax.scatter(l8x, l8y, c='#4a6fa5', s=22, edgecolors='#2a4670',
                linewidths=0.5, zorder=3, alpha=0.7)
-    tip = LIMB8_TRACK[-1]
-    ax.annotate(f'{tip[0]}B', tip,
-                textcoords="offset points", xytext=(-35, -12), fontsize=9,
-                bbox=dict(boxstyle='round,pad=0.3', fc='#e0e8f5',
-                ec='#4a6fa5', lw=0.8))
+    if shown:
+        tip = shown[-1]
+        ax.annotate(f'{tip[0]}B', tip,
+                    textcoords="offset points", xytext=(-35, -12), fontsize=9,
+                    bbox=dict(boxstyle='round,pad=0.3', fc='#e0e8f5',
+                    ec='#4a6fa5', lw=0.8))
 
 ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
