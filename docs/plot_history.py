@@ -244,20 +244,21 @@ if LIMB5_TRACK:
                 bbox=dict(boxstyle='round,pad=0.3', fc='#d0f0f0',
                 ec='#008b8b', lw=0.8))
 
-# limb8 (8×32 q=t[top], no Montgomery) — coral. Original tiny.S track.
-# First to go under Thomas (916 B @ 2f5d9a9).
+# limb8 continues tiny.S — same blue dots as the main optimization trail.
 if LIMB8_TRACK:
     l8x = [p[0] for p in LIMB8_TRACK]
     l8y = [p[1] for p in LIMB8_TRACK]
-    ax.plot(l8x, l8y, '-', color='#ff7f50', linewidth=1.4, zorder=4,
-            label='limb8 (8×32, non-Mont)')
-    ax.scatter(l8x, l8y, c='#ff7f50', s=50, marker='D',
-               edgecolors='#cc5530', linewidths=0.7, zorder=5)
+    # Connect from tiny.S's last point (933, SMALL_MUL8) to the new work.
+    prev = (933, 4674)  # tiny.S SMALL_MUL8 median
+    ax.plot([prev[0]] + l8x, [prev[1]] + l8y, ':', color='#b0b0b0',
+            linewidth=0.7, zorder=2)
+    ax.scatter(l8x, l8y, c='#4a6fa5', s=22, edgecolors='#2a4670',
+               linewidths=0.5, zorder=3, alpha=0.7)
     tip = LIMB8_TRACK[-1]
-    ax.annotate(f'limb8 — {tip[0]}B', tip,
-                textcoords="offset points", xytext=(-50, -15), fontsize=9,
-                bbox=dict(boxstyle='round,pad=0.3', fc='#ffe4d5',
-                ec='#ff7f50', lw=0.8))
+    ax.annotate(f'{tip[0]}B', tip,
+                textcoords="offset points", xytext=(-35, -12), fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', fc='#e0e8f5',
+                ec='#4a6fa5', lw=0.8))
 
 ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
