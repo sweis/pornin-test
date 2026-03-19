@@ -63,8 +63,18 @@ SIGILL in 64-bit. VEX reclaimed the opcode space. Use `sbb al,al` (2 B).
 `mov ds,eax` nonzero segfaults — selector still validated. Zero-only
 scratch is useless. → `docs/x86_tricks.md`
 
-### BMI1/BMI2/ADX for size
-All VEX 5–6 B, never beat legacy. Speed tools only. → `docs/x86_tricks.md`
+### AVX/BMI1/BMI2/ADX for size — limb8 MEASURED, MOVBE-only relaxed
+All VEX-encoded (4-6 B). Measured against 890 B SMALL_MUL8 baseline:
+**vptest .Lop6** (SLOT=32B=1 YMM, best-fit track): 891 B, +1 B. `push 4;
+pop rcx;xor eax,eax;repe scasq` = 8 B vs `vmovdqu;vptest` = 9 B. Both
+need `sete al` (3 B). vzeroupper at exit would add 3 B more. **vmovdqu
+3-slot copy** (.Lcadd): 32 B vs `mov cl,12;rep movsq` 5 B — +27 B.
+**bextr nibble decode**: 39 B body + 18 B ctrl preload vs 34 B — current
+exploits bit-position-as-scaling (`and edi,-16;lea [r14+rdi*2]` = nibble
+×32 in 7 B). **mulx**: 5 B (32-bit) or 5 B (64-bit) vs `lodsd;mul` 3 B /
+`lodsq;mul` 5 B; no rsi advance so +4 B lea. **blsr/blsi/blsmsk**: no
+`x&(x-1)`/`x&-x` pattern exists. **vpbroadcastq cP**: cP has 4 distinct
+dword values (FFFFFFFF/0/1/FFFFFFFF), not broadcastable. → `docs/x86_tricks.md`
 
 ### `call [rbx+rax*8]` dispatch
 +74 B vs xlatb — 8-B vs 1-B table entries dominate. → `docs/x86_tricks.md`
