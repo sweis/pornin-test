@@ -84,8 +84,8 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 .Ljt:
 	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, .Lnmul-.Ljt
 	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv_s-.Ljt, .Lnorm-.Ljt
-	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lchknz-.Ljt, .Lcopyhi-.Ljt
-	/* ZERO dropped — Fsub(x,x)=0 does the same job. */
+	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lcopyhi-.Ljt
+	/* ZERO dropped (Fsub(x,x)=0). CHKNZ dropped (CHKZ dst=1 = flip). */
 
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cN.
@@ -136,10 +136,9 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	loop	1b
 	ret
 
-.Lchknz: /* bit 0 ← (s1 == 0).  CHKZ sets bit 0 = (s1≠0); xor flips. */
-	call	.Lchkz
-	xor	ebp, 1
-	ret
+/* CHKZ with dst-as-flag: dst=0 → shift (s1≠0) into ebp; dst=1 → shift
+ * (s1==0). rdi = r14 + dst·SLOT from bc_run; dst·SLOT is 0 or 40.
+ * 40>>5 = 1. xor ebp with that bit AFTER the rcl → flips bit 0 iff dst=1. */
 .Lchkz:
 	xor	edx, edx
 	push	K
@@ -149,6 +148,9 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	loop	1b
 	neg	rdx                 /* CF = (rdx != 0) */
 	rcl	ebp, 1
+	sub	rdi, r14
+	shr	edi, 5              /* 0 or 1 */
+	xor	ebp, edi
 	ret
 
 .Lchklt:

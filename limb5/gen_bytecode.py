@@ -28,10 +28,12 @@ import sys
 
 # MULR2 = Fmul with s2=15 (bc_run already sets rdx). SQR never used.
 # COPYHI: dst nibble means slot(dst+16) — reaches Shamir backup slots.
-# ZERO dropped — Fsub(x,x)=0 (slots hold valid values at init time).
+# ZERO dropped — Fsub(x,x)=0. CHKNZ dropped — CHKZ with dst=1 means
+# "flip result" (rdi−r14 gives 0 or SLOT; xor ebp, that>>5).
 OPS = {'Fmul':0, 'Fadd':1, 'Fsub':2, 'Nmul':3,
        'CHKLT':4, 'CHKZ':5, 'INV':6, 'NORM':7,
-       'SET1':8, 'COPY':9, 'CHKNZ':10, 'COPYHI':11}
+       'SET1':8, 'COPY':9, 'COPYHI':10}
+CHKNZ_AS_CHKZ_DST1 = True  # emit CHKNZ as CHKZ with dst=1
 
 # cR2_p DROPPED — projective scale-invariance. Q stays plain (level 0),
 # G scales by Gx_mont: backup = (Gx², Gx·Gy, Gx_mont), all level 1.
@@ -40,6 +42,8 @@ def emit(stream_name, ops, reserved_write=frozenset()):
     print(f"{stream_name}:")
     n = 0
     for op, dst, s1, s2 in ops:
+        if op == 'CHKNZ':
+            op, dst = 'CHKZ', 1    # dst=1 → handler xors ebp bit 0
         assert 0 <= dst < 16 and 0 <= s1 < 16 and 0 <= s2 < 16, \
             f"slot out of range: {op} {dst},{s1},{s2}"
         assert dst not in reserved_write, \
