@@ -850,16 +850,20 @@ tv_ecdsa_p256_verify_asm:
 	 * span-dependent disp grows between passes; gas doesn't
 	 * re-evaluate label exprs in disp8 slots). */
 	lea	rsi, [r12 + oGX]
-	mov	cl, 12              /* cP is gone — only G + cN (12 qw) */
-	rep	movsq               /* rdi → slot 5, rcx → 0 */
+	mov	cl, 24              /* 24 qw: G→2,3; cN→4; JUNK→5,6,7.
+	                             * rdi lands at slot8 — drops the
+	                             * 4 B lea.  Junk is safe: bc_v1
+	                             * never reads 5,6,7 before staging
+	                             * overwrites them (curve check only
+	                             * WRITES slot7; s2∈{5,6,7} never
+	                             * appears pre-staging). */
+	rep	movsq               /* rdi → slot 8, rcx → 0 */
 
 	/* BUILD cP at slot8.  The EFD-rescheduled bc_rcb uses only
 	 * 5 scratch slots (3,4,9,11,15) — slot 8 is NEVER written
 	 * during pt_mul.  r8 = &slot8 = r14+256, so .Lcadd's slot5
 	 * target becomes r8−96 = disp8 (was r14+160 disp32, −3 B).
-	 * rdi = slot5 from block copy → slot8 = rdi+96 (disp8).
 	 * rep movsq is mem→mem (no rax), so or eax,-1 not dec. */
-	lea	rdi, [rdi+96]       /* slot8 */
 	push	rdi
 	pop	r8                  /* r8 = &cP = &slot8 */
 	or	eax, -1             /* eax = FFFFFFFF */
