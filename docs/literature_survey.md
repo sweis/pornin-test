@@ -54,30 +54,30 @@ evaporate.**
 
 **Net estimate: −30 to +20 B.** Worth the experiment.
 
-### WW-AMM single-iteration (s=256)
+### ~~WW-AMM single-iteration (s=256)~~ — REFUTED
 
-**The idea:** mod-mult collapses to ONE 256×256→512 mul kernel called
-three times. Gueron ePrint 2011/239 Remark 5 explicitly recommends
-this as the size-optimized variant.
+**The premise is false.** The survey's "m0i=1 kills call #2" conflated
+per-LIMB m0inv (which is 1 for p at W≤96, because p's low W bits are
+all-ones) with full-width m0inv at s=256. Computed:
 
-**The P-256 twist:** m0i=1 kills call #2 (Y = T_lo × k0 → Y = T_lo).
-So it's TWO calls per mod-mult, not three.
+```
+−p⁻¹ mod 2^256 = 0xffffffff00000002_00000000_00000000_00000001_00000000_00000000_00000001
+```
 
-**Structure:**
-1. T = A·B (256×256→512)
-2. q = T_lo (free, no multiply)
-3. T += q·m (256×256→512, added to high half)
-4. result = T >> 256
+Not 1. The "free q" doesn't exist. For n, m0inv is unstructured at
+every width — always needs the third kernel call.
 
-vs. current CIOS (~142 B in limb11x24): schoolbook row + reduce row,
-interleaved.
+**Worse: CIOS already IS the factored form.** `.Lcnt` is called twice
+per row. Commits `6de9a83` (limb11, −7 B) and `6ff298a` (limb5, −18 B)
+are "CIOS merge" — they ELIMINATED the separate-loops structure
+WW-AMM would reintroduce. We'd be undoing proven wins.
 
-**Back-of-envelope:** 256×256 schoolbook kernel ≈ 60-80 B. Called
-from two sites = same code. 512-bit add ≈ 32 B. Shift-by-256 = free
-(pointer). Plausible but the 512-bit intermediate handling is the
-unknown.
+**Hidden cost:** `.Lcnt` discards rdx (imul high). CIOS's per-row
+`sar;add` keeps limbs bounded at ~29 bits. After a full K×K, T[k] is
+~62 bits; feeding that as rbx into the next kernel loses ~22 product
+bits. Inter-call carry-prop is mandatory.
 
-**Net estimate: unknown. Needs a sketch.**
+**Verdict: +110 B best case. Dead end.** See `docs/ww_amm_sketch.md`.
 
 ## Marginal — only if Shamir-free runs
 
