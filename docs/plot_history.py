@@ -203,9 +203,13 @@ fig, ax = plt.subplots(figsize=(13, 8), dpi=100)
 ax.plot(BC_TRACK, [BC_Y]*len(BC_TRACK), 'o-', color='#d0d0d0',
         markersize=4, linewidth=1, zorder=1, label='bc.S baseline (ratio 1.0)')
 
-# Chronological trail (filtered to running-Pareto, joined with limb8)
-tx = [p[0] for p in TRAIL_SHOWN]
-ty = [p[1] for p in TRAIL_SHOWN]
+# Chronological trail (filtered, joined with limb8). Connector skips
+# off-chart points (speed.S, fast2.S at >2000 B) so the line doesn't
+# shoot off-right and back. Scatter still plots them (clipped by xlim).
+XMAX = 2000
+on_chart = [(b, c) for b, c, _ in TRAIL_SHOWN if b <= XMAX]
+tx = [p[0] for p in on_chart]
+ty = [p[1] for p in on_chart]
 ax.plot(tx, ty, ':', color='#b0b0b0', linewidth=0.7, zorder=2,
         label='optimization trail')
 ax.scatter(tx, ty, c='#4a6fa5', s=22, edgecolors='#2a4670',
@@ -220,8 +224,10 @@ ax.annotate(f'{tip[0]}B', (tip[0], tip[1]),
 # Pareto frontier — thin line, small dots.  The frontier is dense on the
 # left (many sub-1000B points separated by single bytes), so big diamonds
 # just pile into a blob.  Small markers + thin line let the curve read.
-px = [ALL_XY[i][0] for i in FRONT]
-py = [ALL_XY[i][1] for i in FRONT]
+# Clip off-chart points (fast2.S at 3265 B) so the line doesn't run off.
+FRONT_ON = [i for i in FRONT if ALL_XY[i][0] <= XMAX]
+px = [ALL_XY[i][0] for i in FRONT_ON]
+py = [ALL_XY[i][1] for i in FRONT_ON]
 ax.plot(px, py, '-', color='#c41e3a', linewidth=1.5, zorder=4,
         label='Pareto frontier')
 ax.scatter(px, py, c='#c41e3a', s=20, marker='o',
