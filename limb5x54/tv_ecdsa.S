@@ -173,54 +173,67 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	inc	ebp
 2:	ret
 
-/* ── NORM — bring value to [0, p). In-place on s1. All 3 bytecode
- * calls encode dst==s1 → bc_run gives rdi==rsi already. .Lcprop's
- * last `add [rdi],rdx` sets SF from the top limb; .Laddm/.Lsubm
- * both fall into .Lcprop so SF is live at every loop head.
+/* ── NORM — bring value to [0, p). In-place on s1. Single merged loop
+ * (port of limb11 135a928): .Lcprop returns rax = top limb (see
+ * restructure below). cqo sign-extends rax → rdx; `not rdx` (flag-
+ * clean) flips: neg→0 (add), nonneg→−1 (sub). Stash across .Lasmod,
+ * pop, then `or rdx, rax` — SF=0 iff (added ∧ result≥0). Sub always
+ * loops (rdx=−1 forces SF=1).
  *
- * .Lasmod's cP source = r15 (set in verify to &slot8). Drops the
- * `mov r8,rdx` preload (−3 B). rdx∈{+1,−1} via push/pop; imul
- * replaces xor+sub conditional-negate (4 B vs 6 B, −2; .Laddm +1). ── */
+ * Differs from limb11: (1) .Lcprop restructure costs +1 B (limb11's
+ * .Lcp_shared tail naturally leaves rax=top via stosq; limb5's `add
+ * [rdi],rdx` doesn't). (2) |top| < 2^44 here (vs ≤2^18 in limb11, K=11
+ * smears more) — bit 31 is data not sign → `or rdx,rax` (3 B) not
+ * `or edx,eax` (2 B). Net: −4 (loop merge) +2 (.Lasmod) +1 (.Lcprop)
+ * = −1 B. .Laddm deleted. ── */
 .Lnorm:
-	call	.Lcprop
-1:	jns	2f
-	call	.Laddm
-	jmp	1b
-2:	push	-1
+	call	.Lcprop             /* rax = top limb; SF = sign(top) */
+1:	cqo                         /* rdx ← sar(rax,63). 2 B. */
+	not	rdx                 /* {−1,0}→{0,−1}. Flag-preserving. 3 B. */
+	push	rdx
+	call	.Lasmod             /* → .Lcprop → rax = new top */
 	pop	rdx
-	call	.Lasmod             /* .Lsubm inlined — single caller */
-	jns	2b
-	/* fall into .Laddm for final add */
+	or	rdx, rax            /* 64-bit (|top|<2^44): SF=1 ⇔ subbed ∨ still-neg */
+	js	1b
+	ret
 
-.Laddm:
-	push	1
-	pop	rdx
 .Lasmod:
+	/* rdx ∈ {0,−1}: xor+sub conditional-negate (0→nop, −1→two's-comp).
+	 * +2 B vs imul's {+1,−1} convention — paid back by cqo+not above. */
 	push	rdi
 	mov	rsi, r15            /* &cP — set once in verify, preserved everywhere */
 	mov	cl, K               /* rcx = 0 — all paths here came through .Lcprop's loop */
 1:	lodsq
-	imul	rax, rdx            /* rdx ∈ {+1, −1}: 4 B vs xor+sub 6 B */
+	xor	rax, rdx
+	sub	rax, rdx
 	add	[rdi], rax
 	scasq
 	loop	1b
 	pop	rdi
 	/* fall into .Lcprop */
+
+/* .Lcprop — restructured to return rax = top limb (for cqo) AND
+ * SF = sign(top) (for .Lchklt's `js`). `loop 2f` mid-body: iters
+ * 1..K-1 jump to mask+store+shift; iter K (rcx 1→0) falls through
+ * with rax still unmasked from the push/pop copy. `add rdx,[rdi]`
+ * on iter K sets SF; push/pop/loop/stosq/pop/ret all preserve flags.
+ * +1 B vs old (extra stosq + jmp 1b vs add-mem-rdx tail). */
 .Lcprop:
 	push	rdi
 	xor	edx, edx
-	push	K-1
+	push	K
 	pop	rcx
-1:	add	rdx, [rdi]          /* rdx = running carry + limb */
+1:	add	rdx, [rdi]          /* iter K: SF = sign(top) — survives to ret */
 	push	rdx
-	pop	rax                 /* 2 B copy; rdx kept for sar */
-	and	rax, r13
-	stosq
-	sar	rdx, W
-	loop	1b
-	add	[rdi], rdx
+	pop	rax                 /* rax = unmasked; on iter K = top limb */
+	loop	2f                  /* rcx→0: fall through (iter K) */
+	stosq                       /* store unmasked top */
 	pop	rdi
 	ret
+2:	and	rax, r13
+	stosq
+	sar	rdx, W
+	jmp	1b
 
 .Lnsp:	/* 2 B stub: rdi ← rsi. Both .Linv call sites want dst=s1;
 	 * factoring it here saves 3 B of stack-dance there. */
