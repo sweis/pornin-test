@@ -176,11 +176,13 @@ bc_v3:
  * Must run AFTER curve check (which clobbers slot 7) and BEFORE
  * INV (which clobbers slot 0 = Qx). */
 bc_v1:
-	/* Range/zero checks.  cN/cP in slots 4,5 (block-copied). */
+	/* Range/zero checks.  cN in slot 4 (block-copied), cP at slot 8
+	 * (built by verify).  geq_p IS op5 with s1=8: decoder computes
+	 * rsi = r14+8·32 = &cP.  No .Lop5p, no op9 table slot.  −4 B. */
 	/* checkzero-s DROPPED: s=0 → INV gives 0 → u1=u2=0 → ladder
 	 * never adds → R=∞ → bc_v3's checkzero(Z) catches it.  −2 B. */
 	.byte 0x06,0xc0, 0x05,0xc4,            0x05,0xd4
-	.byte 0x09,0x00, 0x09,0x10   /* geq_p (op9): r13 = &cP, s1 unused */
+	.byte 0x05,0x08, 0x05,0x18   /* Qx<p, Qy<p: op5, s1=8 (=cP slot) */
 	/* b-derive: G in 2,3.  slot10 = b (survives pt_mul — RCB
 	 * reads slot 10 for the b multiplications, never writes). */
 	.byte 0x21,0xa2            /* slot10 = Gx²           (SQR) */
@@ -212,7 +214,7 @@ bc_v1:
 	 * r=1²·a=a — same state, one iter later).  +2 B here; drops
 	 * rep movsq + r8 save/restore in fe_inv_m = −12 B. */
 	.byte 0xf0,0x0f            /* slot0 = 1·1 = 1  (fe_inv_m seed) */
-	.byte 0x0a,0x0d            /* INV (opA): slot0 = s⁻¹ mod n    */
+	.byte 0x09,0x0d            /* INV (op9): slot0 = s⁻¹ mod n    */
 	.byte 0xf0,0x4f            /* slot4 = 1·1 = 1  (G-backup Z) */
 	.byte 0xf0,0x7f            /* slot7 = 1·1 = 1  (Q-backup Z) */
 	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
@@ -435,11 +437,12 @@ bcrun_off:
 	.byte	.Lop6-.Ljt  /* checkzero  (op 6) */
 	.byte	.Lop6-.Ljt  /* checknonzero (op 7) — SAME handler, sense=op bit0 */
 	.byte	.Lop9-.Ljt  /* MULCN (op 8) */
-	.byte	.Lop5p-.Ljt /* geq_p (op 9): rsi=r13=&cP, for Qx<p/Qy<p */
-	.byte	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only (op A) */
+	.byte	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only (op 9) */
 /* op6/7 = check (op bit0: 0=checkzero, 1=checknonzero).  Sense
  * encoded in opcode low bit: handler XORs al with [rbx-2] bit0
- * directly.  +1 B table entry; −3 B handler body.  INV moved to opA. */
+ * directly.  +1 B table entry; −3 B handler body.
+ * geq_p DROPPED: bc_v1 encodes it as op5 s1=8 (decoder gives
+ * rsi = r14+256 = &cP).  Table 11→10, .Lop5p gone.  −4 B. */
 
 cGX:	.quad 0xf4a13945d898c296, 0x77037d812deb33a0
 	.quad 0xf8bce6e563a440f2, 0x6b17d1f2e12c4247
@@ -452,7 +455,7 @@ cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
  * (mov rcx,r13 = 3 B vs lea = 4 B).  The 32 B of handler-block
  * headroom this frees lets fe_iszero inline into .Lop6. */
 
-.equ oGX,  cGX  - .Ljt      /* = table size (11); verify's lea uses this */
+.equ oGX,  cGX  - .Ljt      /* = table size (10); verify's lea uses this */
 .equ oN,   cN   - .Ljt
 .if (cN - cGX) - 64
 .error "cGX..cN spacing changed — verify's 16-qword block copy depends on cGX,cGY,cN,cP contiguous"
@@ -461,14 +464,9 @@ cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
  * (gas .if can't forward-ref) — `.byte` truncation at .Ljt will
  * produce wrong bytes, not a build error, if it ever overflows. */
 
-/* .Lop5p: geq with rsi = r13 = &cP.  op1 (was SQR alias, now this);
- * bc_v1's SQR ops are re-encoded as explicit Fmul (s2=s1, op=0).
- * Falls through to .Lop5.  bc_v1's Qx<p,Qy<p checks use this —
- * slot5 no longer gets cP block-copied (cP is built at slot22). */
-.Lop5p:	mov	rsi, r8
-	/* FALLTHROUGH */
 /* fe_geq inlined.  Compare [rdi] ≥ [rsi] limb-by-limb from the
- * top; loopz falls out on first mismatch with cmp's CF live. */
+ * top; loopz falls out on first mismatch with cmp's CF live.
+ * geq_p is op5 with s1=8 — decoder lands rsi on &cP.  No prelude. */
 .Lop5:	push	4
 	pop	rcx
 1:	mov	rax, [rdi+rcx*8-8]
