@@ -77,6 +77,15 @@ selector still validated even though segmentation is mostly disabled.
 table entries. Current approach is optimal.
 → `docs/x86_tricks.md`
 
+### `std+repe cmpsq` for limb8 `.Lop5`
+**Why dead:** +1 B prototyped. The estimate missed that `loopz` with
+`[reg+rcx*8-8]` SIB already gets high→low scan FOR FREE. `std+repe
+cmpsq` needs 8 B pointer setup (`add r,24` × 2 — rcx is &cP on entry,
+not zero). Body saves 7 B, setup costs 8 B. Net 21 B vs current 20 B.
+Only applies when baseline is a branchy `jb`/`ja` loop OR when bc_run
+hands pointers already at the high limb.
+→ `docs/x86_tricks.md` §5.3
+
 ---
 
 ## Per-track port blockers
