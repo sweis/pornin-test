@@ -97,10 +97,10 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
  * Must preserve rbx (bc ptr), r12 (jt), rbp (fail bits), r13 (MASK),
  * r14 (slot base), r15 (unused here — pt_mul's counter).
  *
- * Layout: .Lfmul → .Lnmul → .Linv → fe_mul5. .Linv body fits between
- * .Lnmul and fe_mul5 (46 B) — .Lfmul's jmp is rel8 over 58 B, .Linv's
- * jt entry lands at ~223. No stub needed (−5 B). .Lnmul pays +2 B for
- * its jmp but that's still net −3 B. */
+ * Layout: .Lnmul → .Linv → .Lfmul → fe_mul5. .Lfmul falls through
+ * (−2 B, no jmp). Handler shrinks from prior commits made room:
+ * .Lfmul lands at 247 (< 256 u8 limit). .Lnmul's jmp stays rel8
+ * over .Linv+.Lfmul (54 B). */
 
 .Lcopyhi: /* 8 slots from s1 → slots 16..23. Single call: dst=15 encoded
  * in bc_v1 so bc_run gives rdi = r14+600; +SLOT → 640 (disp8 imm). */
@@ -220,20 +220,14 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	pop	rdi
 	ret
 
-.Lfmul: /* MontMul mod p. rel8 over .Lnmul + .Linv (58 B). */
-	sub	rcx, SLOT           /* cP = cN − 1 slot (slot 8) */
-	push	1
-	pop	r11
+.Lnmul: /* MontMul mod n. fe_mul5 preserves rcx so INV's 384 calls
+ * all inherit &cN. rel8 over .Linv + .Lfmul (54 B). */
+	movabs	r11, 0x11c8aaee00bc4f
 	jmp	fe_mul5
 
-.Lnmul: /* MontMul mod n. fe_mul5 preserves rcx so INV's 384 calls
- * all inherit &cN. */
-	movabs	r11, 0x11c8aaee00bc4f
-	jmp	fe_mul5             /* rel8 — over .Linv body (46 B) */
-
 /* ── INV — s^(n−2) mod n via Fermat. n−2 stored directly in rodata
- * so `bt` works on all bits without special-casing. Lives here (between
- * .Lnmul and fe_mul5) so it fits the u8 jt slot directly — no stub. ── */
+ * so `bt` works on all bits without special-casing. Lives between
+ * .Lnmul and .Lfmul so it fits the u8 jt slot directly — no stub. ── */
 .Linv:
 	push	rbx
 	push	rsi                 /* s_mont */
@@ -262,6 +256,11 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	pop	rax
 	pop	rbx
 	ret
+
+.Lfmul: /* MontMul mod p. FALLS THROUGH to fe_mul5. jt offset 247 (< 256). */
+	sub	rcx, SLOT           /* cP = cN − 1 slot (slot 8) */
+	push	1
+	pop	r11
 
 /* ======================================================================
  * fe_mul5 — Montgomery multiply, 5×54, 128-bit accumulator.
