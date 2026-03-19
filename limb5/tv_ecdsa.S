@@ -87,7 +87,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
  * at end of file. ── */
 .Ljt:
 	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, .Lnmul-.Ljt
-	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv_s-.Ljt, .Lnorm-.Ljt
+	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv-.Ljt, .Lnorm-.Ljt
 	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lcopyhi-.Ljt
 	/* ZERO dropped (Fsub(x,x)=0). CHKNZ dropped (CHKZ dst=1 = flip). */
 

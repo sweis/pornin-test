@@ -22,4 +22,5 @@ fec3c0d,1201,0,Full-chain decodes (zero lea's post-Qx); Gx² shared b-derive→G
 5dc2a53,1146,10730000,inc byte (3 B) beats inc qword (4 B) for 0→1. .Lset1 + cP×2 = −4 B.
 5d8eb1f,1141,12090000,LAYOUT REORDER: .Lfmul falls through into fe_mul11. .Lcp_shared+decoders moved after. jt Fmul@251 (4 B headroom). −5 B.
 54055a3,1139,12090000,Lasmod r9→rdx: NORM bytecode s2=0 (unused) so rdx free. Non-REX xor+pop. Ported from limb5.
-HEAD,1137,12090000,fe_from_le: lodsd+dec rsi beats mov+add for +3 advance (−2).
+2bbb851,1137,12090000,fe_from_le: lodsd+dec rsi beats mov+add for +3 advance (−2).
+HEAD,1129,12090000,Hoist sign-test into .Lcprop tail — 3 callers branch on returned flags (−8).
