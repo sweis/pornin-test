@@ -71,15 +71,15 @@
 	.intel_syntax noprefix
 
 /* ======================================================================
- * Bytecode.  Placed before .text so stream offsets (bc_X - bc_rcb) are
- * backward references at the call sites — gas picks the imm8 encoding
- * for `push`.  Order chosen so all offsets ≤ 120 (fits signed imm8;
- * bc_v1 is last).
+ * Bytecode.  Placed at the START of .text so stream offsets (bc_X -
+ * bc_rcb) are backward references at the call sites — gas picks the
+ * imm8 encoding for `push`.  In .text (not .rodata) so bc_rcb−.Ljt
+ * is a same-section constant, usable as disp32 in bcrun_off's lea.
  *
  * Call sites load the offset as a small integer (push imm8; pop rdi,
- * or xor edi,edi for bc_rcb), and bcrun_off adds the base.
+ * or xor edi,edi for bc_rcb), and bcrun_off adds the base via r12.
  * ====================================================================== */
-	.section .rodata
+	.text
 
 /* bc_rcb: Renes-Costello-Batina COMPLETE addition (ePrint 2015/1060,
  * Algorithm 7 for a=−3).  "Complete" means one formula gives the
@@ -224,7 +224,6 @@ bc_v1:
 .equ obc_v1,   bc_v1  - bc_rcb
 
 /* ---------------------------------------------------------------------- */
-	.text
 
 /* ----------------------------------------------------------------------
  * 256-bit primitives (4 × u64 limbs, little-endian).
@@ -357,29 +356,25 @@ pt_mul:
 /* ======================================================================
  * BYTECODE INTERPRETER
  * ====================================================================== */
-/* rdi = byte offset from bc_rcb.  r14 = slot base is INHERITED from
- * the caller (verify sets it once; pt_mul/.Lcadd don't touch it) —
- * bc_run pushes r12 and uses IT for &.Ljt instead.  The old tunnel
- * (bcrun_r14 set rsi=r14, bc_run did mov r12,rsi, later used r12 as
- * slot base while r14 got .Ljt) was 10 B of detour that vanishes
- * when r14 stays slot-base end to end.  bcrun_r14 is now just an
- * alias of bcrun_off — callers still jmp/call here for clarity. */
+/* rdi = byte offset from bc_rcb.  r14 = slot base AND r12 = &.Ljt
+ * are both INHERITED from verify (set once, never clobbered by the
+ * call tree — Nmul/MULCN read r12, nothing writes it).  bc_rcb is
+ * in .text now, so bc_rcb−.Ljt is a same-section assembly-time
+ * constant usable as disp32: one SIB lea (8 B) replaces rip-lea +
+ * add (10 B).  bc_run no longer push/pops r12 or sets it (−11 B). */
 bcrun_r14:
 bcrun_off:
-	lea	rax, [rip+bc_rcb]
-	add	rdi, rax
+	lea	rdi, [r12 + rdi + bc_rcb - .Ljt]
 	/* FALLTHROUGH */
 bc_run:
 	push	rbp
 	push	rbx
-	push	r12
 	push	rdi                 /* 2B push;pop vs 3B REX.W mov */
 	pop	rbx
-	/* r14 = slot base (inherited).  r12 → .Ljt.  Check accumulator
-	 * in ebp (no REX).  Only bpl is ever OR'd; upper bytes stay
-	 * zero from the xor.  r13,r14 not push/popped — not clobbered. */
+	/* r14 = slot base, r12 = &.Ljt (both inherited).  Check
+	 * accumulator in ebp (no REX).  Only bpl is ever OR'd; upper
+	 * bytes stay zero from the xor.  r12-r14 not clobbered. */
 	xor	ebp, ebp
-	lea	r12, [rip+.Ljt]
 .Lbc:
 	movzx	eax, WORD PTR [rbx]
 	add	rbx, 2
@@ -422,7 +417,6 @@ bc_run:
 /* NEG sets CF=1 iff operand was nonzero.  pops/ret preserve flags —
  * callers branch on CF directly. */
 .Lbce:	neg	ebp
-	pop	r12
 	pop	rbx
 	pop	rbp
 	ret
@@ -458,6 +452,7 @@ cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
  * (mov rcx,r13 = 3 B vs lea = 4 B).  The 32 B of handler-block
  * headroom this frees lets fe_iszero inline into .Lop6. */
 
+.equ oGX,  cGX  - .Ljt      /* = table size (11); verify's lea uses this */
 .equ oN,   cN   - .Ljt
 .if (cN - cGX) - 64
 .error "cGX..cN spacing changed — verify's 16-qword block copy depends on cGX,cGY,cN,cP contiguous"
@@ -780,14 +775,18 @@ tv_ecdsa_p256_verify_asm:
 	 * (bc_run, pt_mul, fe_mul_m).  enter is microcoded (~12 cyc)
 	 * but runs once.  r15 dropped — .Lcadd goes via r14 disp32. */
 	push	rbx
+	push	r12
 	push	r14
 	enter	712, 0              /* 22 slots; cP now at slot8 (RCB-free) */
-	/* r12 not pushed: bc_run push/pops it as .Ljt.  r8 = &cP below
-	 * (caller-saved, but nothing in the call tree touches it:
-	 * fe_mul_m uses r9-r11, bc_run/pt_mul/fe_inv_m use low regs).
-	 * r8 on entry is hv (ABI arg5) — consumed at hash decode,
-	 * dead by the time we set it. */
+	/* r12 = &.Ljt set HERE once — bc_run/Nmul/MULCN/bcrun_off all
+	 * read it, nothing writes it.  bc_run drops push/pop/lea r12
+	 * (−11 B); this prologue grows +11 B; cGX lea shrinks 7→5 (−2);
+	 * bcrun_off lea 10→8 (−2).  Net −4 B.
+	 * r8 = &cP below (caller-saved, but nothing in the call tree
+	 * touches it).  r8 on entry is hv (ABI arg5) — consumed at
+	 * hash decode, dead by the time we set it. */
 	mov	r14, rsp
+	lea	r12, [rip+.Ljt]
 
 	/* ABI args rdi (sig), rdx (pub), r8 (hash) all survive the
 	 * length checks (cmp-only on rsi/rcx/r9) and fe_from_be calls
@@ -849,8 +848,12 @@ tv_ecdsa_p256_verify_asm:
 	/* ONE 16-qword copy: cGX,cGY,cN,cP → slots 2,3,4,5.  G → 2,3
 	 * (survives to Shamir — bc_v1 never writes them).  cN,cP → 4,5
 	 * (bc_v1's check ops read them first, then staging overwrites
-	 * 4-7 with 1,Qx,Qy,1).  rdi already at slot 2.  rcx=0. */
-	lea	rsi, [rip+cGX]
+	 * 4-7 with 1,Qx,Qy,1).  rdi already at slot 2.  rcx=0.
+	 * r12 = &.Ljt, cGX right after table: disp8 lea (5 B vs rip 7 B).
+	 * oGX via .equ — inline `cGX-.Ljt` mis-relaxes (bcrun_off's
+	 * span-dependent disp grows between passes; gas doesn't
+	 * re-evaluate label exprs in disp8 slots). */
+	lea	rsi, [r12 + oGX]
 	mov	cl, 12              /* cP is gone — only G + cN (12 qw) */
 	rep	movsq               /* rdi → slot 5, rcx → 0 */
 
@@ -908,6 +911,7 @@ tv_ecdsa_p256_verify_asm:
 	inc	eax                 /* −1→0 (fail), 0→1 (valid) */
 .Ld2:	leave               /* mov rsp,rbp; pop rbp — rbp untouched since enter */
 	pop	r14
+	pop	r12
 	pop	rbx
 	ret
 
