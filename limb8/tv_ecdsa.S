@@ -482,12 +482,14 @@ cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
 /* op bit0 selects sense: op6 (bit0=0) checkzero, op7 (bit0=1)
  * checknonzero.  xor al,[rbx-2] (byte1 = (s2<<4)|op) flips al
  * bit0 iff op bit0 is set; and al,1 masks.  5 B vs test;jz;xor's
- * 8 B.  fe_iszero inlined. */
+ * 8 B.  repe scasq scans [rdi..] for first qword ≠ rax (=0); stops
+ * early (ZF=0) on nonzero, runs to rcx=0 (ZF=1) if all zero.
+ * 3 B vs or-loop's 7 B.  rdi clobbered — dead (ret → bc_run
+ * resets).  rax stays 0 (scasq reads only).  −4 B. */
 .Lop6:	push	4
 	pop	rcx
 	xor	eax, eax
-2:	or	rax, [rdi+rcx*8-8]
-	loop	2b
+	repe	scasq
 	sete	al
 	xor	al, [rbx-2]
 	and	al, 1
