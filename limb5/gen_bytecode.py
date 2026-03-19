@@ -282,8 +282,8 @@ if __name__ == '__main__':
 
     # V1 slot lifetime
     v1_init = {3:'Qx', 4:'Qy', 5:'r', 6:'s', 7:'e', 8:'cN', 9:'cP',
-               10:'cR2n', 11:'Gx', 12:'Gy'}
-    v1_survive = {8:'cN', 9:'cP'}
+               10:'cR2n', 11:'Gx', 12:'Gy', 15:'junk'}
+    v1_survive = {9:'cP'}  # slot 8 written by n−2→n fixup; still n semantically
     errs, out = simulate('v1', V1, v1_init, v1_survive)
     if errs:
         print("/* V1 LIFETIME ERRORS: */", file=sys.stderr)
