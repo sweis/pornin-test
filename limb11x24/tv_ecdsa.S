@@ -91,7 +91,8 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cP.
  * All handlers may clobber rax, rcx, rdx, rsi, rdi, r8-r11.
- * Must preserve rbx (bytecode ptr), r12 (jt), rbp (fail bits), r14.
+ * Must preserve rbx (=&.Ljt), rbp (fail bits), r14, r15.
+ * (r12 wholly unused — jt ptr lives in rbx per-bcrun.)
  *
  * rcx high bytes are DIRTY (bc_run lea's a stack address) — every
  * `mov cl,N` would leave a huge rcx. Use push;pop for loop counters. */
@@ -395,7 +396,8 @@ fe_from_le:
 
 pt_mul:
 	/* acc = ∞ = (0:1:0) done by bc_v1's tail (ZERO/SET1/ZERO ops).
-	 * r12 stays = &.Ljt for bc_run. r15 = &cP (set in verify, untouched).
+	 * r15 = &cP (set in verify, untouched). rbx = packed bit counter;
+	 * bcrun_off push/pops it around every dispatch.
 	 *
 	 * Packed bit counter: ebx = limb·64 + bit. bt [r10],ebx uses ebx as
 	 * an absolute bit offset into the qword array — bit b of limb L is at
@@ -431,13 +433,15 @@ pt_mul:
 
 bcrun_off:
 	push	rbp
-	/* rsi = bc_ptr (was rbx). lodsw replaces mov+add (−4 B); handlers
-	 * clobber rsi so push/pop around dispatch (+2 B). Net −4 with the
-	 * dropped rbx push/pop. pt_mul's ebx survives — bcrun never writes. */
+	push	rbx                 /* pt_mul's packed counter — survives all dispatches */
+	/* .Ljt ptr in rbx — set HERE, not verify. xlatb (1 B) beats
+	 * `mov al,[r12+rax]` (4 B, REX.B). r12 wholly unused → push/pop r12
+	 * + lea r12 drop from verify (−11). Here: +1+7+1−3 = +6. Net −5.
+	 * Handlers preserve rbx (fe_mul11 and .Linv push/pop; rest don't touch). */
+	lea	rbx, [rip + .Ljt]
 	lea	rsi, [rip + bc_rcb]
 	add	rsi, rcx            /* offset — .Lcadd's rep movsq leaves rcx=0 */
 	xor	ebp, ebp            /* fail-bit accumulator */
-	/* r12 = &.Ljt inherited from verify (set once, fe_mul11 preserves). */
 .Lbc:
 	lodsw                       /* ax ← op; rsi += 2. High eax garbage — */
 	test	al, al              /*   and eax,0xF below clears it. */
@@ -460,8 +464,8 @@ bcrun_off:
 	add	rdx, r14
 
 	and	eax, 0xF
-	mov	al, [r12 + rax]     /* high bytes already 0 from the and */
-	add	rax, r12
+	xlatb                       /* AL ← [RBX+AL]. 1 B. rax high bytes stay 0 from and. */
+	add	rax, rbx
 	lea	rcx, [r15 + SLOT]   /* &cN = &cP + SLOT (r15 disp8, was 7 B r14+disp32) */
 	mov	r11d, 0xBC4F        /* n m0inv — Nmul jt entry = fe_mul11 direct */
 	call	rax
@@ -470,6 +474,7 @@ bcrun_off:
 
 .Lbce:	neg	ebp
 	sbb	eax, eax            /* 0 pass, −1 fail */
+	pop	rbx
 	pop	rbp
 	ret
 
@@ -480,14 +485,13 @@ bcrun_off:
 tv_ecdsa_p256_verify_asm:
 	/* rdi=sig, rsi=sig_len, rdx=pub, rcx=pub_len, r8=hv, r9=hv_len */
 	push	rbx
-	push	r12
 	push	r14
 	push	r15
 
-	/* enter before checks → all paths go through leave. 4 pushes +
-	 * ret addr + enter's rbp = −48, then 2112 (÷8). 16-align: no pad
-	 * needed (48+2112=2160 ÷16). r13 freed by packed bit counter. */
-	enter	NSLOTS * SLOT, 0
+	/* enter before checks → all paths go through leave. 3 pushes +
+	 * ret addr + enter's rbp = −40. Frame pads 8 B for 16-align
+	 * (40+2120=2160 ÷16). r12,r13 unused. */
+	enter	NSLOTS * SLOT + 8, 0
 
 	/* Speculative setup BEFORE checks (leave unwinds on fail path;
 	 * register sets just wasted work). Reorder checks so sig_len (rsi)
@@ -495,7 +499,6 @@ tv_ecdsa_p256_verify_asm:
 	 * 17 B closer to the tail jmp → reaches rel8. */
 	xor	eax, eax
 	mov	r14, rsp
-	lea	r12, [rip + .Ljt]   /* set once — survives all bc_run calls */
 	push	rdi                 /* sig */
 	push	r8                  /* hv  */
 
@@ -513,7 +516,6 @@ tv_ecdsa_p256_verify_asm:
 	leave
 	pop	r15
 	pop	r14
-	pop	r12
 	pop	rbx
 	ret
 .Lok:
