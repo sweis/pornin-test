@@ -29,7 +29,8 @@ import sys
 # ZERO dropped — Fsub(x,x)=0 (slots hold valid values at init time).
 OPS = {'Fmul':0, 'Fadd':1, 'Fsub':2, 'Nmul':3,
        'CHKLT':4, 'CHKZ':5, 'INV':6, 'NORM':7,
-       'SET1':8, 'COPY':9, 'CHKNZ':10, 'COPYHI':11}
+       'SET1':8, 'COPY':9, 'COPYHI':10}
+# CHKNZ dropped: encode as CHKZ with dst=1 (handler shr's dst·SLOT to flip bit).
 
 # cR2_p DROPPED — projective scale-invariance. Q stays plain (level 0),
 # G scales by Gx_mont: backup = (Gx², Gx·Gy, Gx_mont), all level 1.
@@ -208,7 +209,7 @@ V3 = [
     ('CHKZ',  0,  3,  0),
     # ∞ check (Wycheproof tcId=292 — Z can be kp, NORM required)
     ('NORM',  2,  2,  0),
-    ('CHKNZ', 0,  2,  0),
+    ('CHKZ',  1,  2,  0),   # dst=1 → handler flips: CHKNZ semantics
 ]
 
 
@@ -217,10 +218,10 @@ V3 = [
 # ──────────────────────────────────────────────────────────────────────
 READS  = {'Fmul':(1,2), 'Fadd':(1,2), 'Fsub':(1,2),
           'Nmul':(1,2), 'CHKLT':(1,2), 'CHKZ':(1,), 'INV':(0,1),
-          'NORM':(1,), 'SET1':(), 'COPY':(1,), 'CHKNZ':(1,),
+          'NORM':(1,), 'SET1':(), 'COPY':(1,),
           'COPYHI':(1,)}
 WRITES = {'Fmul', 'Fadd', 'Fsub', 'Nmul', 'INV',
-          'NORM', 'SET1', 'COPY'}
+          'NORM', 'SET1', 'COPY', 'CHKLT'}  # CHKLT trashes dst (Fsub scratch)
 
 def simulate(name, ops, initial, must_survive):
     """Track what each slot holds. Flag reads of dead slots and

@@ -87,7 +87,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 .Ljt:
 	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, .Lnmul-.Ljt
 	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv-.Ljt, .Lnorm-.Ljt
-	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lchknz-.Ljt, .Lcopyhi-.Ljt
+	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lcopyhi-.Ljt
 
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cP.
@@ -150,11 +150,8 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	loop	1b
 	ret
 
-.Lchknz: /* ebp bit 0 ← (s1 == 0).  Call CHKZ then flip bit 0. */
-	call	.Lchkz
-	xor	ebp, 1
-	ret
-.Lchkz:  /* ebp bit 0 ← (s1 != 0). */
+.Lchkz:  /* ebp bit 0 ← (s1 != 0) XOR (dst == 1). CHKNZ = CHKZ with dst=1.
+  * bc_run sets rdi = r14 + dst·SLOT.  dst·SLOT ∈ {0, 88}; 88>>6 = 1. */
 	xor	edx, edx
 	push	K
 	pop	rcx
@@ -163,6 +160,9 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	loop	1b
 	neg	rdx                 /* CF = (rdx != 0) */
 	rcl	ebp, 1              /* CF → bit 0; prior bits shifted up */
+	sub	rdi, r14
+	shr	edi, 6              /* 0 or 88 → 0 or 1 */
+	xor	ebp, edi
 	ret
 
 .Lchklt: /* bpl |= (s1 >= s2). Subtract-and-check-sign — works for
