@@ -795,11 +795,12 @@ tv_ecdsa_p256_verify_asm:
 	jne	.Lf2
 	cmp	rcx, 65
 	jne	.Lf2
-	/* 32 ≤ hv_len ≤ 64: fold both checks into one unsigned range test.
-	 * sub wraps low values to huge; ja covers both ends.  r9 dead after. */
-	sub	r9, 32
-	cmp	r9, 32
-	ja	.Lf2
+	/* 32 ≤ hv_len ≤ 64: rcx = 65 here (jne passed).  r9−65 ∈ [−33,−1]
+	 * for valid; both <32 and >64 land < −33 unsigned.  sub reg,reg
+	 * is 3 B vs sub reg,imm8 4 B.  r9 dead after.  −1 B. */
+	sub	r9, rcx
+	cmp	r9, -33
+	jb	.Lf2
 	/* fe_from_be: stosq×4 advances rdi by 32; rsi index-read only.
 	 * Chain: rdi flows call→call; rsi bumped +32 by _next entry.
 	 * rsi still = 64 here (cmp doesn't modify) → 64·8 − 128 = 384 =
