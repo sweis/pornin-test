@@ -31,4 +31,7 @@ caef18f,1116,12090000,Loop 3 fe_from_le calls (cR2N/Gx/Gy). 12 B vs 15 B direct.
 2aefca3,1114,12090000,Nmul jt → fe_mul11 direct; bc_run presets r11d=0xBC4F every dispatch. .Lnmul (8B) gone.
 b67f17f,1108,12090000,limb5 ports: NORM dst==s1 drop push;pop (−2); bc_run saves dst nibble→r9d for CHKZ (−2); bcrun_off offset-in-rcx (−2).
 b1faca3,1094,12200000,limb5x56 ports: r15=&cP (−5) + packed-ebx bit counter w/ FIXED crossing test frees r13 (−3) + lodsw bc_ptr (−4) + Fadd/Fsub merge via imul (−2).
-HEAD,1100,4358000,FAST build (-DFAST): .Lin scasq→add rdi + loop→dec;jnz (+4); Fadd/Fsub loop→dec;jnz (+2). −64% cycles. imul latency hidden by OoO — separate Fadd/Fsub tested same speed.
+054e320,1089,12090000,mov-cl audit — 5 provable rcx<256 sites (.Lasmod/fe_from_be/fe_from_le/cP/LE-loop). Port from limb5x54.
+8e84ad8,1084,12090000,xlatb + r12 drop. rbx=&.Ljt inside bcrun_off (push/pop). Port from limb5x54.
+6a141ae,1074,12090000,shr-bitmask BE loop: r,s,Qx,Qy,e chain slots 3..7. bc_v1 reorder consumes r,s early. Port from limb5x56.
+HEAD,1080,4080000,FAST build (-DFAST): .Lin scasq→add rdi + loop→dec;jnz (+4); Fadd/Fsub loop→dec;jnz (+2). −64% cycles. imul latency hidden by OoO — separate Fadd/Fsub tested same speed.
