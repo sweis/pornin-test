@@ -48,8 +48,8 @@
  *   16-21 Shamir backups
  *   22,23 u1, u2 */
 	.equ	oADD,   5*SLOT
-	.equ	oCP,    8*SLOT
-	.equ	oCN,    9*SLOT
+	.equ	oCN,    8*SLOT     /* cN first — cNm2 prefix sits before chain */
+	.equ	oCP,    9*SLOT
 	.equ	oBAK,   16*SLOT
 	.equ	oU1,    22*SLOT
 
@@ -60,13 +60,14 @@
 
 .include "bytecode.inc"
 
-/* Constants — 32 LE bytes each. cP stored (not runtime-built): p's
- * 5×54 limbs are less sparse than 11×24 (only 1 all-ones, 1 zero).
- * R = 2^270. Chain decode: cP→8, cN→9, cR2N→10, Gx→11, Gy→12. */
+/* Constants — 32 LE bytes each. Chain: cN→8, cP→9, cR2N→10, Gx→11,
+ * Gy→12. cN stored as n−2 (low byte 0x4F not 0x51) so .Linv can `bt`
+ * directly without special-casing bits 0..4. bc_v1 adds 2 back in
+ * slot 8 (two limbwise Fadd with 1@15) before the range checks. */
+cN:	.quad	0xf3b9cac2fc63254f, 0xbce6faada7179e84     /* n − 2 */
+	.quad	0xffffffffffffffff, 0xffffffff00000000
 cP:	.quad	0xffffffffffffffff, 0x00000000ffffffff
 	.quad	0x0000000000000000, 0xffffffff00000001
-cN:	.quad	0xf3b9cac2fc632551, 0xbce6faada7179e84
-	.quad	0xffffffffffffffff, 0xffffffff00000000
 cR2N:	.quad	0x017644694887ac57, 0x9ea8ca2ae130785e
 	.quad	0x92b6bec59619076a, 0x55aba83afc16484a
 cGX:	.quad	0xcc35062a450f0624, 0xa57f11d76d805e79
@@ -167,7 +168,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 
 /* ── NORM — bring value to [0, p). In-place on s1. ── */
 .Lnorm:
-	lea	r8, [rcx - SLOT]    /* &cN − SLOT = &cP */
+	lea	r8, [rcx + SLOT]    /* &cN + SLOT = &cP (cP is slot 9 now) */
 	push	rsi
 	pop	rdi
 	call	.Lcprop
@@ -199,10 +200,10 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	xor	edx, edx
 	push	K-1
 	pop	rcx
-1:	mov	rax, [rdi]
-	add	rax, rdx
-	mov	rdx, rax
-	and	rax, r13            /* MASK in register — not imm32 */
+1:	add	rdx, [rdi]          /* rdx = running carry + limb */
+	push	rdx
+	pop	rax                 /* 2 B copy; rdx kept for sar */
+	and	rax, r13
 	stosq
 	sar	rdx, W
 	loop	1b
@@ -219,7 +220,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	jmp	.Linv
 
 .Lfmul: /* MontMul mod p. Jump rel8 over .Lnmul's movabs into fe_mul5. */
-	sub	rcx, SLOT
+	add	rcx, SLOT           /* cP = cN + 1 slot */
 	push	1
 	pop	r11
 	jmp	fe_mul5             /* rel8 — 10 B away */
@@ -331,10 +332,7 @@ fe_mul5:
 	pop	rdi
 	pop	rdx
 	call	.Lnmul              /* dst = dst² */
-	cmp	ebx, 4
-	jb	.Lmul               /* bits 0-3: n-2 has 1111 */
-	je	.Lnx                /* bit 4: n-2 has 0 */
-	bt	dword ptr [rip + cN], ebx
+	bt	dword ptr [rip + cN], ebx   /* cN stored as n−2 */
 	jnc	.Lnx
 .Lmul:	pop	rdi
 	pop	rdx
@@ -533,8 +531,8 @@ tv_ecdsa_p256_verify_asm:
 	mov	rsi, r8             /* hv */
 	call	fe_from_be          /* e  → 7 */
 
-	/* Constants (LE). cP,cN,cR2N,cGX,cGY → 8,9,10,11,12. */
-	lea	rdx, [rip + cP]
+	/* Constants (LE). cN,cP,cR2N,cGX,cGY → 8,9,10,11,12. */
+	lea	rdx, [rip + cN]
 	push	5
 	pop	r15
 1:	call	fe_from_le

@@ -249,7 +249,8 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	/* falls through */
 .Lcprop:	/* in-place wrapper — fe_mul11 calls .Lcp_shared directly. */
 	push	rdi
-	mov	rsi, rdi
+	push	rdi
+	pop	rsi                 /* push;pop beats mov rsi,rdi by 1 B */
 	call	.Lcp_shared
 	pop	rdi
 	ret
@@ -259,7 +260,8 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	pop	rcx
 1:	lodsq
 	add	rax, rdx
-	mov	rdx, rax
+	push	rax
+	pop	rdx                 /* −1 B vs mov rdx,rax (3→2) */
 	and	eax, MASK
 	stosq
 	sar	rdx, W
@@ -281,15 +283,13 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
  * region [8i,8i+8) trails read region [56+3i,56+3i+4) by 5i−56 ≥ 0
  * for i < 11, so in-place is safe. Exits rsi = src+32, rdi = dst+88. */
 fe_from_be:
-	lea	rdx, [rdi + 87]
 	push	32
 	pop	rcx
 1:	lodsb
-	mov	[rdx], al
-	dec	rdx
+	mov	[rdi + rcx + 55], al  /* rcx 32→1 → rdi+87→rdi+56. SIB+disp8. */
 	loop	1b
-	push	rsi                 /* = src+32 */
-	lea	rsi, [rdx + 1]      /* = dst+56 */
+	push	rsi                 /* = src+32 (lodsb advanced it) */
+	lea	rsi, [rdi + 56]     /* rdi untouched by this loop */
 	call	fe_from_le
 	pop	rsi
 	ret
@@ -302,9 +302,9 @@ fe_from_le:
 	stosq
 	add	rsi, 3
 	loop	1b
-	movzx	eax, word ptr [rsi]
+	xor	eax, eax
+	lodsw                       /* ax ← top 16 bits; rsi += 2 (chain) */
 	stosq
-	add	rsi, 2              /* leave rsi = src+32 for chaining */
 	ret
 
 /* ======================================================================

@@ -122,16 +122,24 @@ for op, d, s1, s2 in RCB:
 # X,Y,Z always same level. Final check: X·1 vs r·Z both at L−1.
 
 V1 = [
-    # Entry: Qx@3, Qy@4, r@5, s@6, e@7, cP@8, cN@9, cR2_n@10, Gx@11, Gy@12.
+    # Entry: Qx@3, Qy@4, r@5, s@6, e@7, cN@8, cP@9, cR2_n@10, Gx@11, Gy@12.
+    # cN stored as n−2 in rodata — bc_v1 adds 2 before range checks so
+    # .Linv can `bt` directly (no bits-0..4 special case). n−2 limb 0
+    # differs from n limb 0 by exactly 2 (no borrow past byte 0).
     # Exit stages slots 0-7 = (G.X, G.Y, G.Z, Q.X, Q.Y, Q.Z, u1, u2) for
     # one rep movsq to 16-23. Qx,Qy never move (already at 3,4). Temps
     # routed around slot 0 (Gx²) and slots 3,4,5,6 (inputs alive longer).
 
+    # ── SET1 first (also used by on-curve later); n−2 → n via +1 +1 ──
+    ('SET1', 15,  0,  0),  # slot 15 = 1 (survives to on-curve/Z_Q)
+    ('Fadd',  8,  8, 15),  # n−2 → n−1 (limbwise: only limb 0 changes)
+    ('Fadd',  8,  8, 15),  # n−1 → n
+
     # ── Range checks ──
-    ('CHKLT', 0,  5, 9),  # r < n
-    ('CHKLT', 0,  6, 9),  # s < n
-    ('CHKLT', 0,  3, 8),  # Qx < p
-    ('CHKLT', 0,  4, 8),  # Qy < p
+    ('CHKLT', 0,  5, 8),  # r < n
+    ('CHKLT', 0,  6, 8),  # s < n
+    ('CHKLT', 0,  3, 9),  # Qx < p
+    ('CHKLT', 0,  4, 9),  # Qy < p
 
     # ── s_mont → 6 (overwrite s); consumes cR2_n @ 10 ──
     ('Nmul',  6,  6, 10),
@@ -146,7 +154,7 @@ V1 = [
     ('Fadd', 10, 10, 13),
 
     # ── On-curve: temps 1,2,13 (slot 0 stays Gx²; 3,4 stay Qx,Qy). ──
-    ('SET1', 15,  0,  0),  # Z = 1
+    # slot 15 = 1 already set at top.
     ('Fmul',  2,  4,  4),  # Qy²  @ −1
     ('Fmul',  2,  2, 15),  # Qy²·Z  @ −2
     ('Fmul',  1,  3,  3),  # Qx²  @ −1
@@ -168,7 +176,7 @@ V1 = [
     ('INV',  13,  6,  0),
 
     # ── (r+n) → 14; u1 → 6 (overwrites s_mont), u2 → 7 (overwrites e) ──
-    ('Fadd', 14,  5,  9),  # (r+n) → 14
+    ('Fadd', 14,  5,  8),  # (r+n) → 14
     ('Nmul',  6,  7, 13),  # u1 = e·w → 6
     ('Nmul',  7,  5, 13),  # u2 = r·w → 7
 
@@ -201,7 +209,7 @@ V3 = [
     # r·Z derived as (r+n)·Z − n·Z (saves storing r separately).
     ('Fmul',  5,  0, 15),  # X·1  @ L−1
     ('Fmul',  4, 14,  2),  # (r+n)·Z  @ L−1
-    ('Fmul',  3,  9,  2),  # n·Z  @ L−1  (n @ slot 9, level 0)
+    ('Fmul',  3,  8,  2),  # n·Z  @ L−1  (n @ slot 8, level 0)
     ('Fsub',  3,  4,  3),  # r·Z = (r+n)·Z − n·Z
     ('Fsub',  3,  5,  3),  # d1 = X·1 − r·Z
     ('Fsub',  4,  5,  4),  # d2 = X·1 − (r+n)·Z
@@ -273,9 +281,9 @@ if __name__ == '__main__':
           file=sys.stderr)
 
     # V1 slot lifetime
-    v1_init = {3:'Qx', 4:'Qy', 5:'r', 6:'s', 7:'e', 8:'cP', 9:'cN',
+    v1_init = {3:'Qx', 4:'Qy', 5:'r', 6:'s', 7:'e', 8:'cN', 9:'cP',
                10:'cR2n', 11:'Gx', 12:'Gy'}
-    v1_survive = {8:'cP', 9:'cN'}
+    v1_survive = {8:'cN', 9:'cP'}
     errs, out = simulate('v1', V1, v1_init, v1_survive)
     if errs:
         print("/* V1 LIFETIME ERRORS: */", file=sys.stderr)

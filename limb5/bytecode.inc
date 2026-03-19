@@ -50,7 +50,7 @@ bc_rcb:
 bc_v3:
 	.byte	0xf0, 0x50  /* Fmul    5 ←  0, 15 */
 	.byte	0x20, 0x4e  /* Fmul    4 ← 14,  2 */
-	.byte	0x20, 0x39  /* Fmul    3 ←  9,  2 */
+	.byte	0x20, 0x38  /* Fmul    3 ←  8,  2 */
 	.byte	0x32, 0x34  /* Fsub    3 ←  4,  3 */
 	.byte	0x32, 0x35  /* Fsub    3 ←  5,  3 */
 	.byte	0x42, 0x45  /* Fsub    4 ←  5,  4 */
@@ -63,10 +63,13 @@ bc_v3:
 	/* 23 B */
 
 bc_v1:
-	.byte	0x94, 0x05  /* CHKLT   0 ←  5,  9 */
-	.byte	0x94, 0x06  /* CHKLT   0 ←  6,  9 */
-	.byte	0x84, 0x03  /* CHKLT   0 ←  3,  8 */
-	.byte	0x84, 0x04  /* CHKLT   0 ←  4,  8 */
+	.byte	0x08, 0xf0  /* SET1   15 ←  0,  0 */
+	.byte	0xf1, 0x88  /* Fadd    8 ←  8, 15 */
+	.byte	0xf1, 0x88  /* Fadd    8 ←  8, 15 */
+	.byte	0x84, 0x05  /* CHKLT   0 ←  5,  8 */
+	.byte	0x84, 0x06  /* CHKLT   0 ←  6,  8 */
+	.byte	0x94, 0x03  /* CHKLT   0 ←  3,  9 */
+	.byte	0x94, 0x04  /* CHKLT   0 ←  4,  9 */
 	.byte	0xa3, 0x66  /* Nmul    6 ←  6, 10 */
 	.byte	0xc0, 0xac  /* Fmul   10 ← 12, 12 */
 	.byte	0xb0, 0x0b  /* Fmul    0 ← 11, 11 */
@@ -75,7 +78,6 @@ bc_v1:
 	.byte	0xb1, 0xdb  /* Fadd   13 ← 11, 11 */
 	.byte	0xb1, 0xdd  /* Fadd   13 ← 13, 11 */
 	.byte	0xd1, 0xaa  /* Fadd   10 ← 10, 13 */
-	.byte	0x08, 0xf0  /* SET1   15 ←  0,  0 */
 	.byte	0x40, 0x24  /* Fmul    2 ←  4,  4 */
 	.byte	0xf0, 0x22  /* Fmul    2 ←  2, 15 */
 	.byte	0x30, 0x13  /* Fmul    1 ←  3,  3 */
@@ -93,7 +95,7 @@ bc_v1:
 	.byte	0x05, 0x02  /* CHKZ    0 ←  2,  0 */
 	.byte	0x09, 0xd6  /* COPY   13 ←  6,  0 */
 	.byte	0x06, 0xd6  /* INV    13 ←  6,  0 */
-	.byte	0x91, 0xe5  /* Fadd   14 ←  5,  9 */
+	.byte	0x81, 0xe5  /* Fadd   14 ←  5,  8 */
 	.byte	0xd3, 0x67  /* Nmul    6 ←  7, 13 */
 	.byte	0xd3, 0x75  /* Nmul    7 ←  5, 13 */
 	.byte	0xc0, 0x1b  /* Fmul    1 ← 11, 12 */
@@ -104,7 +106,7 @@ bc_v1:
 	.byte	0x08, 0x10  /* SET1    1 ←  0,  0 */
 	.byte	0x22, 0x22  /* Fsub    2 ←  2,  2 */
 	.byte	0x00  /* END */
-	/* 81 B */
+	/* 85 B */
 
 	.equ	obc_rcb, 0
 	.equ	obc_v3,  87
