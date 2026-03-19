@@ -262,52 +262,46 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	jmp	.Lasmod
 
 /* ── Decoders ──
- * 54-bit limbs are not byte-aligned: limb i starts at bit 54i.
- *   limb 0: byte  0, shift  0
- *   limb 1: byte  6, shift  6
- *   limb 2: byte 13, shift  4
- *   limb 3: byte 20, shift  2
- *   limb 4: byte 24, shift 24  ← (27,0) would overread; (24,24) fits 32-byte input
- * Both decoders chain: exit rsi=src+32, rdi=dst+40. */
+ * Limb i starts at bit 54i → byte 54i/8, shift 54i&7. Loop i=0..3 with
+ * a running bit-offset; unroll i=4 as (24,24) — the natural (27,0)
+ * would read bytes 27..34 (3 past a 32-B input), while shr-24 of
+ * bytes 24..31 yields the same 40 top bits without overread.
+ * Both chain: exit rsi=src+32, rdi=dst+40. */
 
 fe_from_le:
-	mov	rax, [rsi]
+	xor	edx, edx            /* bit offset: 0, 54, 108, 162 */
+1:	mov	ecx, edx
+	shr	ecx, 3              /* byte offset: 0, 6, 13, 20 */
+	mov	rax, [rsi + rcx]
+	mov	cl, dl
+	and	cl, 7               /* shift: 0, 6, 4, 2 */
+	shr	rax, cl
 	and	rax, r13
 	stosq
-	mov	rax, [rsi+6]
-	shr	rax, 6
-	and	rax, r13
-	stosq
-	mov	rax, [rsi+13]
-	shr	rax, 4
-	and	rax, r13
-	stosq
-	mov	rax, [rsi+20]
-	shr	rax, 2
-	and	rax, r13
-	stosq
-	mov	rax, [rsi+24]
+	add	edx, W
+	cmp	dl, 4*W             /* 216 — stop before limb 4 */
+	jne	1b
+	mov	rax, [rsi + 24]     /* limb 4: (24,24) */
 	shr	rax, 24
 	stosq
 	add	rsi, 32
 	ret
 
-/* fe_from_be — reverse 32 input bytes into stack buffer, then decode.
- * Buffer is exactly 32 B; limb 4 uses (24,24) so no overread. */
+/* fe_from_be — reverse 32 bytes into the dst slot itself (bytes 8..39),
+ * then decode from there. Write limb i to [rdi+8i..] trails read from
+ * [rdi+8+byte_i..] by ≥7 B for all i, so no read-after-write hazard. */
 fe_from_be:
-	sub	rsp, 40             /* 32 B buffer + 8 B to keep 16-align */
-	lea	rdx, [rsp + 31]
+	lea	rdx, [rdi + 39]
 	push	32
 	pop	rcx
 1:	lodsb
 	mov	[rdx], al
 	dec	rdx
-	loop	1b                  /* rsi = src+32, rcx = 0 */
+	loop	1b                  /* rsi=src+32, rdx=rdi+7, rcx=0 */
 	push	rsi
-	lea	rsi, [rsp + 8]      /* buffer, past the pushed rsi */
+	lea	rsi, [rdx + 1]      /* = rdi+8 */
 	call	fe_from_le
 	pop	rsi
-	add	rsp, 40
 	ret
 
 /* ======================================================================
