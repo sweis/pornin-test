@@ -39,17 +39,21 @@
  *   0-2   acc (X:Y:Z)
  *   3,4   RCB scratch
  *   5-7   addend (X₂:Y₂:Z₂) — RCB never writes
- *   8     cP — RCB never writes
+ *   8     cP (signed-limb, built in verify) — RCB never writes
  *   9     cN — RCB never writes
  *   10    b — RCB never writes
  *   11-13 RCB scratch
  *   14    (r+n) — RCB never writes
  *   15    one — RCB never writes
  *   16-21 Shamir backups
- *   22,23 u1, u2 */
+ *   22,23 u1, u2
+ *
+ * cP at 8 (not 9): verify builds it right after the BE chain (rdi
+ * already points there), then the 4-iter LE loop chains straight
+ * through without an unrolled fe_from_le call. */
 	.equ	oADD,   5*SLOT
-	.equ	oCN,    8*SLOT     /* cN first — cNm2 prefix sits before chain */
-	.equ	oCP,    9*SLOT
+	.equ	oCP,    8*SLOT
+	.equ	oCN,    9*SLOT
 	.equ	oBAK,   16*SLOT
 	.equ	oU1,    22*SLOT
 
@@ -60,14 +64,13 @@
 
 .include "bytecode.inc"
 
-/* Constants — 32 LE bytes each. Chain: cN→8, cP→9, cR2N→10, Gx→11,
- * Gy→12. cN stored as n−2 (low byte 0x4F not 0x51) so .Linv can `bt`
- * directly without special-casing bits 0..4. bc_v1 adds 2 back in
- * slot 8 (two limbwise Fadd with 1@15) before the range checks. */
+/* Constants — 32 LE bytes each. Chain: cN→9, cR2N→10, Gx→11, Gy→12.
+ * cP built signed-form in verify (−32 B rodata). cN stored as n−2
+ * (low byte 0x4F not 0x51) so .Linv can `bt` directly without
+ * special-casing bits 0..4. bc_v1 adds 2 back in slot 9 (two limbwise
+ * Fadd with 1@15) before the range checks. */
 cN:	.quad	0xf3b9cac2fc63254f, 0xbce6faada7179e84     /* n − 2 */
 	.quad	0xffffffffffffffff, 0xffffffff00000000
-cP:	.quad	0xffffffffffffffff, 0x00000000ffffffff
-	.quad	0x0000000000000000, 0xffffffff00000001
 cR2N:	.quad	0x017644694887ac57, 0x9ea8ca2ae130785e
 	.quad	0x92b6bec59619076a, 0x55aba83afc16484a
 cGX:	.quad	0xcc35062a450f0624, 0xa57f11d76d805e79
@@ -114,7 +117,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	push	K
 	pop	rcx
 	rep	stosq
-	inc	qword ptr [rdi - K*8]
+	inc	byte ptr [rdi - K*8]   /* slot is all-zero → byte inc ≡ qword inc */
 	ret
 
 .Lfadd:
@@ -154,31 +157,33 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	xor	ebp, edi
 	ret
 
+/* CHKLT — bpl |= (s1 ≥ s2). Subtract-and-check-sign: Fsub then
+ * cprop → SF = sign of value(s1)−value(s2). Works for s2 in any
+ * limb form (signed cP, unsigned cN) since cprop delivers the true
+ * sign of the integer difference. dst (slot 0 in bc_v1) is scratch.
+ * .Lcprop's last `add [rdi],rdx` sets SF; pop/ret preserve flags. */
 .Lchklt:
-	push	K-1
-	pop	rcx
-1:	mov	rax, [rsi + rcx*8]
-	cmp	rax, [rdx + rcx*8]
-	jb	2f
-	ja	3f
-	dec	ecx
-	jns	1b
-3:	inc	ebp
+	push	rdi
+	call	.Lfsub
+	pop	rdi
+	call	.Lcprop
+	js	2f
+	inc	ebp
 2:	ret
 
-/* ── NORM — bring value to [0, p). In-place on s1. ── */
+/* ── NORM — bring value to [0, p). In-place on s1. .Lcprop's last
+ * `add [rdi],rdx` sets SF from the top limb; .Laddm/.Lsubm both fall
+ * into .Lcprop so SF is live at every loop head. ── */
 .Lnorm:
-	lea	r8, [rcx + SLOT]    /* &cN + SLOT = &cP (cP is slot 9 now) */
+	lea	r8, [rcx - SLOT]    /* &cN − SLOT = &cP (slot 8) */
 	push	rsi
 	pop	rdi
 	call	.Lcprop
-1:	test	byte ptr [rdi + K*8 - 1], 0x80
-	jz	2f
+1:	jns	2f
 	call	.Laddm
 	jmp	1b
 2:	call	.Lsubm
-	test	byte ptr [rdi + K*8 - 1], 0x80
-	jz	2b
+	jns	2b
 	/* fall into .Laddm for final add */
 
 .Laddm:                             /* rdx free: NORM ignores bc_run's s2 arg */
@@ -220,7 +225,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	jmp	.Linv
 
 .Lfmul: /* MontMul mod p. Jump rel8 over .Lnmul's movabs into fe_mul5. */
-	add	rcx, SLOT           /* cP = cN + 1 slot */
+	sub	rcx, SLOT           /* cP = cN − 1 slot (slot 8) */
 	push	1
 	pop	r11
 	jmp	fe_mul5             /* rel8 — 10 B away */
@@ -529,11 +534,24 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_from_be          /* r  → 5 */
 	call	fe_from_be          /* s  → 6 */
 	mov	rsi, r8             /* hv */
-	call	fe_from_be          /* e  → 7 */
+	call	fe_from_be          /* e  → 7; rdi = slot 8 */
 
-	/* Constants (LE). cN,cP,cR2N,cGX,cGY → 8,9,10,11,12. */
+	/* cP → slot 8, SIGNED limb form: (−1, 2^42, 0, 2^30, 2^40−256).
+	 * p = 2^256 − 2^224 + 2^192 + 2^96 − 1 — five ±power-of-2 terms.
+	 * Zero-fill then 4 patches. fe_mul5/NORM arithmetic is already
+	 * signed (imul, 128-bit acc); CHKLT changed to Fsub-based. */
+	xor	eax, eax
+	push	K
+	pop	rcx
+	rep	stosq                       /* all zero; rdi → slot 9 */
+	dec	qword ptr [rdi - 40]        /* limb 0 = −1 */
+	mov	byte ptr [rdi - 27], 0x04   /* limb 1 byte 5: 2^42 */
+	mov	byte ptr [rdi - 13], 0x40   /* limb 3 byte 3: 2^30 */
+	dec	dword ptr [rdi - 7]         /* limb 4 bytes 1-4: 2^40−256 = 0x00FFFFFFFF00 */
+
+	/* Constants (LE). cN,cR2N,cGX,cGY → 9,10,11,12. */
 	lea	rdx, [rip + cN]
-	push	5
+	push	4
 	pop	r15
 1:	call	fe_from_le
 	dec	r15

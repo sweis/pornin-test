@@ -5,7 +5,9 @@ all 8 backup values staged contiguous at slots 0-7 for one COPYHI.
 
 Emits bc_rcb, bc_v3, bc_v1 as .byte directives with slot-usage
 validation. The RCB schedule is tiny.S's, remapped to avoid reserved
-slots (8=cP, 9=cN, 10=b, 14=r_mont, 15=cR2/n_mont).
+slots (8=cP, 9=cN, 10=b, 14=r+n, 15=one). cP at 8 (not 9) so verify
+can build it signed-form right after the BE chain, then chain straight
+into the 4-iter LE loop without unrolling.
 
 Ops:
   0 Fmul   (mod-p Montgomery, m0inv=1)
@@ -122,24 +124,27 @@ for op, d, s1, s2 in RCB:
 # X,Y,Z always same level. Final check: X·1 vs r·Z both at L−1.
 
 V1 = [
-    # Entry: Qx@3, Qy@4, r@5, s@6, e@7, cN@8, cP@9, cR2_n@10, Gx@11, Gy@12.
+    # Entry: Qx@3, Qy@4, r@5, s@6, e@7, cP@8, cN@9, cR2_n@10, Gx@11, Gy@12.
     # cN stored as n−2 in rodata — bc_v1 adds 2 before range checks so
     # .Linv can `bt` directly (no bits-0..4 special case). n−2 limb 0
     # differs from n limb 0 by exactly 2 (no borrow past byte 0).
+    # cP built signed-form in verify (−1, 2^42, 0, 2^30, 2^40−256);
+    # Fsub-based CHKLT works with any s2 limb form since cprop
+    # delivers the true sign of value(s1)−value(s2).
     # Exit stages slots 0-7 = (G.X, G.Y, G.Z, Q.X, Q.Y, Q.Z, u1, u2) for
     # one rep movsq to 16-23. Qx,Qy never move (already at 3,4). Temps
     # routed around slot 0 (Gx²) and slots 3,4,5,6 (inputs alive longer).
 
     # ── SET1 first (also used by on-curve later); n−2 → n via +1 +1 ──
     ('SET1', 15,  0,  0),  # slot 15 = 1 (survives to on-curve/Z_Q)
-    ('Fadd',  8,  8, 15),  # n−2 → n−1 (limbwise: only limb 0 changes)
-    ('Fadd',  8,  8, 15),  # n−1 → n
+    ('Fadd',  9,  9, 15),  # n−2 → n−1 (limbwise: only limb 0 changes)
+    ('Fadd',  9,  9, 15),  # n−1 → n
 
-    # ── Range checks ──
-    ('CHKLT', 0,  5, 8),  # r < n
-    ('CHKLT', 0,  6, 8),  # s < n
-    ('CHKLT', 0,  3, 9),  # Qx < p
-    ('CHKLT', 0,  4, 9),  # Qy < p
+    # ── Range checks (CHKLT writes dst=0 as Fsub scratch) ──
+    ('CHKLT', 0,  5, 9),  # r < n
+    ('CHKLT', 0,  6, 9),  # s < n
+    ('CHKLT', 0,  3, 8),  # Qx < p
+    ('CHKLT', 0,  4, 8),  # Qy < p
 
     # ── s_mont → 6 (overwrite s); consumes cR2_n @ 10 ──
     ('Nmul',  6,  6, 10),
@@ -176,7 +181,7 @@ V1 = [
     ('INV',  13,  6,  0),
 
     # ── (r+n) → 14; u1 → 6 (overwrites s_mont), u2 → 7 (overwrites e) ──
-    ('Fadd', 14,  5,  8),  # (r+n) → 14
+    ('Fadd', 14,  5,  9),  # (r+n) → 14
     ('Nmul',  6,  7, 13),  # u1 = e·w → 6
     ('Nmul',  7,  5, 13),  # u2 = r·w → 7
 
@@ -209,7 +214,7 @@ V3 = [
     # r·Z derived as (r+n)·Z − n·Z (saves storing r separately).
     ('Fmul',  5,  0, 15),  # X·1  @ L−1
     ('Fmul',  4, 14,  2),  # (r+n)·Z  @ L−1
-    ('Fmul',  3,  8,  2),  # n·Z  @ L−1  (n @ slot 8, level 0)
+    ('Fmul',  3,  9,  2),  # n·Z  @ L−1  (n @ slot 9, level 0)
     ('Fsub',  3,  4,  3),  # r·Z = (r+n)·Z − n·Z
     ('Fsub',  3,  5,  3),  # d1 = X·1 − r·Z
     ('Fsub',  4,  5,  4),  # d2 = X·1 − (r+n)·Z
@@ -229,8 +234,9 @@ READS  = {'Fmul':(1,2), 'Fadd':(1,2), 'Fsub':(1,2),
           'Nmul':(1,2), 'CHKLT':(1,2), 'CHKZ':(1,), 'INV':(0,1),
           'NORM':(1,), 'SET1':(), 'COPY':(1,), 'CHKNZ':(1,),
           'COPYHI':(1,)}
+# CHKLT is Fsub-based (writes dst as scratch).
 WRITES = {'Fmul', 'Fadd', 'Fsub', 'Nmul', 'INV',
-          'NORM', 'SET1', 'COPY'}
+          'NORM', 'SET1', 'COPY', 'CHKLT'}
 
 def simulate(name, ops, initial, must_survive):
     """Track what each slot holds. Flag reads of dead slots and
@@ -281,9 +287,9 @@ if __name__ == '__main__':
           file=sys.stderr)
 
     # V1 slot lifetime
-    v1_init = {3:'Qx', 4:'Qy', 5:'r', 6:'s', 7:'e', 8:'cN', 9:'cP',
+    v1_init = {3:'Qx', 4:'Qy', 5:'r', 6:'s', 7:'e', 8:'cP', 9:'cN',
                10:'cR2n', 11:'Gx', 12:'Gy', 15:'junk'}
-    v1_survive = {9:'cP'}  # slot 8 written by n−2→n fixup; still n semantically
+    v1_survive = {8:'cP'}  # slot 9 written by n−2→n fixup; still n semantically
     errs, out = simulate('v1', V1, v1_init, v1_survive)
     if errs:
         print("/* V1 LIFETIME ERRORS: */", file=sys.stderr)
@@ -294,7 +300,7 @@ if __name__ == '__main__':
           f"15={out.get(15)} */", file=sys.stderr)
 
     # V3 slot lifetime
-    v3_init = {0:'X', 1:'Y', 2:'Z', 8:'cP', 9:'cN', 14:'r_plus_n', 15:'one'}
+    v3_init = {0:'X', 1:'Y', 2:'Z', 8:'cP', 9:'n', 14:'r_plus_n', 15:'one'}
     errs, _ = simulate('v3', V3, v3_init, {})
     if errs:
         print("/* V3 LIFETIME ERRORS: */", file=sys.stderr)
