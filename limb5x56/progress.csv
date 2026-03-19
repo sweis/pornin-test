@@ -4,3 +4,5 @@ de151cc,1125,3040902,Phase 1: 607/607. 7-byte decoder (-13) + inc-byte cP (-3). 
 fc89ce3,1113,3047684,r15=&cP disp8 + FIXED packed counter ((ebx+1)&63==0 not cmp bl W) + merged Fadd/Fsub + imul-cond-neg + rbx LE ctr (-12)
 72c7de0,1094,3057000,shr-bitmask BE loop (ebx=0b10101: CF=chain/pop ZF=exit one insn) + lodsq/dec/lodsd decoder (W=56=7B limb 32b top) + esi-offset .Lcadd + rbx=rcx=0 mov bl/cl (-19)
 1f2d8cb,1084,3069000,xlatb backport from limb11x24: bcptr rbx->rsi (lodsw) jt r12->rbx (xlatb) r12 unused -> drop push/pop/lea (-11) bcrun +2 fe_from_be mov cl (-1). Net -10. FRAME 968->960 (4 pushes)
+# limb11 135a928 cqo+not single-loop norm: +1 B here (built 1085 607/607). .Lcprop in-place tail add[rdi]rdx doesn't yield rax=top -> +3 B mov rax[rdi]. Top limb 256-4*56=32 nominal but ~36 bit during norm (12p bound) -> or rdx,rax REX mandatory (+1 vs limb11 or edx,eax). -4+2+3=+1.
+# Suffix share: only 58585bc3 (pop rax;pop rax;pop rbx;ret) @ 0xeb (.Linv) <-> 0x183 (fe_mul5 epilog). 150 B gap > 127 rel8. fe_mul5 body (145 B) sits between; .Lfmul fallthrough is load-bearing; can't close without -23 B from fe_mul5.
