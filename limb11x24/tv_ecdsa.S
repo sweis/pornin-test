@@ -34,14 +34,14 @@
 
 /* Slot map (RCB never writes 5,6,7,8,9,10,14,15 — load-bearing):
  *   0-2   acc (X:Y:Z)
- *   3,4   RCB scratch
+ *   3,4   RCB scratch   (bc_v1 entry: r,s — consumed before scratch use)
  *   5-7   addend (X₂:Y₂:Z₂)
  *   8     cP (built at runtime)
  *   9     cN (decoded)
  *   10    b (derived in bc_v1)
  *   11-13 RCB scratch
- *   14    r_mont (bc_v1 writes, bc_v3 reads — survives 256 RCBs)
- *   15    cR2_p → n_mont (bc_v1 converts in place as LAST MULR2)
+ *   14    r+n (bc_v1 writes, bc_v3 reads — survives 256 RCBs)
+ *   15    1 (bc_v1 SET1, bc_v3 reads — survives 256 RCBs)
  *   16,17 u1, u2 scalars (normalized [0,n) for bit-read)
  *   18-23 Shamir backups (G @ 18-20, Q @ 21-23)
  *
@@ -62,7 +62,7 @@
 
 /* Constants — 32 LE bytes each. cR2_p DROPPED — projective scale-
  * invariance lets Q stay plain (level 0) and G scale by Gx_mont.
- * rodata: cN,cR2N,cGX,cGY → 4 constants (128 B). Chain 9,10 → 2,3. */
+ * rodata: cN,cR2N,cGX,cGY → 4 constants (128 B). */
 /* cN stores n−2 (not n) — INV's bt reads the Fermat exponent directly,
  * no cmp/jb/je special-case. verify +2's slot 9 after decode (only low
  * byte differs: 0x4f vs 0x51). */
@@ -499,8 +499,7 @@ tv_ecdsa_p256_verify_asm:
 	 * 17 B closer to the tail jmp → reaches rel8. */
 	xor	eax, eax
 	mov	r14, rsp
-	push	rdi                 /* sig */
-	push	r8                  /* hv  */
+	push	r8                  /* hv — BE loop pops on iter 4. leave discards on fail. */
 
 	cmp	rsi, 64             /* sig_len FIRST — before rsi clobber */
 	jne	.Lfail
@@ -519,12 +518,26 @@ tv_ecdsa_p256_verify_asm:
 	pop	rbx
 	ret
 .Lok:
-	/* User inputs (BE). Qx,Qy,e chain 5,6,7 → rdi ends at slot 8. */
-	lea	rdi, [r14 + 5*SLOT]
-	call	fe_from_be          /* Qx → 5 */
-	call	fe_from_be          /* Qy → 6 */
-	pop	rsi                 /* hv */
-	call	fe_from_be          /* e  → 7   rdi now at slot 8 */
+	/* BE chain: r,s,Qx,Qy,e → slots 3..7 (rdi ends at slot 8 = &cP).
+	 * bc_v1 reordered to consume r@3,s@4 before those slots become scratch.
+	 *
+	 * Bitmask ebx=0b10101 drives chain-vs-pop: `shr ebx,1` gives CF=bit0
+	 * and ZF=(ebx==0) in one 2 B insn. fe_from_be leaves rsi = src+32, so
+	 * CF=1 (chain) → do nothing; CF=0 (fresh) → pop next src. jc/pop
+	 * preserve the shr's ZF for the loop test. 5 iters: 1,0,1,0,1 →
+	 * sig, chain, pop pub+1, chain, pop hv. Stack: 2 pushes (hv at spec
+	 * setup, pub+1 here), 2 pops (iters 2,4). ebx=0 at exit. */
+	push	rsi                 /* pub+1 — iter 2 */
+	push	rdi
+	pop	rsi                 /* rsi = sig (rdi still = sig, untouched) */
+	lea	rdi, [r14 + 3*SLOT]
+	push	0b10101
+	pop	rbx
+1:	call	fe_from_be
+	shr	ebx, 1              /* CF = chain-bit, ZF = done */
+	jc	2f                  /* CF=1: rsi already advanced */
+	pop	rsi                 /* CF=0: next source group */
+2:	jnz	1b
 	mov	r15, rdi            /* r15 = &cP — used by Fmul, NORM/Lasmod, bc_run */
 
 	/* cP → slot 8, SIGNED limb form: (−1,0,0,0,1,0,0,0,1,−256,65536).
@@ -542,8 +555,7 @@ tv_ecdsa_p256_verify_asm:
 	inc	byte ptr [rdi - 16]    /*   low byte → 0: = −256 */
 	inc	byte ptr [rdi - 6]     /* limb 10 byte 2: = 65536 */
 
-	/* Constants (LE). cN,cR2_n,cGX,cGY → 9,10,11,12 — all chain.
-	 * Then r,s → 13,14 chain too. ZERO lea's after the Qx start. */
+	/* Constants (LE). cN,cR2_n,cGX,cGY → 9,10,11,12 — all chain. */
 	lea	rsi, [rip + cN]
 	call	fe_from_le          /* cN (= n−2) → 9; rdi now at slot 10 */
 	add	byte ptr [rdi - SLOT], 2   /* slot 9 limb 0: 0x63254f → 0x632551 */
@@ -552,10 +564,6 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_from_le
 	pop	rcx
 	loop	1b
-
-	pop	rsi                 /* sig */
-	call	fe_from_be          /* r → 13 */
-	call	fe_from_be          /* s → 14 */
 
 	/* ── bc_v1 ── */
 	push	obc_v1
