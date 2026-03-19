@@ -774,10 +774,14 @@ fe_mul_m:
 	jae	.Lr
 	/* t[0..7] < 2^256, possibly ≥ m.  t[8] = 0. */
 
-	/* Final cond-sub via .Lop3.  rsi = &t BEFORE releasing the
-	 * frame (reads are safe: .Lop3's pushes land at t[14..17],
-	 * past the result in t[0..7]).  dest/m pop from under t.
-	 * `push rsp` captures pre-decrement value; pop balances. */
+	/* Final cond-sub via .Lop3 TAIL-JMP.  pop rbp/rbx FIRST (.Lop3
+	 * doesn't touch them), then jmp — .Lop3's ret goes to OUR
+	 * caller.  call+pop+pop+ret (8B) → pop+pop+jmp (7B).  jmp is
+	 * rel32 (~220 B back).  Stack: after pops rsp=retaddr; .Lop3
+	 * pushes 3×8=24 B below that, landing at [retaddr-24..-8].
+	 * t buffer was at [retaddr-104..-32] — no overlap.  rsi=&t
+	 * points into freed space but reads are safe (nothing pushes
+	 * over t[0..7]).  `push rsp` captures pre-decrement.  −1 B. */
 	push	rsp
 	pop	rsi
 	add	rsp, 72
@@ -785,11 +789,9 @@ fe_mul_m:
 	pop	rcx                 /* m */
 	push	rcx
 	pop	rdx
-	call	.Lop3
-
 	pop	rbp
 	pop	rbx
-	ret
+	jmp	.Lop3
 
 /* ======================================================================
  * Public entry point.
