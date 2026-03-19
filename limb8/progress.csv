@@ -16,3 +16,5 @@ a9f95b3,914,4686000,bc_run: mov eax,[rbx] over-reads 4B (was movzx WORD). and ea
 797bc4f,904,5165000,.Lop3: dec;jnz→loop (both). Preserves CF for sbb/adc chain. ~70K iters vs mul8's 10M. +10% cyc on size floor. −4 B.
 37176ed,903,5200000,INV dst=slot5: bt [rdi-32] drops REX (was [r8-128]). bc_v1 staging all post-INV (slot0/1 survive). −1 B. 25 B under Thomas.
 93ceaad,898,5134000,fe_from_be_pair: call fe_from_be falls through to _next. 2× 10B call-pair → 5B. Helper +5B. −5 B. UNDER 900.
+15e27f7,912,3954000,DEFAULT build (64-bit product). DOMINATES THOMAS 928/4.48M. Shared-code grind shrunk all 3 variants.
+15e27f7,970,3470000,SOLINAS_P build. Same shared-code shrink.
