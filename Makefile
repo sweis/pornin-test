@@ -1,7 +1,7 @@
 # Top-level: dispatch to per-track Makefiles. Each track is self-contained.
 #
 #   limb8/   — 8×32 q=t[top] (tiny.S). 933 B size floor. Only non-Montgomery.
-#   limb11/  — 11×24 Montgomery. 1194 B. Trick catalogue.
+#   limb11x24/ — 11×24 Montgomery. 1108 B. Trick catalogue.
 #   limb5x54/— 5×54 Montgomery. 1141 B current. Thomas's arch.
 #   limb5x56/— 5×56 Montgomery. Byte-aligned decode, cleaner signed cP.
 #   speed/   — fast/fast2/speed.S. Cycles, not bytes. BMI2+ADX, MOVBE.
@@ -9,7 +9,7 @@
 #   common/  — shared: test harnesses, bench, range_proof, gen_bytecode.
 #   archive/ — superseded (C refs, old asm, Rust port).
 
-TRACKS = limb8 limb11 limb5x54 limb5x56
+TRACKS = limb8 limb11x24 limb5x54 limb5x56
 
 .PHONY: all test size bench clean chart $(TRACKS) speed signer
 

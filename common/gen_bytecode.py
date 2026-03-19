@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate bytecode for tv_ecdsa_limb11.S.
+"""Generate bytecode for tv_ecdsa.S (limb11x24).
 
 Emits bc_rcb, bc_v3, bc_v1 as .byte directives with slot-usage
 validation. The RCB schedule is tiny.S's, remapped to avoid reserved

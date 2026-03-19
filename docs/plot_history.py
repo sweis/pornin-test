@@ -156,7 +156,7 @@ def read_progress_csv(path):
                 out.append((b, c // 1000))
     return out
 
-LIMB11_TRACK = read_progress_csv('limb11/progress.csv')
+LIMB11_TRACK = read_progress_csv('limb11x24/progress.csv')
 LIMB5X54_TRACK = read_progress_csv('limb5x54/progress.csv')
 LIMB5X56_TRACK = read_progress_csv('limb5x56/progress.csv')
 LIMB8_TRACK  = read_progress_csv('limb8/progress.csv')
@@ -244,17 +244,17 @@ ax.annotate(f'Thomas v7 — {THOMAS[0]}B', THOMAS,
             bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',
             ec='#2e8b57', lw=1))
 
-# limb11 (11×24 signed-limb Montgomery) — purple.  Slow (loop-heavy)
+# limb11x24 (11×24 signed-limb Montgomery) — purple.  Slow (loop-heavy)
 # but the trick-catalogue source.  Projective R-cancel at 1219B.
 if LIMB11_TRACK:
     l11x = [p[0] for p in LIMB11_TRACK]
     l11y = [p[1] for p in LIMB11_TRACK]
     ax.plot(l11x, l11y, '-', color='#8a2be2', linewidth=1.2, zorder=4,
-            label='limb11 (11×24)')
+            label='limb11x24 (11×24)')
     ax.scatter(l11x, l11y, c='#8a2be2', s=40, marker='^',
                edgecolors='#5a1b99', linewidths=0.6, zorder=5)
     tip = LIMB11_TRACK[-1]
-    ax.annotate(f'limb11 — {tip[0]}B', tip,
+    ax.annotate(f'11×24 — {tip[0]}B', tip,
                 textcoords="offset points", xytext=(10, 8), fontsize=9,
                 bbox=dict(boxstyle='round,pad=0.3', fc='#e8d5ff',
                 ec='#8a2be2', lw=0.8))

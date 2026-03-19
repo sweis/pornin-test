@@ -10,10 +10,10 @@ lumps it into the `text` column. For this kind of code it runs
 **Fix for compiled C:** `-fno-asynchronous-unwind-tables`. Measured
 on `tv_ecdsa_small.c`: 5664 → 5144 B (520 B of `.eh_frame`).
 
-**Pure `.S` is clean.** Verified on `limb11/tv_ecdsa.o`: no
+**Pure `.S` is clean.** Verified on `limb11x24/tv_ecdsa.o`: no
 `.eh_frame` present, `size` = `.text` + `.rodata` exactly. All `.S`
 implementations in this project (`tiny.S`, `fast.S`, `fast2.S`,
-`speed.S`, `limb11/`, `limb5/`) measure real. Thomas's 928 B is pure
+`speed.S`, `limb11x24/`, `limb5x54/`, `limb5x56/`) measure real. Thomas's 928 B is pure
 assembly — also real.
 
 ---
