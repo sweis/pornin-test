@@ -3,3 +3,12 @@ commit,bytes,cycles,note
 # limb11 parallel track at 1201 B — estimated floor ~1067.
 # Target: < 928. Each row is a 607/607 checkpoint (cycles=0 for pre-607).
 6f07517,1324,3207000,Phase 1 baseline 607/607. rodata 357 (bc 197 + 5 consts inc cP 160) text 967. No golf.
+466471b,1313,0,CHKNZ=call+xor; r12=.Ljt set once; mov al encoding (−11)
+8064542,1288,0,fe_from_le loop (bit-offset); fe_from_be in-slot reversal (−25)
+6ff298a,1270,0,fe_mul5 CIOS merge: schoolbook+reduce one loop r10=&acc[i] (−18)
+886c4ac,1256,0,fe_from_be FALLS THROUGH to fe_from_le (rdx=src); MASK via shr −1 (−14)
+8422cf1,1245,0,verify: loop 5× fe_from_le (r15 counter) (−11)
+af650f8,1235,0,pt_mul rbp-relative bt (disp8); .Lcp5 lodsq×2; .Lasmod mov cl (−10)
+eee3b8d,1227,0,Drop ZERO handler — Fsub(x,x)=0 (−5)
+1799b97,1224,0,Layout: .Lnmul falls into fe_mul5; .Lfmul rel8; .Linv stub (−3)
+14311a8,1217,3009000,fe_mul5: b on stack (r12 untouched no push/pop); rbx=CIOS counter (−7). FASTER than baseline.
