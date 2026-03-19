@@ -483,17 +483,26 @@ tv_ecdsa_p256_verify_asm:
 	 * frame to 2120 (+8 B stack, 0 B code — enter imm16). */
 	enter	NSLOTS * SLOT + 8, 0
 
+	/* Speculative setup BEFORE checks (leave unwinds on fail path;
+	 * register sets just wasted work). Reorder checks so sig_len (rsi)
+	 * is tested FIRST, then lea rsi can clobber it. This pushes .Lfail
+	 * 17 B closer to the tail jmp → reaches rel8. */
 	xor	eax, eax
-	cmp	rsi, 64
+	mov	r14, rsp
+	lea	r12, [rip + .Ljt]   /* set once — survives all bc_run calls */
+	push	rdi                 /* sig */
+	push	r8                  /* hv  */
+
+	cmp	rsi, 64             /* sig_len FIRST — before rsi clobber */
 	jne	.Lfail
+	lea	rsi, [rdx + 1]      /* pub+1 — rsi free now */
 	cmp	rcx, 65
 	jne	.Lfail
-	sub	r9, 32              /* fold range check: r9 ∈ [32,64] → */
-	cmp	r9, 32              /* [0,32] after sub; both OOB → ja */
+	sub	r9, 32
+	cmp	r9, 32
 	ja	.Lfail
 	cmp	byte ptr [rdx], 0x04
 	je	.Lok
-	/* .Lfail falls in the middle — all jcc's above reach it rel8. */
 .Lfail:
 	leave
 	pop	r15
@@ -503,14 +512,7 @@ tv_ecdsa_p256_verify_asm:
 	pop	rbx
 	ret
 .Lok:
-	mov	r14, rsp
-	lea	r12, [rip + .Ljt]   /* set once — survives all bc_run calls */
-
-	push	rdi                 /* sig */
-	push	r8                  /* hv  */
-
 	/* User inputs (BE). Qx,Qy,e chain 5,6,7 → rdi ends at slot 8. */
-	lea	rsi, [rdx + 1]      /* pub+1 (skip 0x04) */
 	lea	rdi, [r14 + 5*SLOT]
 	call	fe_from_be          /* Qx → 5 */
 	call	fe_from_be          /* Qy → 6 */
