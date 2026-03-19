@@ -399,13 +399,13 @@ fe_from_le:
  * bc_run — bytecode interpreter
  * ====================================================================== */
 
-/* .Lcadd: copy 3 slots → addend, dispatch bc_rcb. */
+/* .Lcadd: copy 3 slots → addend, dispatch bc_rcb. rcx = 0 after rep
+ * movsq → bcrun_off takes offset in rcx (obc_rcb = 0 for free). */
 .Lcadd:
 	lea	rdi, [r14 + oADD]
 	push	3*K
 	pop	rcx
 	rep	movsq
-	xor	edi, edi            /* obc_rcb = 0 */
 	jmp	bcrun_off
 
 pt_mul:
@@ -432,17 +432,13 @@ pt_mul:
 	jns	.Lpo
 	/* falls through to final check */
 	push	obc_v3
-	pop	rdi
+	pop	rcx
 
 bcrun_off:
-	lea	rax, [rip + bc_rcb]
-	add	rdi, rax
-
-bc_run:
 	push	rbp
-	push	rbx
-	push	rdi
-	pop	rbx
+	push	rbx                 /* save first; lea goes straight to rbx */
+	lea	rbx, [rip + bc_rcb]
+	add	rbx, rcx            /* offset in rcx — .Lcadd has rcx=0 from rep movsq */
 	xor	ebp, ebp
 	/* r12 = &.Ljt inherited from verify; fe_mul5 preserves it. */
 .Lbc:
@@ -518,7 +514,7 @@ tv_ecdsa_p256_verify_asm:
  * of .Lok it blows the .Lfail jmp past −128. */
 .Ltail:
 	push	obc_v1
-	pop	rdi
+	pop	rcx
 	call	bcrun_off
 	push	rax
 	call	pt_mul
