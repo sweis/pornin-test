@@ -14,7 +14,7 @@
  *   n's m0inv = 0x11c8aaee00bc4f (movabs, doesn't fit imm32).
  *   MASK = 2^54−1 = 0x3fffffffffffff: movabs → r13, preserved everywhere.
  *
- * Slots: 40 B each (5 qwords). 24 slots. Frame 968 B (960 + 8 align).
+ * Slots: 40 B each (5 qwords). 24 slots. Frame 960 B (4 pushes; r12 unused).
  * Slots 0,1,2,3 reach disp8 from r14 (40*3 = 120 < 128).
  *
  * Constants stored as 32 LE bytes — `bt [cN], ebx` works directly in
@@ -33,7 +33,7 @@
 	.equ	K,      5
 	.equ	SLOT,   K*8        /* 40 B */
 	.equ	NSLOTS, 24
-	.equ	FRAME,  NSLOTS*SLOT + 8   /* 968 — +8 for 16-align with 5 pushes */
+	.equ	FRAME,  NSLOTS*SLOT       /* 960 — 16-aligned with 4 pushes (r12 dropped) */
 
 /* Slot map (same indices as limb11 — bytecode is slot-indexed):
  *   0-2   acc (X:Y:Z)
@@ -94,8 +94,8 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cN.
  * All handlers may clobber rax, rcx, rdx, rsi, rdi, r8-r11.
- * Must preserve rbx (bc ptr), r12 (jt), rbp (fail bits), r13 (MASK),
- * r14 (slot base), r15 (unused here — pt_mul's counter).
+ * Must preserve rbx (bcrun_off's .Ljt), rbp (fail bits), r13 (MASK),
+ * r14 (slot base), r15 (&cP). r12 unused.
  *
  * Layout: .Lnmul → .Linv → .Lfmul → fe_mul5. .Lfmul falls through
  * (−2 B, no jmp). Handler shrinks from prior commits made room:
@@ -273,7 +273,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 
 fe_mul5:
 	push	rbx
-	push	rdx                 /* b → [rbp+24]. r12 (=.Ljt) stays untouched. */
+	push	rdx                 /* b → [rbp+24] */
 	push	rdi
 	push	rcx
 	enter	ACC_QW*8, 0
@@ -293,7 +293,7 @@ fe_mul5:
 	pop	rbx
 .Lcios:	mov	r9, [r8 + rbx]              /* a[i] */
 	lea	r10, [rbp + rbx*2 - K*16]   /* &acc[i] — disp8 (-80) */
-	mov	rsi, [rbp + 24]             /* b — stack-stored, r12 stays = .Ljt */
+	mov	rsi, [rbp + 24]             /* b */
 	call	.Lcnt                       /* .Lcnt sets rdi = r10 itself */
 	mov	r9, [r10]                   /* acc[i].lo */
 	imul	r9, r11
@@ -363,8 +363,7 @@ fe_mul5:
 
 fe_from_be:
 	lea	rdx, [rdi + 8]      /* in-slot buffer start (what fe_from_le wants) */
-	push	32
-	pop	rcx
+	mov	cl, 32              /* entry rcx ∈ {0,1,2,30} (BE-loop counters or fe_from_le exit) — all <256 */
 1:	lodsb
 	mov	[rdx+rcx-1], al     /* rcx counts 32→1: writes bytes 31→0 (reversed). 4 B vs dec+mov 5 B. */
 	loop	1b                  /* rsi=src+32, rdx=rdi+8, rcx=0 */
@@ -373,24 +372,27 @@ fe_from_be:
 /* 54 = 48 + 6, so byte-offset 6i and shift 6i extract bits 48i+6i = 54i.
  * Need 64 bits after shift for full 54-bit limb, but shr by 6i leaves only
  * 64−6i bits — insufficient for i≥2. shrd with [rdx+6i+8] supplies the
- * high bits (iter-3 reads bytes 26..33: 2 B past, valid but value masked
- * off). Iter 4 WOULD read [rdx+32] = past input; skip that load, shrd
- * with rbx=0 ≡ shr (limb 4 is 40 bits, doesn't need high qword). */
+ * high bits. Limb 4 is 40 bits; shrd with rbx=0 ≡ shr suffices.
+ *
+ * Single-cmp: cmovb PRELOADS rbx for the NEXT iter (after `add ecx,6`
+ * so rcx already holds next-iter offset). cmp cl,24: CF=1 for cl∈{6,12,18}
+ * (next iter ≠ last → load); CF=0 ZF=1 for cl=24 (next is iter 4 → keep
+ * zeroed); CF=0 ZF=0 for cl=30 (exit). jbe loops on CF|ZF = 5 iters.
+ * Iter 0 shrd count = 0 → no-op (Intel SDM: count=0 leaves dest+flags
+ * unchanged) so entry-rbx is irrelevant. cmov reads regardless; max
+ * [rdx+38] — 14 B past LE source, in-frame for BE, page slack for rodata.
+ * −3 B vs two-cmp (drops cmp, hoists xor out of crit path). */
 fe_from_le:
 	xor	ecx, ecx
 1:	mov	rax, [rdx + rcx]
-	xor	ebx, ebx
-	cmp	cl, 24
-	cmovb	rbx, [rdx + rcx + 8]   /* iter 4: cl=24, CF=0, rbx stays 0.
-	                                * cmov LOADS regardless — [rdx+32]
-	                                * always valid (rodata chain or
-	                                * in-frame slot buffer). −1 B. */
-	shrd	rax, rbx, cl
+	shrd	rax, rbx, cl        /* iter 0: cl=0 → no-op */
 	and	rax, r13
 	stosq
+	xor	ebx, ebx            /* pre-zero for next iter's cmovb-skip case */
 	add	ecx, 6
-	cmp	cl, 30
-	jne	1b
+	cmp	cl, 24
+	cmovb	rbx, [rdx + rcx + 8]   /* preload for NEXT iter; skipped when cl≥24 */
+	jbe	1b                  /* cl ≤ 24: loop (5 iters total) */
 	add	rdx, 32
 	ret
 
@@ -443,19 +445,21 @@ pt_mul:
 	pop	rcx
 
 bcrun_off:
-	/* bc pointer in rsi (not rbx): lodsw loads+advances in 2 B (was
-	 * mov+add = 6 B). Caller's rsi not preserved — pt_mul/.Ltail set
-	 * rsi before each bcrun_off anyway. rbx preserved passively
-	 * (handlers preserve it, we don't touch) — pt_mul's packed counter
-	 * in ebx survives .Lcadd calls. push/pop rsi in-loop around
-	 * handler (which sets rsi = s1). Net: −4 B.
-	 * lodsw's upper-eax stale bits are harmless: movzx from ah/al
-	 * ignores them; `and eax,0xF` zero-extends to full rax. */
+	/* bc pointer in rsi (lodsw loads+advances, 2 B vs mov+add 6 B).
+	 * .Ljt pointer in rbx — set HERE, not verify: push/pop around body
+	 * saves pt_mul's packed counter; `mov al,[rbx+rax]` is 3 B (no
+	 * REX.B) vs [r12+rax] 4 B. r12 wholly unused → push/pop r12 and
+	 * `lea r12` dropped from verify (−11 B). Here: +1+7+1 = +9 but
+	 * mov al −1 → net +8. Overall −3. Handlers preserve rbx (fe_mul5,
+	 * .Linv push/pop it; others don't touch). push/pop rsi in-loop
+	 * around handler (which sets rsi = s1). lodsw's upper-eax stale
+	 * bits harmless: movzx ignores; `and eax,0xF` zero-extends. */
 	push	rbp
+	push	rbx                 /* pt_mul's packed counter */
+	lea	rbx, [rip + .Ljt]
 	lea	rsi, [rip + bc_rcb]
 	add	rsi, rcx            /* offset in rcx — .Lcadd has rcx=0 from rep movsq */
 	xor	ebp, ebp
-	/* r12 = &.Ljt inherited from verify; fe_mul5 preserves it. */
 .Lbc:
 	lodsw                       /* ax = [rsi]; rsi += 2 */
 	test	al, al
@@ -478,8 +482,8 @@ bcrun_off:
 	add	rdx, r14
 
 	and	eax, 0xF
-	mov	al, [r12 + rax]     /* high bytes zero from the `and` above */
-	add	rax, r12
+	xlatb                       /* AL ← [RBX + AL]. 1 B. rax high bytes stay 0 from `and`. */
+	add	rax, rbx
 	lea	rcx, [r15 + SLOT]   /* &cN = &cP + SLOT (r15 disp8, −3 B vs r14+disp32) */
 	call	rax
 	pop	rsi                 /* restore bc ptr */
@@ -487,6 +491,7 @@ bcrun_off:
 
 .Lbce:	neg	ebp
 	sbb	eax, eax
+	pop	rbx
 	pop	rbp
 	ret
 
@@ -497,13 +502,13 @@ bcrun_off:
 tv_ecdsa_p256_verify_asm:
 	/* rdi=sig, rsi=sig_len, rdx=pub, rcx=pub_len, r8=hv, r9=hv_len */
 	push	rbx
-	push	r12
 	push	r13
 	push	r14
 	push	r15
 
-	/* Alignment: caller's rsp ≡ 0 (mod 16) at call → −8 (ret) − 40
-	 * (5 pushes) − 8 (enter's rbp) − 968 = −1024 ≡ 0 (mod 16). */
+	/* Alignment: caller's rsp ≡ 0 (mod 16) at call → −8 (ret) − 32
+	 * (4 pushes) − 8 (enter's rbp) − 960 = −1008 ≡ 0 (mod 16).
+	 * r12 not pushed — wholly unused (jt ptr lives in rbx per-bcrun). */
 	enter	FRAME, 0
 
 	xor	eax, eax
@@ -521,7 +526,6 @@ tv_ecdsa_p256_verify_asm:
 	pop	r15
 	pop	r14
 	pop	r13
-	pop	r12
 	pop	rbx
 	ret
 
@@ -529,8 +533,7 @@ tv_ecdsa_p256_verify_asm:
  * final `jmp .Ltail` (up, from .Lok end) fit rel8. Inlined at the end
  * of .Lok it blows the .Lfail jmp past −128. */
 .Ltail:
-	push	obc_v1
-	pop	rcx
+	mov	cl, obc_v1          /* entry rcx=0 (LE loop exit via `loop`) */
 	call	bcrun_off
 	push	rax
 	call	pt_mul
@@ -544,7 +547,6 @@ tv_ecdsa_p256_verify_asm:
 	push	-1
 	pop	r13
 	shr	r13, 64-W           /* MASK = 2^54−1; movabs is 10 B, this is 8 */
-	lea	r12, [rip + .Ljt]   /* jump table — preserved by handlers + fe_mul5 */
 
 	/* BE chain at slot 3 (3*SLOT = 120: disp8). Qx,Qy,r,s,e → 3..7.
 	 * 2-pair loop for pub (Qx,Qy) then sig (r,s): push both sources,
@@ -553,8 +555,7 @@ tv_ecdsa_p256_verify_asm:
 	lea	rsi, [rdx + 1]
 	push	rsi                 /* pub+1 — popped in iteration 1 */
 	lea	rdi, [r14 + 3*SLOT]
-	push	2
-	pop	rcx
+	mov	cl, 2               /* entry rcx=65 (pub_len, checked above, <256) */
 1:	pop	rsi
 	push	rcx
 	call	fe_from_be          /* iter1: Qx,Qy → 3,4. iter2: r,s → 5,6. */
@@ -573,10 +574,10 @@ tv_ecdsa_p256_verify_asm:
 	 * p = 2^256 − 2^224 + 2^192 + 2^96 − 1 — five ±power-of-2 terms.
 	 * Zero-fill then 4 patches. fe_mul5/NORM arithmetic is already
 	 * signed (imul, 128-bit acc); CHKLT changed to Fsub-based.
-	 * rep stosd: 2 B (no REX.W), 10 dwords = 5 qwords. */
+	 * rep stosd: 2 B (no REX.W), 10 dwords = 5 qwords. ecx=30 from
+	 * fe_from_le (high bytes 0) → mov cl is 2 B vs push/pop 3 B. */
 	xor	eax, eax
-	push	K*2
-	pop	rcx
+	mov	cl, K*2
 	rep	stosd                       /* all zero; rdi → slot 9 */
 	dec	qword ptr [rdi - 40]        /* limb 0 = −1 */
 	mov	byte ptr [rdi - 27], 0x04   /* limb 1 byte 5: 2^42 */
