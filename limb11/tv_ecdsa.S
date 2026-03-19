@@ -98,12 +98,12 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	sub	rcx, SLOT           /* &cN − SLOT = &cP */
 	push	1
 	pop	r11
-	jmp	fe_mul11
+	jmp	1f                  /* rel8 over .Lnmul (6 B) to shared trampoline */
 
 .Lnmul: /* Nmul — MontMul mod n.  bc_run preloads rcx=&cN; fe_mul11
  * preserves rcx (pop rcx not pop rax) so INV's 384 calls all inherit it. */
 	mov	r11d, 0xBC4F
-	jmp	fe_mul11
+1:	jmp	fe_mul11            /* shared rel32 — one 5-B jmp, not two */
 
 .Lcopyhi: /* 2 slots from s1 → slot(dst+16). Shamir sources pair:
  * (2,3)→(16,17), (4,5)→(18,19), (6,7)→(20,21), (0,1)→(22,23). */
@@ -162,16 +162,16 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	rcl	ebp, 1              /* CF → bit 0; prior bits shifted up */
 	ret
 
-.Lchklt: /* bpl |= (s1 >= s2). Both canonical. */
-	push	K-1
-	pop	rcx
-1:	mov	rax, [rsi + rcx*8]
-	cmp	rax, [rdx + rcx*8]
-	jb	2f
-	ja	3f
-	dec	ecx
-	jns	1b
-3:	inc	ebp                 /* 2 B — we only test ebp≠0 at end */
+.Lchklt: /* bpl |= (s1 >= s2). Subtract-and-check-sign — works for
+ * s2 in ANY limb form (signed cP, unsigned cN) since carry-prop
+ * gives the true sign of value(s1)−value(s2). Writes to dst slot
+ * (bc_v1 uses slot 0, overwritten by Fadd 0,5,5 before next read). */
+	call	.Lfsub
+	sub	rdi, SLOT           /* back to dst start */
+	call	.Lcprop
+	test	byte ptr [rdi + K*8 - 1], 0x80
+	jnz	2f                  /* negative → s1 < s2 → pass */
+	inc	ebp                 /* ≥ 0 → fail */
 2:	ret
 
 /* ── INV — s^(n-2) mod n via Fermat. ── */
@@ -224,8 +224,11 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	jz	2f
 	call	.Laddm
 	jmp	1b
-	/* Subtract m until negative, then add m once. */
-2:	call	.Lsubm
+	/* Subtract m until negative, then add m once. .Lsubm inlined:
+	 * its only caller; 6-B body + 5-B call → 9-B inline = −2 B. */
+2:	push	-1
+	pop	r9
+	call	.Lasmod
 	test	byte ptr [rdi + K*8 - 1], 0x80
 	jz	2b
 	/* fall into .Laddm for the final add; its tail ret returns. */
@@ -270,11 +273,6 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	add	rax, rdx
 	stosq
 	ret
-
-.Lsubm:
-	push	-1
-	pop	r9
-	jmp	.Lasmod
 
 /* ── Decoders ── */
 
@@ -514,20 +512,21 @@ tv_ecdsa_p256_verify_asm:
 	pop	rsi                 /* hv */
 	call	fe_from_be          /* e  → 7   rdi now at slot 8 */
 
-	/* cP → slot 8 — rdi inherited. Leaves rdi at slot 9. */
-	mov	eax, MASK
-	push	4
-	pop	rcx
-	rep	stosq               /* limbs 0-3 = 0xffffff */
+	/* cP → slot 8, SIGNED limb form: (−1,0,0,0,1,0,0,0,1,−256,65536).
+	 * p = 2^256 − 2^224 + 2^192 + 2^96 − 1 — five ±power-of-2 terms.
+	 * Zero-fill then inc/dec patches. rdi inherited at slot 8, exits
+	 * at slot 9.  fe_mul11/NORM arithmetic is already signed; CHKLT
+	 * changed to Fsub-based to handle this. */
 	xor	eax, eax
-	mov	cl, 4               /* rcx = 0 from rep */
-	rep	stosq               /* limbs 4-7 = 0 */
-	inc	eax
-	stosq
-	mov	eax, 0xffff00
-	stosq
-	shr	eax, 8              /* 0xffff */
-	stosq
+	push	K
+	pop	rcx
+	rep	stosq               /* all zero; rdi → slot 9 */
+	dec	qword ptr [rdi - 88]   /* limb 0 = −1 */
+	inc	qword ptr [rdi - 56]   /* limb 4 = 1 */
+	inc	qword ptr [rdi - 24]   /* limb 8 = 1 */
+	dec	qword ptr [rdi - 16]   /* limb 9 = −1 ... */
+	inc	byte ptr [rdi - 16]    /*   low byte → 0: = −256 */
+	inc	byte ptr [rdi - 6]     /* limb 10 byte 2: = 65536 */
 
 	/* Constants (LE). cN,cR2_n,cGX,cGY → 9,10,11,12 — all chain.
 	 * Then r,s → 13,14 chain too. ZERO lea's after the Qx start. */
