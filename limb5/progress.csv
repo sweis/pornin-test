@@ -12,3 +12,9 @@ af650f8,1235,0,pt_mul rbp-relative bt (disp8); .Lcp5 lodsq×2; .Lasmod mov cl (�
 eee3b8d,1227,0,Drop ZERO handler — Fsub(x,x)=0 (−5)
 1799b97,1224,0,Layout: .Lnmul falls into fe_mul5; .Lfmul rel8; .Linv stub (−3)
 14311a8,1217,3009000,fe_mul5: b on stack (r12 untouched no push/pop); rbx=CIOS counter (−7). FASTER than baseline.
+30d2ee9,1210,0,fe_from_le: shrd loop w/ byte-offset=shift=6i — tail gone (−7)
+6c666c4,1208,0,.Lasmod r9→rdx (non-REX); NORM ignores s2 (−2)
+af8acc2,1207,0,.Lset1: zero-all-then-inc (−1)
+399adde,1198,0,Slot layout: BE@slot3 disp8; stage 0-7→1 COPYHI; bc_v1 43→40 ops (−9)
+3e87635,1196,0,CHKNZ→CHKZ dst=1 flip; JT 12→11 (−2)
+0ce8f91,1189,3094000,.Lcprop add-push-pop (−4); cN=n-2 rodata + bc_v1 Fadd×2 fixup; cN/cP swap (−3)
