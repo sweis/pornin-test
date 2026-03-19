@@ -20,3 +20,7 @@ a9f95b3,914,4686000,bc_run: mov eax,[rbx] over-reads 4B (was movzx WORD). and ea
 15e27f7,970,3470000,SOLINAS_P build. Same shared-code shrink.
 9e717ab,916,3401000,DEFAULT: #ifdef .Lop3 loop→dec;jnz. +4 B −560K cyc. SMALL_MUL8 floor 898 B untouched. 12 B + 1.08M cyc under Thomas.
 9e717ab,974,2917000,SOLINAS_P: same #ifdef. +4 B −553K cyc (also benefits from .Lop3 fix).
+d05d1a6,897,5134000,bc_run: mov al (4B) not movzx (5B) for table lookup. and eax 0xF already zeroed bits 8-31. Pure win all 3 variants. −1 B.
+d3e0868,893,5134000,.Lop6: repe scasq (3B) replaces or-loop (5+2B). Scans for first nonzero qword; ZF=1 iff all-zero. rdi clobbered but dead. rax stays 0 (scasq read-only). −4 B.
+8a109b1,892,5134000,fe_mul_m: tail-jmp to .Lop3. pop rbp/rbx FIRST (.Lop3 touches neither) then jmp rel32. .Lop3 ret → caller. Stack: pushes land [retaddr-24..-8]; t buf at [-104..-32]. −1 B.
+db6dad8,891,5242000,bc_run: bcptr in rsi via lodsw. Drops add rbx,2 (4B) + push/pop rbx (2B). rbx unused by bc_run (handlers preserve). Adds push/pop rsi (+2B) + r9d byte0 stash (+3B) for .Lop6 xor. −1 B. 37 B under Thomas.
