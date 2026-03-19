@@ -263,45 +263,43 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 
 /* ── Decoders ──
  * Limb i starts at bit 54i → byte 54i/8, shift 54i&7. Loop i=0..3 with
- * a running bit-offset; unroll i=4 as (24,24) — the natural (27,0)
- * would read bytes 27..34 (3 past a 32-B input), while shr-24 of
- * bytes 24..31 yields the same 40 top bits without overread.
- * Both chain: exit rsi=src+32, rdi=dst+40. */
+ * a running bit-offset (ebx); unroll i=4 as (24,24) — the natural (27,0)
+ * would read bytes 27..34 (3 past a 32-B input).
+ *
+ * fe_from_le takes its SOURCE in rdx (not rsi). This lets fe_from_be
+ * fall through: its reversal loop leaves rsi=src+32 (for BE chaining)
+ * and rdx=rdi+8 (in-slot buffer start) — exactly what fe_from_le wants.
+ * fe_from_le clobbers rbx (only called from verify, never as a handler).
+ * LE chain: exit rdx=src+32, rdi=dst+40.
+ * BE chain: exit rsi=src+32, rdi=dst+40 (rdx garbage). */
+
+fe_from_be:
+	lea	rdx, [rdi + 40]
+	push	32
+	pop	rcx
+1:	lodsb
+	dec	rdx
+	mov	[rdx], al
+	loop	1b                  /* rsi=src+32, rdx=rdi+8, rcx=0 */
+	/* FALL THROUGH — rsi preserved through fe_from_le (uses ebx,ecx,rdx). */
 
 fe_from_le:
-	xor	edx, edx            /* bit offset: 0, 54, 108, 162 */
-1:	mov	ecx, edx
+	xor	ebx, ebx            /* bit offset: 0, 54, 108, 162 */
+1:	mov	ecx, ebx
 	shr	ecx, 3              /* byte offset: 0, 6, 13, 20 */
-	mov	rax, [rsi + rcx]
-	mov	cl, dl
+	mov	rax, [rdx + rcx]
+	mov	cl, bl
 	and	cl, 7               /* shift: 0, 6, 4, 2 */
 	shr	rax, cl
 	and	rax, r13
 	stosq
-	add	edx, W
-	cmp	dl, 4*W             /* 216 — stop before limb 4 */
+	add	ebx, W
+	cmp	bl, 4*W             /* 216 — stop before limb 4 */
 	jne	1b
-	mov	rax, [rsi + 24]     /* limb 4: (24,24) */
+	mov	rax, [rdx + 24]     /* limb 4: (24,24) */
 	shr	rax, 24
 	stosq
-	add	rsi, 32
-	ret
-
-/* fe_from_be — reverse 32 bytes into the dst slot itself (bytes 8..39),
- * then decode from there. Write limb i to [rdi+8i..] trails read from
- * [rdi+8+byte_i..] by ≥7 B for all i, so no read-after-write hazard. */
-fe_from_be:
-	lea	rdx, [rdi + 39]
-	push	32
-	pop	rcx
-1:	lodsb
-	mov	[rdx], al
-	dec	rdx
-	loop	1b                  /* rsi=src+32, rdx=rdi+7, rcx=0 */
-	push	rsi
-	lea	rsi, [rdx + 1]      /* = rdi+8 */
-	call	fe_from_le
-	pop	rsi
+	add	rdx, 32
 	ret
 
 /* ======================================================================
@@ -506,7 +504,9 @@ tv_ecdsa_p256_verify_asm:
 	ret
 .Lok:
 	mov	r14, rsp
-	movabs	r13, (1<<W)-1       /* MASK — preserved by everything below */
+	push	-1
+	pop	r13
+	shr	r13, 64-W           /* MASK = 2^54−1; movabs is 10 B, this is 8 */
 	lea	r12, [rip + .Ljt]   /* jump table — preserved by handlers + fe_mul5 */
 
 	push	rdi                 /* sig */
@@ -520,8 +520,8 @@ tv_ecdsa_p256_verify_asm:
 	pop	rsi
 	call	fe_from_be          /* e  → 7 */
 
-	/* Constants (LE). cP,cN,cR2N,cGX,cGY → 8,9,10,11,12. All chain. */
-	lea	rsi, [rip + cP]
+	/* Constants (LE). cP,cN,cR2N,cGX,cGY → 8,9,10,11,12. rdx chains. */
+	lea	rdx, [rip + cP]
 	call	fe_from_le
 	call	fe_from_le
 	call	fe_from_le
