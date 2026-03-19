@@ -1085,7 +1085,7 @@ Candidate & $\Delta$ & Why it loses \\
 \midrule
 \texttt{vptest} zero-check    & \spent{1}  & vs \texttt{repe scasq} (3 B + setup) \\
 \texttt{vmovdqu} slot copy    & \spent{23} & vs \texttt{rep movsq} (3 B, any length) \\
-\texttt{bextr} nibble decode  & \spent{5}  & the dirty nibble \emph{is} the scale factor \\
+\texttt{bextr} nibble decode  & \spent{5}  & the dirty nibble is already the scale factor \\
 \texttt{mulx} inner loop      & \spent{4}  & vs \texttt{lodsq; mul rbx} (5 B) \\
 \texttt{andn}, \texttt{rorx}, \texttt{shrx} & \spent{1}--\spent{3} & legacy ops already 2--3 B \\
 \bottomrule
