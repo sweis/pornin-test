@@ -312,10 +312,9 @@ fe_from_le:
  * ====================================================================== */
 fe_mul11:
 	push	rbx
-	push	r12
-	mov	r12, rdx            /* b — load before rdx clobbered by imul */
 	push	rdi
-	push	rcx                 /* m → [rbp+8] */
+	push	rcx                 /* m → [rbp+16] */
+	push	rdx                 /* b → [rbp+8]  — no r12 needed */
 	enter	2*K*8, 0
 
 	xor	eax, eax
@@ -333,7 +332,7 @@ fe_mul11:
 .Lcios:	mov	rbx, [r8 + r9]              /* a[i] */
 	lea	rdi, [rbp + r9 - K*8]       /* &acc[i] */
 	push	rdi
-	mov	rsi, r12                    /* b */
+	mov	rsi, [rbp + 8]              /* b */
 	call	.Lcnt
 
 	pop	rdi
@@ -343,7 +342,7 @@ fe_mul11:
 	push	rax
 	pop	rbx                         /* q */
 	push	rdi
-	mov	rsi, [rbp + 8]              /* m */
+	mov	rsi, [rbp + 16]             /* m */
 	call	.Lcnt
 
 	pop	rdi
@@ -355,13 +354,13 @@ fe_mul11:
 	jnz	.Lcios
 
 	lea	rsi, [rdi + 8]              /* &acc[K] — rdi ended at &acc[K-1] */
-	mov	rdi, [rbp + 16]
+	mov	rdi, [rbp + 24]
 	call	.Lcp_shared
 
 	leave
+	pop	rax                 /* discard b */
 	pop	rcx                 /* restore — INV's 384 calls rely on this */
-	pop	rax
-	pop	r12
+	pop	rax                 /* discard dst */
 	pop	rbx
 	ret
 
