@@ -545,21 +545,20 @@ Fadd:	push	rsi
 	sbb	rax, [rdx]
 	stosq
 	lea	rdx, [rdx+8]
-	dec	ecx
-	jnz	3b
+	loop	3b                  /* preserves CF (sbb chain).  ~70K iters/verify
+	                             * vs mul8's ~10M; `loop` cost here is ~9%. */
 	pop	rdi
 	pop	rdx
 	jnc	1f
 	push	rdi                 /* 2B vs 3B REX.W mov */
 	pop	rsi
-	clc                         /* rcx=0 from fe_sub_raw; CF=1 on this path */
+	clc                         /* rcx=0 from loop exit; CF=1 on this path */
 	mov	cl, 4
 2:	lodsq
 	adc	rax, [rdx]
 	stosq
 	lea	rdx, [rdx+8]
-	dec	ecx
-	jnz	2b
+	loop	2b
 1:	ret
 
 /* .Lop8 = fe_inv_m.  Placed here so its offset from .Ljt fits u8

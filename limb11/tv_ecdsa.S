@@ -201,9 +201,8 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
  * gets clobbered by loop counters). */
 
 .Lnorm:
+	/* All NORM bytecode has dst==s1 → bc_run gives rdi==rsi already. */
 	lea	r8, [rcx - SLOT]    /* &cN − SLOT = &cP */
-	push	rsi
-	pop	rdi                 /* in-place on s1 */
 	call	.Lcprop             /* SF = sign of top limb (from final add) */
 	/* While top < 0: add m, re-carry. */
 1:	jns	2f
