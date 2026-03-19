@@ -573,8 +573,9 @@ Fadd:	push	rsi
  * EXPONENT: bc_v1 leaves cN in slot 4 until after INV (staging
  * reordered).  At entry, rcx = r8 = &slot8 (decoder preload), so
  * slot4 = [rcx−128] (disp8 exactly).  sub byte0 by 2 → slot4 = n−2.
- * bt reads [r8−128] directly — r8 survives Nmul.  No special-case
- * for bits 0-4: −7 B cmp/jb/je, −1 B bt (r8 no SIB vs r12), +4 B sub.
+ * dst = slot5 (rdi = r14+160), so slot4 = [rdi−32] — bt via rdi
+ * drops the REX byte (r8 needed REX.B).  rdi preserved by pop.
+ * No special-case bits 0-4: −7 B cmp/jb/je, +4 B sub, −2 B bt.
  *
  * Loop counter in rbx (callee-saved, survives Nmul).  src at [rsp]. */
 fe_inv_m:
@@ -590,7 +591,7 @@ fe_inv_m:
 	pop	rsi
 	call	Nmul                /* = lea rcx,&cN; jmp fe_mul_m. */
 	pop	rdi                 /* fe_mul_m may leave rdi at dst+32 */
-	bt	DWORD PTR [r8-128], ebx     /* slot4 = n−2.  r8 no SIB, disp8. */
+	bt	DWORD PTR [rdi-32], ebx     /* slot4 = rdi−32 (dst=slot5).  No REX. */
 	jnc	.Lnx
 	push	rdi
 	pop	rsi
