@@ -83,7 +83,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
  * at end of file. ── */
 .Ljt:
 	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, .Lnmul-.Ljt
-	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv-.Ljt, .Lnorm-.Ljt
+	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv_s-.Ljt, .Lnorm-.Ljt
 	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lchknz-.Ljt, .Lcopyhi-.Ljt
 	/* ZERO dropped — Fsub(x,x)=0 does the same job. */
 
@@ -91,18 +91,11 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cN.
  * All handlers may clobber rax, rcx, rdx, rsi, rdi, r8-r11.
  * Must preserve rbx (bc ptr), r12 (jt), rbp (fail bits), r13 (MASK),
- * r14 (slot base), r15 (unused here — pt_mul's counter). */
-
-.Lfmul: /* Fmul — MontMul mod p. m0inv = 1. rcx = &cN → sub SLOT = &cP. */
-	sub	rcx, SLOT
-	push	1
-	pop	r11
-	jmp	fe_mul5
-
-.Lnmul: /* Nmul — MontMul mod n. m0inv doesn't fit imm32 — movabs.
- * fe_mul5 preserves rcx so INV's 384 calls all inherit &cN. */
-	movabs	r11, 0x11c8aaee00bc4f
-	jmp	fe_mul5
+ * r14 (slot base), r15 (unused here — pt_mul's counter).
+ *
+ * Layout: .Lfmul/.Lnmul moved to immediately precede fe_mul5 so .Lnmul
+ * falls through (−5 B) and .Lfmul's jmp is rel8 over the movabs (−3 B).
+ * .Linv's body moves after fe_mul5 (stub keeps .Ljt entry in u8). */
 
 .Lcopyhi: /* 2 slots from s1 → slot(dst+16). */
 	add	rdi, 16*SLOT
@@ -172,40 +165,6 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 3:	inc	ebp
 2:	ret
 
-/* ── INV — s^(n−2) mod n via Fermat. n−2 differs from n only in bits
- * 1..4 (low byte 0x51 → 0x4F). bt on cN directly, special-case 0..4. ── */
-.Linv:
-	push	rbx
-	push	rsi                 /* s_mont */
-	push	rdi                 /* accumulator — seeded with s_mont */
-	xor	ebx, ebx
-	mov	bl, 254             /* bit 255 implicit (seed = s_mont) */
-.Le:	pop	rsi
-	push	rsi
-	push	rsi
-	push	rsi
-	pop	rdi
-	pop	rdx
-	call	.Lnmul              /* dst = dst² */
-	cmp	ebx, 4
-	jb	.Lmul               /* bits 0-3: n-2 has 1111 */
-	je	.Lnx                /* bit 4: n-2 has 0 */
-	bt	dword ptr [rip + cN], ebx
-	jnc	.Lnx
-.Lmul:	pop	rdi
-	pop	rdx
-	push	rdx
-	push	rdi
-	push	rdi
-	pop	rsi
-	call	.Lnmul
-.Lnx:	dec	ebx
-	jns	.Le
-	pop	rax
-	pop	rax
-	pop	rbx
-	ret
-
 /* ── NORM — bring value to [0, p). In-place on s1. ── */
 .Lnorm:
 	lea	r8, [rcx - SLOT]    /* &cN − SLOT = &cP */
@@ -256,46 +215,19 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	pop	r9
 	jmp	.Lasmod
 
-/* ── Decoders ──
- * Limb i starts at bit 54i → byte 54i/8, shift 54i&7. Loop i=0..3 with
- * a running bit-offset (ebx); unroll i=4 as (24,24) — the natural (27,0)
- * would read bytes 27..34 (3 past a 32-B input).
- *
- * fe_from_le takes its SOURCE in rdx (not rsi). This lets fe_from_be
- * fall through: its reversal loop leaves rsi=src+32 (for BE chaining)
- * and rdx=rdi+8 (in-slot buffer start) — exactly what fe_from_le wants.
- * fe_from_le clobbers rbx (only called from verify, never as a handler).
- * LE chain: exit rdx=src+32, rdi=dst+40.
- * BE chain: exit rsi=src+32, rdi=dst+40 (rdx garbage). */
+.Linv_s: /* Stub — .Linv body lives after fe_mul5 to make room in u8. */
+	jmp	.Linv
 
-fe_from_be:
-	lea	rdx, [rdi + 40]
-	push	32
-	pop	rcx
-1:	lodsb
-	dec	rdx
-	mov	[rdx], al
-	loop	1b                  /* rsi=src+32, rdx=rdi+8, rcx=0 */
-	/* FALL THROUGH — rsi preserved through fe_from_le (uses ebx,ecx,rdx). */
+.Lfmul: /* MontMul mod p. Jump rel8 over .Lnmul's movabs into fe_mul5. */
+	sub	rcx, SLOT
+	push	1
+	pop	r11
+	jmp	fe_mul5             /* rel8 — 10 B away */
 
-fe_from_le:
-	xor	ebx, ebx            /* bit offset: 0, 54, 108, 162 */
-1:	mov	ecx, ebx
-	shr	ecx, 3              /* byte offset: 0, 6, 13, 20 */
-	mov	rax, [rdx + rcx]
-	mov	cl, bl
-	and	cl, 7               /* shift: 0, 6, 4, 2 */
-	shr	rax, cl
-	and	rax, r13
-	stosq
-	add	ebx, W
-	cmp	bl, 4*W             /* 216 — stop before limb 4 */
-	jne	1b
-	mov	rax, [rdx + 24]     /* limb 4: (24,24) */
-	shr	rax, 24
-	stosq
-	add	rdx, 32
-	ret
+.Lnmul: /* MontMul mod n. Falls through to fe_mul5.
+ * fe_mul5 preserves rcx so INV's 384 calls all inherit &cN. */
+	movabs	r11, 0x11c8aaee00bc4f
+	/* FALL THROUGH */
 
 /* ======================================================================
  * fe_mul5 — Montgomery multiply, 5×54, 128-bit accumulator.
@@ -381,6 +313,83 @@ fe_mul5:
 	adc	[rdi+8], rdx
 	lea	rdi, [rdi+16]
 	loop	.Lin
+	ret
+
+/* ── INV — s^(n−2) mod n via Fermat. n−2 differs from n only in bits
+ * 1..4 (low byte 0x51 → 0x4F). bt on cN directly, special-case 0..4.
+ * Moved here (post-fe_mul5) so .Lnmul can fall through; .Linv_s is the
+ * u8-reachable stub. ── */
+.Linv:
+	push	rbx
+	push	rsi                 /* s_mont */
+	push	rdi                 /* accumulator — seeded with s_mont */
+	xor	ebx, ebx
+	mov	bl, 254             /* bit 255 implicit (seed = s_mont) */
+.Le:	pop	rsi
+	push	rsi
+	push	rsi
+	push	rsi
+	pop	rdi
+	pop	rdx
+	call	.Lnmul              /* dst = dst² */
+	cmp	ebx, 4
+	jb	.Lmul               /* bits 0-3: n-2 has 1111 */
+	je	.Lnx                /* bit 4: n-2 has 0 */
+	bt	dword ptr [rip + cN], ebx
+	jnc	.Lnx
+.Lmul:	pop	rdi
+	pop	rdx
+	push	rdx
+	push	rdi
+	push	rdi
+	pop	rsi
+	call	.Lnmul
+.Lnx:	dec	ebx
+	jns	.Le
+	pop	rax
+	pop	rax
+	pop	rbx
+	ret
+
+/* ── Decoders ──
+ * Limb i starts at bit 54i → byte 54i/8, shift 54i&7. Loop i=0..3 with
+ * a running bit-offset (ebx); unroll i=4 as (24,24) — the natural (27,0)
+ * would read bytes 27..34 (3 past a 32-B input).
+ *
+ * fe_from_le takes its SOURCE in rdx (not rsi). This lets fe_from_be
+ * fall through: its reversal loop leaves rsi=src+32 (for BE chaining)
+ * and rdx=rdi+8 (in-slot buffer start) — exactly what fe_from_le wants.
+ * fe_from_le clobbers rbx (only called from verify, never as a handler).
+ * LE chain: exit rdx=src+32, rdi=dst+40.
+ * BE chain: exit rsi=src+32, rdi=dst+40 (rdx garbage). */
+
+fe_from_be:
+	lea	rdx, [rdi + 40]
+	push	32
+	pop	rcx
+1:	lodsb
+	dec	rdx
+	mov	[rdx], al
+	loop	1b                  /* rsi=src+32, rdx=rdi+8, rcx=0 */
+	/* FALL THROUGH — rsi preserved through fe_from_le (uses ebx,ecx,rdx). */
+
+fe_from_le:
+	xor	ebx, ebx            /* bit offset: 0, 54, 108, 162 */
+1:	mov	ecx, ebx
+	shr	ecx, 3              /* byte offset: 0, 6, 13, 20 */
+	mov	rax, [rdx + rcx]
+	mov	cl, bl
+	and	cl, 7               /* shift: 0, 6, 4, 2 */
+	shr	rax, cl
+	and	rax, r13
+	stosq
+	add	ebx, W
+	cmp	bl, 4*W             /* 216 — stop before limb 4 */
+	jne	1b
+	mov	rax, [rdx + 24]     /* limb 4: (24,24) */
+	shr	rax, 24
+	stosq
+	add	rdx, 32
 	ret
 
 /* ======================================================================
