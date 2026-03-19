@@ -520,13 +520,14 @@ tv_ecdsa_p256_verify_asm:
 	pop	rsi
 	call	fe_from_be          /* e  → 7 */
 
-	/* Constants (LE). cP,cN,cR2N,cGX,cGY → 8,9,10,11,12. rdx chains. */
+	/* Constants (LE). cP,cN,cR2N,cGX,cGY → 8,9,10,11,12. rdx chains
+	 * +32 per call; rdi chains +40 per call (exits at slot 13). */
 	lea	rdx, [rip + cP]
-	call	fe_from_le
-	call	fe_from_le
-	call	fe_from_le
-	call	fe_from_le
-	call	fe_from_le
+	push	5
+	pop	r15
+1:	call	fe_from_le
+	dec	r15
+	jnz	1b
 
 	pop	rsi                 /* sig */
 	call	fe_from_be          /* r → 13 */
