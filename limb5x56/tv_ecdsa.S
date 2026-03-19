@@ -1,18 +1,18 @@
 /* ======================================================================
- * tv_ecdsa.S — ECDSA/P-256 verify, 5×54-bit signed limbs.
+ * tv_ecdsa.S — ECDSA/P-256 verify, 5×56-bit signed limbs.
  *
- * Architecture: Montgomery form (R = 2^270). Field elements are 5 limbs
- * × 54 bits nominal, signed, lazy-carry. Fadd/Fsub are pure limbwise
+ * Architecture: Montgomery form (R = 2^280). Field elements are 5 limbs
+ * × 56 bits nominal, signed, lazy-carry. Fadd/Fsub are pure limbwise
  * (no carry, no reduce). fe_mul5 normalizes its output.
  *
- *   Range proof (range_proof.py, K=5 W=54):
- *     KW = 270 > 263.2 (RCB ×12 Y3-chain convergence bound)
- *     accumulator ≤ 119 bits (fits signed-128, 8 bits spare)
- *     mul-input limbs ≤ 59 bits (canonical 54 + ×12 growth ≈ +4)
+ *   Range proof (range_proof.py, K=5 W=56):
+ *     KW = 280 > 263.2 (RCB ×12 Y3-chain convergence bound)
+ *     accumulator ≤ 123 bits (fits signed-128, 4 bits spare)
+ *     mul-input limbs ≤ 61 bits (canonical 56 + ×12 growth ≈ +4)
  *
- *   Montgomery: p's low 54 bits all-ones → −p⁻¹ ≡ 1 (mod 2^54).
- *   n's m0inv = 0x11c8aaee00bc4f (movabs, doesn't fit imm32).
- *   MASK = 2^54−1 = 0x3fffffffffffff: movabs → r13, preserved everywhere.
+ *   Montgomery: p's low 56 bits all-ones → −p⁻¹ ≡ 1 (mod 2^56).
+ *   n's m0inv = 0xd1c8aaee00bc4f (movabs, doesn't fit imm32).
+ *   MASK = 2^56−1 = 0xffffffffffffff: movabs → r13, preserved everywhere.
  *
  * Slots: 40 B each (5 qwords). 24 slots. Frame 968 B (960 + 8 align).
  * Slots 0,1,2,3 reach disp8 from r14 (40*3 = 120 < 128).
@@ -29,7 +29,7 @@
 
 	.intel_syntax noprefix
 
-	.equ	W,      54
+	.equ	W,      56
 	.equ	K,      5
 	.equ	SLOT,   K*8        /* 40 B */
 	.equ	NSLOTS, 24
@@ -71,12 +71,12 @@
  * Fadd with 1@15) before the range checks. */
 cN:	.quad	0xf3b9cac2fc63254f, 0xbce6faada7179e84     /* n − 2 */
 	.quad	0xffffffffffffffff, 0xffffffff00000000
-cR2N:	.quad	0x017644694887ac57, 0x9ea8ca2ae130785e
-	.quad	0x92b6bec59619076a, 0x55aba83afc16484a
-cGX:	.quad	0xcc35062a450f0624, 0xa57f11d76d805e79
-	.quad	0xdccaddd889441d6e, 0x17ddaf71d571985a
-cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
-	.quad	0x21a237487cc962d2, 0x7fc62abe1761535e
+cR2N:	.quad	0xea7fbc24cfb36926, 0x4956a0a7b8636a7a
+	.quad	0xec59619076ab51d1, 0x83b51c1e84a3d0b1
+cGX:	.quad	0xd418a9143c18905f, 0xfc475d570179e730
+	.quad	0x2b7762251075ba95, 0x76bdc7b4c6616b14
+cGY:	.quad	0x57ce95560a8571ff, 0xe434a7e55cddf253
+	.quad	0x88dd21f3258b4ab8, 0x18aafa5c854d7687
 
 /* ======================================================================
  * TEXT
@@ -226,7 +226,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	pop	rdi
 .Lnmul: /* MontMul mod n. fe_mul5 preserves rcx so INV's 384 calls
  * all inherit &cN. rel8 over .Linv + .Lfmul (53 B). */
-	movabs	r11, 0x11c8aaee00bc4f
+	movabs	r11, 0xd1c8aaee00bc4f
 	jmp	fe_mul5
 
 /* ── INV — s^(n−2) mod n via Fermat. n−2 stored directly in rodata
@@ -309,7 +309,7 @@ fe_mul5:
 	/* Carry-prop: acc[K..2K-1] (128-bit) → dst[0..K-1]. r10 ended at
 	 * &acc[K-1]; source = r10+16. Running carry in rdx:rbx; lodsq ×2
 	 * advances rsi by 16 (rax scratch). rbx = 0 from loop exit above —
-	 * no xor needed. Top limb ≤ 2^42 so dropping hi in tail is correct. */
+	 * no xor needed. Top limb ≤ 2^34 so dropping hi in tail is correct. */
 	lea	rsi, [r10 + 16]
 	mov	rdi, [rbp + 16]
 	xor	edx, edx
@@ -347,14 +347,12 @@ fe_mul5:
 	ret
 
 /* ── Decoders ──
- * Limb i starts at bit 54i → byte 54i/8, shift 54i&7. Loop i=0..3 with
- * a running bit-offset (ebx); unroll i=4 as (24,24) — the natural (27,0)
- * would read bytes 27..34 (3 past a 32-B input).
+ * W=56 → 7 bytes per limb exactly. Load 8, mask, advance 7. Top limb
+ * is 32 bits (256 − 4·56), fetched with lodsd/mov-eax (zero-extends).
  *
  * fe_from_le takes its SOURCE in rdx (not rsi). This lets fe_from_be
  * fall through: its reversal loop leaves rsi=src+32 (for BE chaining)
  * and rdx=rdi+8 (in-slot buffer start) — exactly what fe_from_le wants.
- * fe_from_le clobbers rbx (only called from verify, never as a handler).
  * LE chain: exit rdx=src+32, rdi=dst+40.
  * BE chain: exit rsi=src+32, rdi=dst+40 (rdx garbage). */
 
@@ -366,30 +364,22 @@ fe_from_be:
 	dec	rdx
 	mov	[rdx], al
 	loop	1b                  /* rsi=src+32, rdx=rdi+8, rcx=0 */
-	/* FALL THROUGH — rsi preserved through fe_from_le (uses ebx,ecx,rdx). */
+	/* FALL THROUGH — rsi preserved through fe_from_le (uses ecx,edx,eax). */
 
-/* 54 = 48 + 6, so byte-offset 6i and shift 6i extract bits 48i+6i = 54i.
- * Need 64 bits after shift for full 54-bit limb, but shr by 6i leaves only
- * 64−6i bits — insufficient for i≥2. shrd with [rdx+6i+8] supplies the
- * high bits (iter-3 reads bytes 26..33: 2 B past, valid but value masked
- * off). Iter 4 WOULD read [rdx+32] = past input; skip that load, shrd
- * with rbx=0 ≡ shr (limb 4 is 40 bits, doesn't need high qword). */
+/* Write trails read: reversal buffer at rdi+8..rdi+39 (old rdi). Stosq
+ * writes old_rdi+0,+8,+16,+24,+32; reads at rdx=old_rdi+8,+15,+22,+29,+36.
+ * Iter k overlap: write@+8k ends at +8k+7, read@+8+7k starts there for
+ * k≥1 — same-iter read happens before write; cross-iter gap grows. */
 fe_from_le:
-	xor	ecx, ecx
-1:	mov	rax, [rdx + rcx]
-	xor	ebx, ebx
-	cmp	cl, 24
-	cmovb	rbx, [rdx + rcx + 8]   /* iter 4: cl=24, CF=0, rbx stays 0.
-	                                * cmov LOADS regardless — [rdx+32]
-	                                * always valid (rodata chain or
-	                                * in-frame slot buffer). −1 B. */
-	shrd	rax, rbx, cl
+	mov	cl, 4               /* rcx = 0 from fe_from_be's loop / rep stosd */
+1:	mov	rax, [rdx]
 	and	rax, r13
 	stosq
-	add	ecx, 6
-	cmp	cl, 30
-	jne	1b
-	add	rdx, 32
+	add	rdx, 7
+	loop	1b
+	mov	eax, [rdx]          /* top limb = 32 bits, zero-extends */
+	stosq
+	add	rdx, 4              /* LE chain: total advance 4·7 + 4 = 32 */
 	ret
 
 /* ======================================================================
@@ -525,7 +515,7 @@ tv_ecdsa_p256_verify_asm:
 	mov	r14, rsp
 	push	-1
 	pop	r13
-	shr	r13, 64-W           /* MASK = 2^54−1; movabs is 10 B, this is 8 */
+	shr	r13, 64-W           /* MASK = 2^56−1; movabs is 10 B, this is 8 */
 	lea	r12, [rip + .Ljt]   /* jump table — preserved by handlers + fe_mul5 */
 
 	push	rdi                 /* sig — r8 (hv) is untouched by fe_from_be */
@@ -543,8 +533,9 @@ tv_ecdsa_p256_verify_asm:
 	mov	rsi, r8             /* hv */
 	call	fe_from_be          /* e  → 7; rdi = slot 8 */
 
-	/* cP → slot 8, SIGNED limb form: (−1, 2^42, 0, 2^30, 2^40−256).
-	 * p = 2^256 − 2^224 + 2^192 + 2^96 − 1 — five ±power-of-2 terms.
+	/* cP → slot 8, SIGNED limb form: (−1, 2^40, 0, 2^24, 2^32−1).
+	 * p = 2^256 − 2^224 + 2^192 + 2^96 − 1. At W=56: 96=56+40,
+	 * 192=3·56+24, 224=4·56+0, 256=4·56+32 → limb 4 = 2^32 − 2^0.
 	 * Zero-fill then 4 patches. fe_mul5/NORM arithmetic is already
 	 * signed (imul, 128-bit acc); CHKLT changed to Fsub-based.
 	 * rep stosd: 2 B (no REX.W), 10 dwords = 5 qwords. */
@@ -553,9 +544,9 @@ tv_ecdsa_p256_verify_asm:
 	pop	rcx
 	rep	stosd                       /* all zero; rdi → slot 9 */
 	dec	qword ptr [rdi - 40]        /* limb 0 = −1 */
-	mov	byte ptr [rdi - 27], 0x04   /* limb 1 byte 5: 2^42 */
-	mov	byte ptr [rdi - 13], 0x40   /* limb 3 byte 3: 2^30 */
-	dec	dword ptr [rdi - 7]         /* limb 4 bytes 1-4: 2^40−256 = 0x00FFFFFFFF00 */
+	inc	byte ptr [rdi - 27]         /* limb 1 byte 5: 0→1 → 2^40 */
+	inc	byte ptr [rdi - 13]         /* limb 3 byte 3: 0→1 → 2^24 */
+	dec	dword ptr [rdi - 8]         /* limb 4 low dword: 0→0xFFFFFFFF, no REX */
 
 	/* Constants (LE). cN,cR2N,cGX,cGY → 9,10,11,12. Stack-slot counter:
 	 * fe_from_le doesn't push (no call, no frame), so [rsp] stays put. */

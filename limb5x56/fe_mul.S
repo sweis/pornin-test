@@ -1,18 +1,18 @@
-/* 5×54 signed-limb Montgomery multiply. R = 2^270.
+/* 5×56 signed-limb Montgomery multiply. R = 2^280.
  * Output ≡ a·b·R⁻¹ (mod m). SOS: full schoolbook → reduce.
  *
- * Ranges (range_proof.py, K=5 W=54):
- *   input limbs: |limb| ≤ 2^59 (canonical 54 + RCB ×12 growth)
- *   products:    |prod| ≤ 2^118 (signed)
- *   accumulator: 128-bit, peak ~2^119 (signed — fits with 8 bits spare)
- *   output val:  ~4m (top limb signed, limbs 0..3 in [0, 2^54))
+ * Ranges (range_proof.py, K=5 W=56):
+ *   input limbs: |limb| ≤ 2^61 (canonical 56 + RCB ×12 growth)
+ *   products:    |prod| ≤ 2^122 (signed)
+ *   accumulator: 128-bit, peak ~2^123 (signed — fits with 4 bits spare)
+ *   output val:  ~4m (top limb signed, limbs 0..3 in [0, 2^56))
  *
- * p m0inv = 1 (low 54 bits of p are all-ones → −p⁻¹ ≡ 1 mod 2^54).
- * n m0inv = 0x11c8aaee00bc4f (doesn't fit imm32 — movabs or r11 preload).
+ * p m0inv = 1 (low 56 bits of p are all-ones → −p⁻¹ ≡ 1 mod 2^56).
+ * n m0inv = 0xd1c8aaee00bc4f (doesn't fit imm32 — movabs or r11 preload).
  *
  * API: fe_mul5(rdi=dst, rsi=a, rdx=b, rcx=m)
- *   r11 = m0inv (preloaded by caller: 1 for p, 0x11c8aaee00bc4f for n)
- *   r13 = MASK  (preloaded, preserved — 0x3fffffffffffff)
+ *   r11 = m0inv (preloaded by caller: 1 for p, 0xd1c8aaee00bc4f for n)
+ *   r13 = MASK  (preloaded, preserved — 0xffffffffffffff)
  * Preserves: rbx, rbp, r12, r13, r14, r15 (SysV + r13 invariant).
  * Restores rcx on exit (INV's 384 calls rely on stable &m).
  */
@@ -20,7 +20,7 @@
 	.intel_syntax noprefix
 	.text
 
-	.equ	W,   54
+	.equ	W,   56
 	.equ	K,   5
 	.equ	ACC_QW, 2*K*2      /* 10 slots × 2 qwords = 20 */
 

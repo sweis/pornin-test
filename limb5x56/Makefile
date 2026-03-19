@@ -1,4 +1,4 @@
-# limb5/ — 5×54 signed-limb Montgomery track.
+# limb5x56/ — 5×56 signed-limb Montgomery track.
 COMMON = ../common
 include $(COMMON)/track.mk
 
@@ -23,6 +23,6 @@ bytecode.inc: gen_bytecode.py
 check:
 	python3 -c "import sys; sys.path.insert(0,'$(COMMON)'); \
 		from range_proof import Cfg, rcb_fixpoint; \
-		cfg = Cfg(K=5, W=54, acc_bits=128); \
+		cfg = Cfg(K=5, W=56, acc_bits=128); \
 		wl, wa, out, trace, ok = rcb_fixpoint(cfg); \
-		print(f'5×54: converges={ok}, max_acc={wa}b, max_limb_in={wl}b')"
+		print(f'5×56: converges={ok}, max_acc={wa}b, max_limb_in={wl}b')"

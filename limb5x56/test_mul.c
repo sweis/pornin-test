@@ -1,27 +1,27 @@
-/* Correctness harness for fe_mul5 (5×54 Montgomery multiply).
+/* Correctness harness for fe_mul5 (5×56 Montgomery multiply).
  * Checks against Python-generated reference vectors.
- * Vectors: MontMul(a, b) = a*b/R mod m, with R = 2^270. */
+ * Vectors: MontMul(a, b) = a*b/R mod m, with R = 2^280. */
 
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 
 /* fe_mul5(dst, a, b, m, m0inv)
- * r13 must be preloaded with MASK = 2^54-1 (handled by a shim here). */
+ * r13 must be preloaded with MASK = 2^56-1 (handled by a shim here). */
 extern void fe_mul5_shim(int64_t *dst, const int64_t *a, const int64_t *b,
                          const int64_t *m, int64_t m0inv);
 
 #define K 5
-#define W 54
+#define W 56
 #define MASK ((1L << W) - 1)
 
 static const int64_t P_LIMBS[K] = {
-    0x3fffffffffffffL, 0x3ffffffffffL, 0L, 0x40000000L, 0xffffffff00L
+    0xffffffffffffffL, 0xffffffffffL, 0L, 0x1000000L, 0xffffffffL
 };
 static const int64_t N_LIMBS[K] = {
-    0x39cac2fc632551L, 0x2ab69c5e7a13ceL, 0x3ffffffffbce6fL, 0x3fffffffL, 0xffffffff00L
+    0xb9cac2fc632551L, 0xfaada7179e84f3L, 0xffffffffffbce6L, 0xffffffL, 0xffffffffL
 };
-static const int64_t N_M0INV = 0x11c8aaee00bc4fL;
+static const int64_t N_M0INV = 0xd1c8aaee00bc4fL;
 
 #include "vectors_mul.h"
 
@@ -91,7 +91,7 @@ int main(void) {
         }
     }
 
-    /* Mod-n vectors (m0inv = 0x11c8aaee00bc4f). */
+    /* Mod-n vectors (m0inv = 0xd1c8aaee00bc4f). */
     for (int i = 0; i < NUM_NVECTORS; i++) {
         const int64_t *a = NVECTORS[i];
         const int64_t *b = NVECTORS[i] + K;
