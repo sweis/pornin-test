@@ -366,10 +366,10 @@ fe_from_be:
 fe_from_le:
 	push	K-1
 	pop	rcx
-1:	mov	eax, [rsi]
+1:	lodsd                       /* 1 B; rsi += 4 */
+	dec	rsi                 /* net +3. Beats mov eax,[rsi]+add rsi,3 by 2 B */
 	and	eax, MASK
 	stosq
-	add	rsi, 3
 	loop	1b
 	xor	eax, eax
 	lodsw                       /* ax ← top 16 bits; rsi += 2 (chain) */
