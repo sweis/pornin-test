@@ -349,14 +349,16 @@ fe_mul5:
 	ret
 
 /* ── Decoders ──
- * W=56 → 7 bytes per limb exactly. Load 8, mask, advance 7. Top limb
- * is 32 bits (256 − 4·56), fetched with lodsd/mov-eax (zero-extends).
+ * W=56 → 7 bytes per limb exactly. lodsq (+8) / dec rsi (−1) = +7.
+ * Top limb is 32 bits (256 − 4·56): lodsd zero-extends AND advances +4
+ * → drops the whole `mov eax,[rdx]; stosq; add rdx,4` tail to `lodsd; stosq`.
  *
- * fe_from_le takes its SOURCE in rdx (not rsi). This lets fe_from_be
- * fall through: its reversal loop leaves rsi=src+32 (for BE chaining)
- * and rdx=rdi+8 (in-slot buffer start) — exactly what fe_from_le wants.
- * LE chain: exit rdx=src+32, rdi=dst+40.
- * BE chain: exit rsi=src+32, rdi=dst+40 (rdx garbage). */
+ * fe_from_le takes its source in rsi. fe_from_be's reversal leaves
+ * rsi=src+32 (BE-chain ptr) and rdx=rdi+8 (in-slot buffer); one xchg
+ * swaps them for fall-through. BE caller reads the advanced src from
+ * rdx on return.
+ * LE chain: exit rsi=src+32 (4·7+4), rdi=dst+40.
+ * BE chain: exit rdx=src+32, rdi=dst+40 (rsi garbage). */
 
 fe_from_be:
 	lea	rdx, [rdi + 40]
@@ -366,22 +368,22 @@ fe_from_be:
 	dec	rdx
 	mov	[rdx], al
 	loop	1b                  /* rsi=src+32, rdx=rdi+8, rcx=0 */
-	/* FALL THROUGH — rsi preserved through fe_from_le (uses ecx,edx,eax). */
+	xchg	rsi, rdx            /* rsi=rdi+8 (decode src), rdx=src+32 (chain) */
+	/* FALL THROUGH */
 
 /* Write trails read: reversal buffer at rdi+8..rdi+39 (old rdi). Stosq
- * writes old_rdi+0,+8,+16,+24,+32; reads at rdx=old_rdi+8,+15,+22,+29,+36.
- * Iter k overlap: write@+8k ends at +8k+7, read@+8+7k starts there for
- * k≥1 — same-iter read happens before write; cross-iter gap grows. */
+ * writes old_rdi+0,+8,+16,+24,+32; lodsq reads at rsi=old_rdi+8,+15,+22,+29
+ * then lodsd at +36. Same-iter read precedes write; cross-iter gap grows
+ * (write@+8k ends at +8k+7, next read@+8+7k starts there for k≥1). */
 fe_from_le:
 	mov	cl, 4               /* rcx = 0 from fe_from_be's loop / rep stosd */
-1:	mov	rax, [rdx]
+1:	lodsq
+	dec	rsi                 /* net +7 per iteration */
 	and	rax, r13
 	stosq
-	add	rdx, 7
 	loop	1b
-	mov	eax, [rdx]          /* top limb = 32 bits, zero-extends */
+	lodsd                       /* top 32 bits, zero-extends, rsi += 4 */
 	stosq
-	add	rdx, 4              /* LE chain: total advance 4·7 + 4 = 32 */
 	ret
 
 /* ======================================================================
@@ -390,9 +392,15 @@ fe_from_le:
 
 /* .Lcadd: copy 3 slots → addend, dispatch bc_rcb. rcx = 0 after rep
  * movsq → bcrun_off takes offset in rcx (obc_rcb = 0 for free).
- * r15 = r14+oCP = r14+320; oADD=200 → r15−120 (disp8, −3 B). */
+ * r15 = r14+oCP = r14+320; oADD=200 → r15−120 (disp8, −3 B).
+ *
+ * Caller passes the SOURCE OFFSET (not pointer) in esi — `mov esi,imm32`
+ * is 5 B vs 7 B for `lea rsi,[r14+disp32]`; xor esi,esi is 2 B vs 3 B
+ * for `mov rsi,r14`. `add rsi,r14` here costs +3 B; three call sites
+ * save 1+2+2 = 5 B. Net −2 B. (esi write zero-extends → full addr.) */
 .Lcadd:
 	lea	rdi, [r15 - (oCP - oADD)]
+	add	rsi, r14
 	push	3*K
 	pop	rcx
 	rep	movsq
@@ -410,15 +418,15 @@ pt_mul:
 	 * Net −1 B. r15 freed for &cP pointer (−7 B net across .Lfmul,
 	 * NORM, .Lcadd, bc_run). rbp = r14+FRAME; u1 at −88. */
 	mov	ebx, (K-1)*64 + (W-1)    /* 4·64+55 = 311 */
-.Lpi:	mov	rsi, r14
+.Lpi:	xor	esi, esi            /* offset 0 — .Lcadd adds r14 */
 	call	.Lcadd
 	bt	[rbp - (FRAME - oU1)], ebx
 	jnc	1f
-	lea	rsi, [r14 + oBAK]
+	mov	esi, oBAK
 	call	.Lcadd
 1:	bt	[rbp - (FRAME - oU1 - SLOT)], ebx
 	jnc	2f
-	lea	rsi, [r14 + oBAK + 3*SLOT]
+	mov	esi, oBAK + 3*SLOT
 	call	.Lcadd
 2:	dec	ebx
 	lea	eax, [rbx+1]        /* crossed iff (ebx+1) ≡ 0 (mod 64) */
@@ -527,20 +535,30 @@ tv_ecdsa_p256_verify_asm:
 	shr	r13, 64-W           /* MASK = 2^56−1; movabs is 10 B, this is 8 */
 	lea	r12, [rip + .Ljt]   /* jump table — preserved by handlers + fe_mul5 */
 
-	push	rdi                 /* sig — r8 (hv) is untouched by fe_from_be */
-
 	/* BE chain at slot 3 (3*SLOT = 120: disp8). Qx,Qy,r,s,e → 3..7.
 	 * rdi ends at slot 8, ready for LE constants. The bc_v1 layout
-	 * stages all 8 Shamir values at slots 0..7 → one rep movsq. */
+	 * stages all 8 Shamir values at slots 0..7 → one rep movsq.
+	 *
+	 * 5 decodes, 3 source groups: pub+1(×2), sig(×2), hv(×1). fe_from_be
+	 * returns the advanced src in rdx (xchg before fall-through). The
+	 * bitmask ebx=0b10101 drives the chain: `shr ebx,1` yields CF=bit0
+	 * and ZF=(ebx==0) in one 2-B instruction. CF=1 (iters 1,3,5) →
+	 * push rdx so pop gets the chain ptr; CF=0 (iters 2,4) → pop reads
+	 * the next src from the prologue pushes. ZF=1 after iter 5 exits.
+	 * Stack is balanced: 2 prologue pushes − 2 CF=0 pops = 0. rbx=0 at
+	 * exit (for `mov bl,4` below). 27 B vs 38 B straight-line. */
+	push	r8                  /* hv — popped on iter 4 */
+	push	rdi                 /* sig — popped on iter 2 */
 	lea	rsi, [rdx + 1]
 	lea	rdi, [r14 + 3*SLOT]
-	call	fe_from_be          /* Qx → 3 */
-	call	fe_from_be          /* Qy → 4 */
-	pop	rsi                 /* sig */
-	call	fe_from_be          /* r  → 5 */
-	call	fe_from_be          /* s  → 6 */
-	mov	rsi, r8             /* hv */
-	call	fe_from_be          /* e  → 7; rdi = slot 8 */
+	push	0b10101
+	pop	rbx
+1:	call	fe_from_be
+	shr	ebx, 1              /* CF = chain-bit, ZF = done */
+	jnc	2f                  /* CF=0: next src is on stack already */
+	push	rdx                 /* CF=1: chain — push advanced ptr */
+2:	pop	rsi
+	jnz	1b                  /* ZF from shr; push/pop preserve flags */
 
 	/* r15 = &cP. Preserved by all handlers + fe_mul5 (never touched);
 	 * pt_mul's packed counter uses ebx only. Reaches oADD (−120),
@@ -552,22 +570,21 @@ tv_ecdsa_p256_verify_asm:
 	 * 192=3·56+24, 224=4·56+0, 256=4·56+32 → limb 4 = 2^32 − 2^0.
 	 * Zero-fill then 4 patches. fe_mul5/NORM arithmetic is already
 	 * signed (imul, 128-bit acc); CHKLT changed to Fsub-based.
-	 * rep stosd: 2 B (no REX.W), 10 dwords = 5 qwords. */
+	 * rep stosd: 2 B (no REX.W), 10 dwords = 5 qwords. rcx = 0 from
+	 * fe_from_le's `loop` → `mov cl` suffices. */
 	xor	eax, eax
-	push	K*2
-	pop	rcx
+	mov	cl, K*2
 	rep	stosd                       /* all zero; rdi → slot 9 */
 	dec	qword ptr [rdi - 40]        /* limb 0 = −1 */
 	inc	byte ptr [rdi - 27]         /* limb 1 byte 5: 0→1 → 2^40 */
 	inc	byte ptr [rdi - 13]         /* limb 3 byte 3: 0→1 → 2^24 */
 	dec	dword ptr [rdi - 8]         /* limb 4 low dword: 0→0xFFFFFFFF, no REX */
 
-	/* Constants (LE). cN,cR2N,cGX,cGY → 9,10,11,12. rbx counter: the
-	 * 7-byte-stride decoder doesn't touch rbx (no shrd). −1 B vs
-	 * stack-slot (push+dec[rsp]+pop = 6 B → push+pop+dec = 5 B). */
-	lea	rdx, [rip + cN]
-	push	4
-	pop	rbx
+	/* Constants (LE). cN,cR2N,cGX,cGY → 9,10,11,12. fe_from_le reads
+	 * from rsi now (lodsq). rbx = 0 from the BE loop's final shr →
+	 * `mov bl` is safe (high bytes clean). */
+	lea	rsi, [rip + cN]
+	mov	bl, 4
 1:	call	fe_from_le
 	dec	ebx
 	jnz	1b
