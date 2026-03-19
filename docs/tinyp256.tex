@@ -65,6 +65,7 @@ full source, test suite, and commit history live in
 
 % ======================================================================
 \section{The problem}
+\label{sec:problem}
 
 A boot~ROM is a small block of read-only memory burned into a chip at
 the factory. When the chip powers on, it runs this code first --- before
@@ -1067,6 +1068,49 @@ by four. We work in eight-byte words. Useless.
 A tamer version did find something: two functions that end with the
 same three bytes (\texttt{stosq; ret}) and sit 43 bytes apart. One
 jumps to the other's tail. \saved{1}.
+
+\subsection{Modern instruction-set extensions}
+
+The boot-ROM framing (\S\ref{sec:problem}) assumed a minimal
+instruction set --- no AVX, no BMI. But suppose the target has them.
+Do 256-bit registers or dedicated bit-manipulation instructions
+shrink the code?
+
+We measured nine candidates. None wins.
+
+\begin{center}
+\begin{tabular}{@{}lrl@{}}
+\toprule
+Candidate & $\Delta$ & Why it loses \\
+\midrule
+\texttt{vptest} zero-check    & \spent{1}  & vs \texttt{repe scasq} (3 B + setup) \\
+\texttt{vmovdqu} slot copy    & \spent{23} & vs \texttt{rep movsq} (3 B, any length) \\
+\texttt{bextr} nibble decode  & \spent{5}  & the dirty nibble \emph{is} the scale factor \\
+\texttt{mulx} inner loop      & \spent{4}  & vs \texttt{lodsq; mul rbx} (5 B) \\
+\texttt{andn}, \texttt{rorx}, \texttt{shrx} & \spent{1}--\spent{3} & legacy ops already 2--3 B \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The structural problem: every AVX or BMI instruction carries a prefix
+--- two to four extra bytes that say ``this is the new encoding.'' Our
+densest code uses the opposite: one-byte CISC relics (\texttt{lodsq},
+\texttt{stosq}, \texttt{scasq}, \texttt{xlatb}) with implicit register
+operands and no prefix at all. A \texttt{rep movsq} copies any number
+of bytes in three bytes of code. AVX has no equivalent; it needs a
+load--store pair per 32 bytes.
+
+The \texttt{bextr} finding is the nicest negative. The bytecode
+dispatcher extracts four 4-bit fields from a 16-bit word ---
+opcode, destination, two sources --- to look up handlers and slot
+addresses. \texttt{bextr} (``bit-field extract'') seems made for
+this. But the current decoder doesn't extract the field at all. It
+leaves the bits in position 4--7 of a register and scales:
+\texttt{lea [base + reg*2]} turns bits 4--7 into bits 5--8, which is
+the nibble times 32, which is the slot offset. The dirty value is
+already what you want. \texttt{bextr} would hand you a clean 0--15
+that you'd then multiply by 32 --- an extra instruction to undo the
+extraction you just paid for.
 
 % ======================================================================
 \section{Other limb widths: 11$\times$24, 5$\times$54, 5$\times$56}
