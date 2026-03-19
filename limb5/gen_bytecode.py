@@ -136,7 +136,10 @@ V1 = [
     # routed around slot 0 (Gx²) and slots 3,4,5,6 (inputs alive longer).
 
     # ── SET1 first (also used by on-curve later); n−2 → n via +1 +1 ──
-    ('SET1', 15,  0,  0),  # slot 15 = 1 (survives to on-curve/Z_Q)
+    # SET1 clears 3 slots (dst, dst+1, dst+2) and sets (dst+1)=1.
+    # dst=14: zeros 14,16 (garbage → still garbage), sets 15=1.
+    # Slot 14 written later (r+n); 16 filled by COPYHI.
+    ('SET1', 14,  0,  0),  # slot 15 = 1 (survives to on-curve/Z_Q)
     ('Fadd',  9,  9, 15),  # n−2 → n−1 (limbwise: only limb 0 changes)
     ('Fadd',  9,  9, 15),  # n−1 → n
 
@@ -198,10 +201,8 @@ V1 = [
     # overwritten before rep movsq — slot 15 not actually touched.
     ('COPYHI', 15,  0, 0),  # 0..7 → 16..23
 
-    # ── acc = (0:1:0). ──
-    ('Fsub', 0, 0, 0),
-    ('SET1', 1, 0, 0),
-    ('Fsub', 2, 2, 2),
+    # ── acc = (0:1:0). SET1 3-slot: zeros 0,2 AND sets slot 1 = 1. ──
+    ('SET1', 0, 0, 0),
 ]
 
 

@@ -115,11 +115,14 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	ret
 
 .Lset1:
+	/* Clears 3 slots (dst, dst+1, dst+2); sets (dst+1)[0]=1. Both
+	 * call sites want (0:1:0) triples: SET1(14)→slot15=1 at bc_v1
+	 * start (14,16 garbage anyway), SET1(0)→acc=(0:1:0) at end. */
 	xor	eax, eax
-	push	K
+	push	3*K
 	pop	rcx
 	rep	stosq
-	inc	byte ptr [rdi - K*8]   /* slot is all-zero → byte inc ≡ qword inc */
+	inc	byte ptr [rdi - 2*K*8] /* middle slot byte 0: all-zero → byte inc ≡ qword inc */
 	ret
 
 .Lfadd:

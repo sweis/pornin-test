@@ -63,7 +63,7 @@ bc_v3:
 	/* 23 B */
 
 bc_v1:
-	.byte	0x08, 0xf0  /* SET1   15 ←  0,  0 */
+	.byte	0x08, 0xe0  /* SET1   14 ←  0,  0 */
 	.byte	0xf1, 0x99  /* Fadd    9 ←  9, 15 */
 	.byte	0xf1, 0x99  /* Fadd    9 ←  9, 15 */
 	.byte	0x94, 0x05  /* CHKLT   0 ←  5,  9 */
@@ -102,11 +102,9 @@ bc_v1:
 	.byte	0x09, 0x2b  /* COPY    2 ← 11,  0 */
 	.byte	0x09, 0x5f  /* COPY    5 ← 15,  0 */
 	.byte	0x0a, 0xf0  /* COPYHI 15 ←  0,  0 */
-	.byte	0x02, 0x00  /* Fsub    0 ←  0,  0 */
-	.byte	0x08, 0x10  /* SET1    1 ←  0,  0 */
-	.byte	0x22, 0x22  /* Fsub    2 ←  2,  2 */
+	.byte	0x08, 0x00  /* SET1    0 ←  0,  0 */
 	.byte	0x00  /* END */
-	/* 85 B */
+	/* 81 B */
 
 	.equ	obc_rcb, 0
 	.equ	obc_v3,  87
