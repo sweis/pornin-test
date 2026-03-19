@@ -798,11 +798,11 @@ tv_ecdsa_p256_verify_asm:
 	ja	.Lf2
 	/* fe_from_be: stosq×4 advances rdi by 32; rsi index-read only.
 	 * Chain: rdi flows call→call; rsi bumped +32 by _next entry.
-	 * rsi still = 64 here (cmp doesn't modify) → 64·6 = 384 =
-	 * slot12 offset.  imul(3)+add(3) = 6 B vs 7 B lea disp32. */
+	 * rsi still = 64 here (cmp doesn't modify) → 64·8 − 128 = 384 =
+	 * slot12 offset.  lea scale-8 disp8(−128) = 5 B; −128 is the
+	 * exact disp8 floor.  Beats imul(3)+add(3) by 1 B. */
 	push	rdi                 /* sig → stack */
-	imul	edi, esi, 6         /* edi = 64·6 = 384.  zero-extends rdi. */
-	add	rdi, r14            /* slot 12 */
+	lea	rdi, [r14+rsi*8-128]  /* r14 + 64·8 − 128 = r14+384 = slot12 */
 	pop	rsi                 /* rsi = sig */
 	call	fe_from_be
 	call	fe_from_be_next     /* rsi+=32; rdi flowed to slot 13 */
