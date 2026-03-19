@@ -274,12 +274,14 @@ bc_v1:
 
 /* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
  * 32 first, for chained decode (rdi already advanced by the prior
- * call's stosq×4).  Two call sites each drop their own add rsi,32. */
+ * call's stosq×4).  Two call sites each drop their own add rsi,32.
+ * mov cl: all 5 call sites have rcx ≤ 65 (high bytes zero — first
+ * call is right after `cmp rcx,65;jne`, rest have rcx=0 from prior
+ * loop exit).  −1 B vs push;pop. */
 fe_from_be_next:
 	add	rsi, 32
 fe_from_be:
-	push	4
-	pop	rcx
+	mov	cl, 4
 1:	movbe	rax, [rsi+rcx*8-8]  /* load+bswap; 7 B vs mov(5)+bswap(3) */
 	stosq
 	loop	1b
