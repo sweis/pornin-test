@@ -360,17 +360,13 @@ pt_mul:
  * are both INHERITED from verify (set once, never clobbered by the
  * call tree — Nmul/MULCN read r12, nothing writes it).  bc_rcb is
  * in .text now, so bc_rcb−.Ljt is a same-section assembly-time
- * constant usable as disp32: one SIB lea (8 B) replaces rip-lea +
- * add (10 B).  bc_run no longer push/pops r12 or sets it (−11 B). */
+ * constant usable as disp32.  lea targets rbx DIRECTLY (after the
+ * save push) — drops push rdi; pop rbx.  8+2 → 8.  −2 B. */
 bcrun_r14:
 bcrun_off:
-	lea	rdi, [r12 + rdi + bc_rcb - .Ljt]
-	/* FALLTHROUGH */
-bc_run:
 	push	rbp
 	push	rbx
-	push	rdi                 /* 2B push;pop vs 3B REX.W mov */
-	pop	rbx
+	lea	rbx, [r12 + rdi + bc_rcb - .Ljt]
 	/* r14 = slot base, r12 = &.Ljt (both inherited).  Check
 	 * accumulator in ebp (no REX).  Only bpl is ever OR'd; upper
 	 * bytes stay zero from the xor.  r12-r14 not clobbered. */
