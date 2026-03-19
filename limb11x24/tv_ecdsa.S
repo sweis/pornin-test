@@ -116,16 +116,20 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	inc	byte ptr [rdi - SLOT]    /* 3 B (vs inc qword 4 B); slot is all-zero */
 	ret
 
-.Lfadd: /* limbwise, no carry */
+/* Fadd/Fsub merged: r8 ∈ {+1,−1}; imul r9,r8 conditionally negates.
+ * 34→32 B (ported from limb5x56 fc89ce3). imul adds ~3 cyc/iter but
+ * FAST keeps them separate with dec;jnz (see #ifdef below). */
+#ifdef FAST
+.Lfadd:
 	push	K
 	pop	rcx
 1:	lodsq
 	add	rax, [rdx]
 	stosq
 	lea	rdx, [rdx+8]
-	loop	1b
+	dec	ecx
+	jnz	1b
 	ret
-
 .Lfsub:
 	push	K
 	pop	rcx
@@ -133,8 +137,27 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	sub	rax, [rdx]
 	stosq
 	lea	rdx, [rdx+8]
-	loop	1b
+	dec	ecx
+	jnz	1b
 	ret
+#else
+.Lfsub:
+	push	-1
+	jmp	1f
+.Lfadd:
+	push	1
+1:	pop	r8
+	push	K
+	pop	rcx
+2:	lodsq
+	mov	r9, [rdx]
+	imul	r9, r8
+	add	rax, r9
+	stosq
+	lea	rdx, [rdx+8]
+	loop	2b
+	ret
+#endif
 
 .Lchkz:  /* ebp bit 0 ← (s1 != 0) XOR (dst == 1). CHKNZ = CHKZ with dst=1.
   * bc_run sets rdi = r14 + dst·SLOT.  dst·SLOT ∈ {0, 88}; 88>>6 = 1. */
@@ -199,8 +222,8 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
  * gets clobbered by loop counters). */
 
 .Lnorm:
-	/* All NORM bytecode has dst==s1 → bc_run gives rdi==rsi already. */
-	lea	r8, [rcx - SLOT]    /* &cN − SLOT = &cP */
+	/* All NORM bytecode has dst==s1 → bc_run gives rdi==rsi already.
+	 * Modulus = r15 (&cP — set in verify, preserved everywhere). */
 	call	.Lcprop             /* SF = sign of top limb (from final add) */
 	/* While top < 0: add m, re-carry. */
 1:	jns	2f
@@ -221,7 +244,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	/* falls through */
 .Lasmod:
 	push	rdi
-	mov	rsi, r8
+	mov	rsi, r15            /* &cP — set once in verify */
 	push	K
 	pop	rcx
 1:	lodsq
@@ -247,7 +270,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
  * pre-sets r11d=0xBC4F before every dispatch. .Lfmul overrides to 1.
  * INV's 510 fe_mul11 calls inherit the bc_run-set r11d. ── */
 .Lfmul: /* Fmul — MontMul mod p. m0inv = 1.  MULR2 = Fmul with s2=15. */
-	sub	rcx, SLOT           /* &cN − SLOT = &cP */
+	mov	rcx, r15            /* &cP (set in verify). 3 B vs sub rcx,SLOT 4 B. */
 	push	1
 	pop	r11
 	/* FALLS THROUGH into fe_mul11 — no jmp needed. */
@@ -382,45 +405,54 @@ fe_from_le:
 
 pt_mul:
 	/* acc = ∞ = (0:1:0) done by bc_v1's tail (ZERO/SET1/ZERO ops).
-	 * r15 hoists &u1; r12 stays = &.Ljt for bc_run. */
-	lea	r15, [r14 + oU1]
-	push	K-1
-	pop	r13
-.Lpo:	push	W-1
-	pop	rbx
+	 * r12 stays = &.Ljt for bc_run. r15 = &cP (set in verify, untouched).
+	 *
+	 * Packed bit counter: ebx = limb·64 + bit. bt [r10],ebx uses ebx as
+	 * an absolute bit offset into the qword array — bit b of limb L is at
+	 * bit offset L·64+b. Starts at (K-1)·64+(W-1) = 663, ends at 0, then
+	 * dec→−1, sub→−41, jns falls out. Crossing: after dec from L·64+0,
+	 * ebx = (L−1)·64+63 → (ebx+1)&63 == 0 → sub (64−W) to skip dead bits.
+	 * (NOT cmp bl,W — bl is ebx mod 256, not mod 64. Ported from fc89ce3.)
+	 * Frees r13 entirely (−4 B prolog). r10 survives bc_run (no handler). */
+	lea	r10, [r14 + oU1]
+	mov	ebx, (K-1)*64 + (W-1)
 .Lpi:	/* Double: acc → addend, RCB(acc, acc). */
 	mov	rsi, r14
 	call	.Lcadd
 	/* u1 bit */
-	bt	[r15 + r13*8], ebx
+	bt	[r10], ebx
 	jnc	1f
 	lea	rsi, [r14 + oBAK]
 	call	.Lcadd
 1:	/* u2 bit — u2 at oU1+SLOT; 88 fits disp8. */
-	bt	[r15 + r13*8 + SLOT], ebx
+	bt	[r10 + SLOT], ebx
 	jnc	2f
 	lea	rsi, [r14 + oBAK + 3*SLOT]
 	call	.Lcadd
 2:	dec	ebx
+	lea	eax, [rbx+1]
+	test	al, 63
+	jnz	.Lpi
+	sub	ebx, 64-W
 	jns	.Lpi
-	dec	r13
-	jns	.Lpo
 	/* Dispatch final check — falls through. */
 	push	obc_v3
 	pop	rcx
 
 bcrun_off:
 	push	rbp
-	push	rbx                 /* save first; lea goes straight to rbx */
-	lea	rbx, [rip + bc_rcb]
-	add	rbx, rcx            /* offset — .Lcadd's rep movsq leaves rcx=0 */
+	/* rsi = bc_ptr (was rbx). lodsw replaces mov+add (−4 B); handlers
+	 * clobber rsi so push/pop around dispatch (+2 B). Net −4 with the
+	 * dropped rbx push/pop. pt_mul's ebx survives — bcrun never writes. */
+	lea	rsi, [rip + bc_rcb]
+	add	rsi, rcx            /* offset — .Lcadd's rep movsq leaves rcx=0 */
 	xor	ebp, ebp            /* fail-bit accumulator */
 	/* r12 = &.Ljt inherited from verify (set once, fe_mul11 preserves). */
 .Lbc:
-	mov	eax, [rbx]          /* over-reads 2 B — and eax,0xF later clears */
-	add	rbx, 2
-	test	al, al
+	lodsw                       /* ax ← op; rsi += 2. High eax garbage — */
+	test	al, al              /*   and eax,0xF below clears it. */
 	jz	.Lbce
+	push	rsi                 /* save bc_ptr before esi clobber */
 
 	movzx	edi, ah
 	mov	esi, edi
@@ -440,14 +472,14 @@ bcrun_off:
 	and	eax, 0xF
 	mov	al, [r12 + rax]     /* high bytes already 0 from the and */
 	add	rax, r12
-	lea	rcx, [r14 + oCN]    /* cN; Fmul/NORM subtract SLOT for cP */
+	lea	rcx, [r15 + SLOT]   /* &cN = &cP + SLOT (r15 disp8, was 7 B r14+disp32) */
 	mov	r11d, 0xBC4F        /* n m0inv — Nmul jt entry = fe_mul11 direct */
 	call	rax
+	pop	rsi
 	jmp	.Lbc
 
 .Lbce:	neg	ebp
 	sbb	eax, eax            /* 0 pass, −1 fail */
-	pop	rbx
 	pop	rbp
 	ret
 
@@ -459,14 +491,13 @@ tv_ecdsa_p256_verify_asm:
 	/* rdi=sig, rsi=sig_len, rdx=pub, rcx=pub_len, r8=hv, r9=hv_len */
 	push	rbx
 	push	r12
-	push	r13
 	push	r14
 	push	r15
 
-	/* enter before checks → all paths go through leave. 5 pushes +
-	 * ret addr + enter's rbp = −56, then 2112 (÷8). 16-align: pad
-	 * frame to 2120 (+8 B stack, 0 B code — enter imm16). */
-	enter	NSLOTS * SLOT + 8, 0
+	/* enter before checks → all paths go through leave. 4 pushes +
+	 * ret addr + enter's rbp = −48, then 2112 (÷8). 16-align: no pad
+	 * needed (48+2112=2160 ÷16). r13 freed by packed bit counter. */
+	enter	NSLOTS * SLOT, 0
 
 	/* Speculative setup BEFORE checks (leave unwinds on fail path;
 	 * register sets just wasted work). Reorder checks so sig_len (rsi)
@@ -492,7 +523,6 @@ tv_ecdsa_p256_verify_asm:
 	leave
 	pop	r15
 	pop	r14
-	pop	r13
 	pop	r12
 	pop	rbx
 	ret
@@ -503,6 +533,7 @@ tv_ecdsa_p256_verify_asm:
 	call	fe_from_be          /* Qy → 6 */
 	pop	rsi                 /* hv */
 	call	fe_from_be          /* e  → 7   rdi now at slot 8 */
+	mov	r15, rdi            /* r15 = &cP — used by Fmul, NORM/Lasmod, bc_run */
 
 	/* cP → slot 8, SIGNED limb form: (−1,0,0,0,1,0,0,0,1,−256,65536).
 	 * p = 2^256 − 2^224 + 2^192 + 2^96 − 1 — five ±power-of-2 terms.
