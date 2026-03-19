@@ -120,13 +120,11 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	ret
 
 .Lset1: /* dst = {1, 0, ..., 0}.  (ZERO dropped — Fsub(x,x)=0 in bytecode.) */
-	push	1
-	pop	rax
-	stosq
 	xor	eax, eax
-	push	K-1
+	push	K
 	pop	rcx
 	rep	stosq
+	inc	byte ptr [rdi - SLOT]    /* 3 B (vs inc qword 4 B); slot is all-zero */
 	ret
 
 .Lfadd: /* limbwise, no carry */
@@ -522,8 +520,8 @@ tv_ecdsa_p256_verify_asm:
 	pop	rcx
 	rep	stosq               /* all zero; rdi → slot 9 */
 	dec	qword ptr [rdi - 88]   /* limb 0 = −1 */
-	inc	qword ptr [rdi - 56]   /* limb 4 = 1 */
-	inc	qword ptr [rdi - 24]   /* limb 8 = 1 */
+	inc	byte ptr [rdi - 56]    /* limb 4 = 1 (byte inc — slot is zeroed) */
+	inc	byte ptr [rdi - 24]    /* limb 8 = 1 */
 	dec	qword ptr [rdi - 16]   /* limb 9 = −1 ... */
 	inc	byte ptr [rdi - 16]    /*   low byte → 0: = −256 */
 	inc	byte ptr [rdi - 6]     /* limb 10 byte 2: = 65536 */
