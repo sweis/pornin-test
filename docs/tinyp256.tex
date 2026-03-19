@@ -100,7 +100,7 @@ correctness.}
   worth exactly nothing.
 \item \textbf{Speed is secondary but not irrelevant.} A boot~ROM
   runs once per power-on, so milliseconds are fine. But there's a
-  \emph{Pareto frontier}: if build~A is both smaller \emph{and}
+  \emph{Pareto frontier}: if build~A is both smaller and
   faster than build~B, build~B is dead. We track both axes.
 \item \textbf{Constant time is not required.} Signature
   \emph{verification} takes only public inputs --- the signature, the
@@ -114,7 +114,7 @@ correctness.}
 \label{sec:ecdsa}
 
 You do not need to know why ECDSA is secure to follow this report.
-You only need to know what the verifier \emph{does}, because that
+You only need to know what the verifier does, because that
 determines where the bytes go.
 
 An ECDSA signature over P-256 is a pair of integers $(r, s)$, each
@@ -151,7 +151,7 @@ the very end.
 
 \textbf{So the byte budget is roughly:} one field multiplier (mod~$p$
 and mod~$n$), one point-add and one point-double formula that call it,
-one scalar-multiply loop that calls \emph{them}, one inversion, and
+one scalar-multiply loop that calls them, one inversion, and
 the top-level glue that decodes the inputs and checks the result.
 Constants for $p$, $n$, $G$, and the curve coefficient $b$ take
 another 128--160 bytes.
@@ -253,7 +253,7 @@ data in \texttt{.rodata}.
 \subsection{Why 2 bytes, why nibbles}
 
 You could encode each op in 3 bytes (one per operand) and have room
-for 256 slots. But you don't \emph{have} 256 slots --- point addition
+for 256 slots. But you don't have 256 slots --- point addition
 uses perhaps a dozen temporaries. Four bits per operand, packed two to
 a byte, is the right granularity. And four bits of opcode gives you 16
 operations --- the final build uses ten.
@@ -371,7 +371,7 @@ the reduce stayed at 32-bit granularity. This is why
 \label{sec:projcheck}
 
 \noindent\emph{From \bytes{1216} to \bytes{1195}. One of those rare
-wins that's both smaller \emph{and} faster.}
+wins that's both smaller and faster.}
 
 \subsection{Where the mod-$p$ inversion was hiding}
 
@@ -970,7 +970,7 @@ Everything else is infrastructure we already have for free and would
 have to rebuild. The ladder setup needs a branch (is the scalar odd or
 even?), but the bytecode interpreter is straight-line --- so the
 branch lives in assembly, and each arm is a full setup sequence. The
-two results need combining with a final add, but that add \emph{can}
+two results need combining with a final add, but that add can
 hit the edge cases the ladder avoided --- so the three-way branch
 comes back for one call. And the simpler formulas use a different
 coordinate system (Jacobian) than ours (homogeneous), so converting
@@ -1006,7 +1006,7 @@ The 96-bit all-ones run stops at bit 96. Beyond that, $p$ has
 structure, and its inverse has structure too. The free correction
 disappears.
 
-The deeper problem: our inner loop already \emph{is} the factored
+The deeper problem: our inner loop already is the factored
 form. One small routine (\texttt{.Lcnt}, 15 bytes) is called twice per
 row --- once for product, once for reduction. Deinterleaving would mean
 two outer loops instead of one, duplicating the loop counter and tail
@@ -1062,33 +1062,6 @@ A tamer version did find something: two functions that end with the
 same three bytes (\texttt{stosq; ret}) and sit 43 bytes apart. One
 jumps to the other's tail. \saved{1}.
 
-\subsection{The non-portability of tricks}
-
-One of the Montgomery tracks (\S\ref{sec:limbs}) found a neat
-consolidation: merge two loops (``add the modulus while the value is
-negative'' and ``subtract the modulus until it goes negative'') into
-one, using the CPU's sign-extend instruction to pick the direction
-each iteration. The termination test is a single \texttt{or edx, eax;
-js} --- if we just subtracted, the \texttt{or} is negative regardless
-(loop); if we just added, the \texttt{or} equals the top limb, and the
-sign flag tracks it (exit when non-negative). \saved{3} there.
-
-Porting to the other Montgomery tracks saved only one byte, or
-nothing. Two costs materialised that the original track didn't have.
-First, its carry-propagation routine happened to end with the top limb
-already in a register --- the trick got its input for free. The other
-tracks' routines don't end that way and need an extra load. Second,
-the original track has eleven 24-bit limbs; the top limb after carry
-propagation fits in 18 bits, so bit 31 of a 32-bit register is
-genuinely the sign bit and a 2-byte \texttt{or} works. The five-limb
-tracks have wider top limbs --- up to 44 bits --- and bit 31 is data,
-not sign. They need the 3-byte REX-prefixed \texttt{or}.
-
-The trick was not ``merge the loops.'' It was ``merge the loops when
-your carry-prop tail happens to leave the operand loaded and your limb
-count happens to fit in half a register.'' Architectural coincidences
-compound; so does their absence.
-
 % ======================================================================
 \section{Other limb widths: 11$\times$24, 5$\times$54, 5$\times$56}
 \label{sec:limbs}
@@ -1105,8 +1078,9 @@ taught something about where the bytes actually go.
 A 256-bit integer doesn't fit in a machine register, so it's stored
 as an array of $K$ smaller pieces --- \emph{limbs} --- of $W$ bits
 each, with $K \cdot W \ge 256$. The slack $K \cdot W - 256$ is
-headroom for carries to accumulate between reductions. The main
-build uses $K=8$, $W=32$: no slack, carries propagated immediately.
+headroom for carries to accumulate between reductions --- a style
+called \emph{lazy carrying}. The main build uses $K=8$, $W=32$: no
+slack, carries propagated immediately.
 
 Multiplying two $K$-limb numbers by the schoolbook method is $K^2$
 single-limb multiplies --- for $K=8$ that's 64; for $K=5$ it's 25.
@@ -1255,8 +1229,10 @@ $5 \times 54$. The byte-aligned decode is worth more than the
 slightly wider products cost. The $5 \times 54$ track has one
 consolation prize: because its bytecode pointer happens to live in
 \texttt{rsi} rather than \texttt{rbx}, the \texttt{rbx} register is
-free to hold the jump-table base, enabling the one-byte
-\texttt{xlatb} instruction for dispatch (\S\ref{sec:grind}). That
+free to hold the jump-table base, enabling a one-byte instruction
+called \texttt{xlatb} (a leftover from 8-bit days: it does
+\texttt{al} $\leftarrow$ \texttt{[rbx+al]}, a table lookup in one
+byte). That
 trick ports to $5 \times 56$ too, but only after moving the bytecode
 pointer --- and $5 \times 56$ already had it moved, for a different
 reason, so the net was larger there. Tricks compound with
@@ -1283,6 +1259,33 @@ make the comparison fair.
 
 The Montgomery tracks are faster. At the same size, they would win on
 both axes. They are not the same size.
+
+\subsection{The non-portability of tricks}
+
+The $11 \times 24$ track found a neat consolidation: merge two loops
+(``add the modulus while the value is negative'' and ``subtract the
+modulus until it goes negative'') into one, using the CPU's
+sign-extend instruction to pick the direction each iteration. The
+termination test is a single \texttt{or edx, eax; js} --- if we just
+subtracted, the \texttt{or} is negative regardless (loop); if we just
+added, the \texttt{or} equals the top limb, and the sign flag tracks
+it (exit when non-negative). \saved{3}.
+
+Porting to the other two Montgomery tracks saved only one byte, or
+nothing. Two costs materialised that $11 \times 24$ didn't have.
+First, its carry-propagation routine happened to end with the top limb
+already in a register --- the trick got its input for free. The other
+tracks' routines don't end that way and need an extra load. Second,
+eleven 24-bit limbs means the top limb after carry propagation fits in
+18 bits, so bit 31 of a 32-bit register is genuinely the sign bit and
+a 2-byte \texttt{or} works. The five-limb tracks have wider top limbs
+--- up to 44 bits --- and bit 31 is data, not sign. They need the
+3-byte wider-register \texttt{or}.
+
+The trick was not ``merge the loops.'' It was ``merge the loops when
+your carry-prop tail happens to leave the operand loaded and your limb
+width happens to fit in half a register.'' Architectural coincidences
+compound; so does their absence.
 
 % ======================================================================
 \section{General principles}
