@@ -174,13 +174,12 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	inc	ebp
 2:	ret
 
-/* ── NORM — bring value to [0, p). In-place on s1. .Lcprop's last
- * `add [rdi],rdx` sets SF from the top limb; .Laddm/.Lsubm both fall
- * into .Lcprop so SF is live at every loop head. ── */
+/* ── NORM — bring value to [0, p). In-place on s1. All 3 bytecode
+ * calls encode dst==s1 → bc_run gives rdi==rsi already. .Lcprop's
+ * last `add [rdi],rdx` sets SF from the top limb; .Laddm/.Lsubm
+ * both fall into .Lcprop so SF is live at every loop head. ── */
 .Lnorm:
 	lea	r8, [rcx - SLOT]    /* &cN − SLOT = &cP (slot 8) */
-	push	rsi
-	pop	rdi
 	call	.Lcprop
 1:	jns	2f
 	call	.Laddm
