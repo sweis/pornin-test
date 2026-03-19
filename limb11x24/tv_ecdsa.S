@@ -167,37 +167,6 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	inc	ebp                 /* ≥ 0 → fail */
 2:	ret
 
-/* ── INV — s^(n-2) mod n via Fermat. ── */
-
-.Linv:
-	push	rbx
-	push	rsi                 /* s_mont */
-	push	rdi                 /* accumulator — pre-seeded with s_mont */
-	xor	ebx, ebx
-	mov	bl, 254             /* bit 255 is implicit (seed = s_mont) */
-.Le:	pop	rsi
-	push	rsi                 /* rsi = dst, stack unchanged */
-	push	rsi
-	push	rsi
-	pop	rdi
-	pop	rdx
-	call	fe_mul11            /* dst = dst². r11d set by bc_run dispatch. */
-	bt	dword ptr [rip + cN], ebx   /* rodata IS n-2 now */
-	jnc	.Lnx
-.Lmul:	pop	rdi
-	pop	rdx                 /* rdx = src */
-	push	rdx
-	push	rdi                 /* stack restored */
-	push	rdi
-	pop	rsi
-	call	fe_mul11
-.Lnx:	dec	ebx
-	jns	.Le
-	pop	rax
-	pop	rax
-	pop	rbx
-	ret
-
 /* ── NORM ──
  * Bring value to [0, m). In-place on s1. Single merged loop:
  * cqo reads rax's sign (top limb from .Lcp_shared; |limb| ≤ 2^18
@@ -246,6 +215,37 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	call	.Lcp_shared
 	pop	rdi
 	ret
+
+/* ── INV — s^(n-2) mod n via Fermat. Placed HERE (not after CHKLT) so
+ * the epilogue jmp reaches fe_mul11's 4-B tail (pop rcx; pop rax; pop rbx;
+ * ret) in rel8. INV's 3 stack items = discarded dst, discarded src, rbx;
+ * rcx is dead at handler return (bc_run reloads each dispatch). −2 B. ── */
+
+.Linv:
+	push	rbx
+	push	rsi                 /* s_mont */
+	push	rdi                 /* accumulator — pre-seeded with s_mont */
+	xor	ebx, ebx
+	mov	bl, 254             /* bit 255 is implicit (seed = s_mont) */
+.Le:	pop	rsi
+	push	rsi                 /* rsi = dst, stack unchanged */
+	push	rsi
+	push	rsi
+	pop	rdi
+	pop	rdx
+	call	fe_mul11            /* dst = dst². r11d set by bc_run dispatch. */
+	bt	dword ptr [rip + cN], ebx   /* rodata IS n-2 now */
+	jnc	.Lnx
+.Lmul:	pop	rdi
+	pop	rdx                 /* rdx = src */
+	push	rdx
+	push	rdi                 /* stack restored */
+	push	rdi
+	pop	rsi
+	call	fe_mul11
+.Lnx:	dec	ebx
+	jns	.Le
+	jmp	.Lfm_tail           /* → pop rcx; pop rax; pop rbx; ret. disp ≈ +108. */
 
 /* ── .Lfmul — end of handlers so it falls through into fe_mul11.
  * Nmul's jt entry points DIRECTLY at fe_mul11 (offset < 256); bc_run
@@ -310,6 +310,7 @@ fe_mul11:
 
 	leave
 	pop	rax                 /* discard b */
+.Lfm_tail:                          /* INV jmps here — 4-B tail shared (−2) */
 	pop	rcx                 /* restore — INV's 384 calls rely on this */
 	pop	rax                 /* discard dst */
 	pop	rbx

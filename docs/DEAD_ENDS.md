@@ -101,6 +101,15 @@ selector still validated even though segmentation is mostly disabled.
 table entries. Current approach is optimal.
 → `docs/x86_tricks.md`
 
+### `lahf`/`sahf` CF transport (limb11x24)
+**Why dead:** No topology fits. All CF uses are immediate set→jcc (shr→jc,
+bt→jnc, neg→rcl) — zero gap. The only push/pop-across-call is NORM's
+`push rdx`/`pop rdx` (2 B), which preserves a 64-bit direction {0,−1},
+not a flag. .Lasmod's `lodsq` clobbers rax so AH wouldn't survive even
+if the direction were flag-encoded. Register stash (r8-r11 survive
+.Lasmod) is 3+3=6 B — worse than push/pop. shr-bitmask loop already
+optimal (jc/pop preserve shr's ZF for free).
+
 ### `std+repe cmpsq` for limb8 `.Lop5`
 **Why dead:** +1 B prototyped. The estimate missed that `loopz` with
 `[reg+rcx*8-8]` SIB already gets high→low scan FOR FREE. `std+repe
