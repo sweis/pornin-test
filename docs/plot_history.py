@@ -299,7 +299,7 @@ ax.set_axisbelow(True)
 # a wall at the top, and separates the fast.S cluster (650K-1000K)
 # from the bc.S baseline (1850K).  Size stays linear — only 2:1 range.
 ax.set_yscale('log')
-ax.set_xlim(900, 2000)    # cut off fast2.S/speed.S tail for detail
+ax.set_xlim(880, 2000)    # cut off fast2.S/speed.S tail for detail
 ax.set_ylim(500, 15000)   # limb11 at ~12000K (loop-heavy)
 # Clean up the log axis: major ticks at nice values, no scientific notation.
 from matplotlib.ticker import ScalarFormatter, LogLocator

@@ -38,7 +38,7 @@
 \newcommand{\saved}[1]{\textcolor{green!50!black}{\textbf{$-$#1\,B}}}
 \newcommand{\spent}[1]{\textcolor{red!70!black}{\textbf{$+$#1\,B}}}
 
-\title{\bfseries Shrinking an ECDSA Verifier to 933 Bytes\\[0.3em]
+\title{\bfseries Shrinking an ECDSA Verifier to 898 Bytes\\[0.3em]
        \large A beginner's guide to the tricks that worked}
 \author{}
 \date{March 2026}
@@ -48,8 +48,8 @@
 
 \begin{abstract}\noindent
 This report walks through how an ECDSA/P-256 signature verifier was
-shrunk from \bytes{3076} of portable C down to \bytes{933} of x86-64
-machine code --- a factor of 3.3$\times$. The target context is a
+shrunk from \bytes{3076} of portable C down to \bytes{898} of x86-64
+machine code --- a factor of 3.4$\times$. The target context is a
 boot~ROM: the code must fit in a tiny mask-programmed memory, has no
 libc, and verifies exactly one signature before jumping to firmware.
 Every byte in a boot~ROM is paid for in silicon.
@@ -182,6 +182,7 @@ Size & $\Delta$ & What changed \\
  985\,B & $-$27    & \S\ref{sec:slotshift}: \textbf{Addend slot shift --- layout is free, setup is not} \\
  942\,B & $-$43    & \S\ref{sec:runtimecp}: \textbf{Build $p$ at runtime} + fe\_iszero inlines \\
  933\,B & $-$9     & \S\ref{sec:efd}: \textbf{EFD reschedule} --- reorder for disp8 reach \\
+ 898\,B & $-$35    & \S\ref{sec:below}: \textbf{Over-copy, decoder preload, paired decode} \\
 \bottomrule
 \end{tabular}
 \caption{Major milestones. Sizes between rows are connected by dozens
@@ -708,7 +709,7 @@ of ``things I'd do if only I had 10 more bytes of headroom at $X$.''
 \section{The EFD reschedule: reorder for displacement reach}
 \label{sec:efd}
 
-\noindent\emph{From \bytes{935} to \bytes{933}. The last two bytes.}
+\noindent\emph{From \bytes{935} to \bytes{933}.}
 
 x86-64 memory operands with a small displacement ($-128 \le d \le
 127$) encode in one byte; larger displacements take four. One
@@ -741,6 +742,70 @@ for a setup adjustment elsewhere, net \saved{2}.
 Two bytes is small, but it illustrates how far the rabbit hole goes:
 \emph{instruction scheduling in a data table to change register
 allocation to shrink an addressing mode in unrelated native code.}
+
+% ======================================================================
+\section{Below what looked like the floor}
+\label{sec:below}
+
+\noindent\emph{From \bytes{933} to \bytes{898}.}
+
+The 933-byte build sat unchanged for long enough that it started to
+feel like a hard limit for this architecture. It wasn't. None of the
+following changed the algorithm --- still the same $q=t[\text{top}]$
+reduce, same RCB formula, same bytecode --- but 35 more bytes came
+out of the encoding and the layout.
+
+\subsection{Over-copy: let \texttt{rep movsq} run long}
+
+Several places copy a 3-slot point (12 quadwords) with \texttt{rep
+movsq} and then immediately need \texttt{rdi} pointing somewhere
+further along for the next operation. The old pattern: copy 12
+quadwords, then \texttt{lea rdi, [\ldots]} to reposition --- 4 to 7
+bytes of address arithmetic.
+
+Since \texttt{rep movsq} advances both \texttt{rsi} and \texttt{rdi}
+by the count, copying \emph{more} than needed does the repositioning
+for free. If the slots between the real destination and the next
+needed position are scratch --- written before they're next read ---
+they can soak up the extra writes without consequence. Doubling a
+12-qword copy to 24 qwords costs nothing (\texttt{mov cl,24} is the
+same 2 bytes as \texttt{mov cl,12}) and deletes the \texttt{lea}.
+
+This is the dataflow equivalent of writing past the end of your
+buffer on purpose, because you own the memory on the other side and
+know nobody's looking.
+
+\subsection{Let the decoder do the handler's work}
+
+The bytecode dispatch loop (\S\ref{sec:bytecode}) already does
+arithmetic on every fetch: it unpacks three nibbles and turns each
+into a slot pointer via \texttt{base + nibble$\times$32}. That
+multiply-and-add runs regardless of which opcode follows.
+
+Some handlers were doing their own address arithmetic on entry ---
+computing a secondary pointer from a primary one, or offsetting into
+a structure. But a slot nibble is four free bits, and a slot pointer
+is a free multiply-by-32. If you can encode the handler's desired
+offset as a slot number, the decoder has already computed it by the
+time the handler runs. The handler shrinks; the bytecode byte it
+reads from was already there.
+
+The pattern is general: whenever a fixed-cost decode stage sits in
+front of variable handlers, ask what the decode stage could compute
+on the handlers' behalf.
+
+\subsection{Paired big-endian decode}
+
+The verifier has to parse four 32-byte big-endian integers from the
+input blob: $r$ and $s$ from the signature, $Q_x$ and $Q_y$ from the
+public key. They arrive in pairs --- $(r,s)$ adjacent in one buffer,
+$(Q_x,Q_y)$ adjacent in another --- and land in adjacent slots.
+
+Each decode was a 5-byte \texttt{call fe\_from\_be}, so each pair
+cost 10 bytes of call sites. A 5-byte helper that calls
+\texttt{fe\_from\_be} once and then falls through into it a second
+time turns each pair into one 5-byte call. Two pairs: \spent{5} for
+the helper, \saved{10} at the call sites, net \saved{5}.
 
 % ======================================================================
 \section{The micro-grind: x86 encoding folklore}
@@ -852,6 +917,164 @@ Not every idea pans out. A few instructive failures:
   (\texttt{-DSOLINAS\_P} exists); for the size floor, one generic
   reducer serving both moduli is smaller.
 \end{description}
+
+% ======================================================================
+\section{Other limb widths: 11$\times$24, 5$\times$54, 5$\times$56}
+\label{sec:limbs}
+
+Everything above is one architecture: eight 32-bit words per field
+element, plain (non-Montgomery) reduction. That choice was made early
+and then optimised hard. But it's a choice, and other choices carve
+up the problem differently. This section sketches the alternatives
+explored in parallel --- none has beaten \bytes{898} yet, but each
+taught something about where the bytes actually go.
+
+\subsection{What a limb is and why its width matters}
+
+A 256-bit integer doesn't fit in a machine register, so it's stored
+as an array of $K$ smaller pieces --- \emph{limbs} --- of $W$ bits
+each, with $K \cdot W \ge 256$. The slack $K \cdot W - 256$ is
+headroom for carries to accumulate between reductions. The main
+build uses $K=8$, $W=32$: no slack, carries propagated immediately.
+
+Multiplying two $K$-limb numbers by the schoolbook method is $K^2$
+single-limb multiplies --- for $K=8$ that's 64; for $K=5$ it's 25.
+Fewer limbs means dramatically less arithmetic. But fewer limbs means
+wider limbs, and wider limbs have wider products: a $54 \times 54$
+bit multiply overflows a 64-bit register and needs 128-bit
+intermediate results, which on x86-64 means the two-register
+\texttt{rdx:rax} output of \texttt{mul} and extra bookkeeping to
+handle it. A $24 \times 24$ bit multiply fits comfortably in 64 bits
+with room to accumulate a column's worth of partial products before
+anything overflows.
+
+So the trade-off runs: small $K$ saves multiplications but pays for
+wide-product handling; large $K$ keeps each step simple but does
+many more of them. Where the minimum lands depends on the
+instruction set, the reduction strategy, and --- it turns out --- a
+bit-level accident in the constant $p$.
+
+\subsection{Quotient estimation, in plain terms}
+
+Before getting to the accident, it helps to see what all reduction
+strategies are really doing. After multiplying two numbers modulo
+$p$, you have a result up to $p^2$ --- roughly twice as many bits as
+you want --- and need to bring it back below $p$. Conceptually this
+is division: compute $t \bmod p$ by finding how many times $p$ goes
+into $t$ and subtracting that many copies.
+
+Division is what you want to avoid. It's the slowest arithmetic
+instruction on almost every chip ever made, and it doesn't pipeline.
+Every practical reduction scheme replaces the division with a
+\emph{guess}: estimate the quotient cheaply, subtract, see how close
+you got, correct if needed. The schemes differ in how they guess.
+
+The $q=t[\text{top}]$ reduce (\S\ref{sec:nomont}) guesses by reading
+off the top word --- which works because $p$'s top word is all ones,
+so $p$ is within a hair of the next power of two and ``how many
+times does $p$ go in'' is almost exactly ``how many times does
+$2^{256}$ go in,'' which is just a shift. It's the same reason long
+division by hand is easy when the divisor is 999: you barely have to
+think about the trial digit.
+
+Montgomery reduction~\cite{montgomery} guesses from the other end.
+It asks: what multiple of $p$ can I add to $t$ so that the
+\emph{bottom} $W$ bits become zero? Then those zero bits are shifted
+off, and the value shrinks by $W$ bits per round. Finding that
+multiple normally takes one extra multiply per round --- you compute
+$q = (t \bmod 2^W) \cdot c$, where the constant $c = -p^{-1} \bmod
+2^W$ is precomputed once and baked into the binary. One multiply by a
+fixed constant per limb, which is why the main build dropped
+Montgomery: that multiply and its constant are overhead.
+
+\subsection{Ninety-six ones in a row}
+
+Here is the accident. Recall $p = 2^{256} - 2^{224} + 2^{192} +
+2^{96} - 1$. That trailing $-1$ borrows all the way up to bit 96
+before the $+2^{96}$ term stops it --- so bits 0 through 95 of $p$
+are all ones. You can read it straight off the hex from
+\S\ref{sec:nomont}: the bottom three words are
+\texttt{ffffffff\,ffffffff\,ffffffff}.
+
+What does this do to the Montgomery constant $c = -p^{-1} \bmod 2^W$?
+If $W \le 96$, then $p \bmod 2^W$ is a $W$-bit block of ones --- that
+is, $p \equiv -1 \pmod{2^W}$. Then $p^{-1} \equiv -1$ as well (since
+$-1$ is its own inverse), and $c = -(-1) = 1$.
+
+\textbf{The per-limb Montgomery multiply is by 1.} It disappears. For
+any limb width up to 96 bits, Montgomery reduction mod $p$ costs no
+more per round than the $q=t[\text{top}]$ scheme does --- the guess
+is free in both. Every limb width on the table except $8 \times 32$
+in its non-Montgomery form exploits this: the Montgomery machinery
+that \S\ref{sec:nomont} threw out comes back, but without the part
+that made it expensive.
+
+(The order $n$ doesn't share this structure --- its low bits are
+\texttt{fc632551} --- so the mod-$n$ inverter still pays for its
+Montgomery constant. But inversion runs once; the field multiplier
+runs thousands of times.)
+
+\subsection{The tracks}
+
+\begin{center}
+\begin{tabular}{@{}lccl@{}}
+\toprule
+Track & $K$ & $W$ & Reduction strategy \\
+\midrule
+$8 \times 32$  & 8  & 32 & non-Montgomery, $q=t[\text{top}]$ \\
+$11 \times 24$ & 11 & 24 & Montgomery, $c_p = 1$, 64-bit accumulators \\
+$5 \times 54$  & 5  & 54 & Montgomery, $c_p = 1$, 128-bit products \\
+$5 \times 56$  & 5  & 56 & Montgomery, $c_p = 1$, byte-aligned decode \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{$11 \times 24$.} Eleven limbs of 24 bits gives 264 bits of
+capacity --- 8 bits of slack per field element. A $24 \times 24$
+product is 48 bits; even after summing eleven of them down a column,
+the total stays under 64 bits. No \texttt{rdx:rax} splitting, no
+128-bit adds, just plain \texttt{imul} and \texttt{add}. The
+multiplier inner loop is the simplest of any track. The cost:
+$11^2 = 121$ multiplies per field operation versus $8^2 = 64$, almost
+double, and the carry-propagation code that runs after each operation
+is longer because there are more limbs to walk.
+
+\paragraph{$5 \times 54$.} Twenty-five multiplies. The $K^2$ scaling
+wins decisively on arithmetic count. But 54-bit limbs mean 108-bit
+products, handled as \texttt{rdx:rax} pairs, and the reduction
+involves 128-bit-wide shift-and-add chains. And 54 doesn't divide 8:
+decoding a big-endian input into 54-bit limbs requires loading a
+word, shifting by a variable amount, and masking --- a bit-twiddling
+loop that the byte-granular tracks don't need.
+
+\paragraph{$5 \times 56$.} Same $K=5$ as above, so the same 25
+multiplies and the same $c_p = 1$. The difference is that 56 bits is
+exactly 7 bytes. Decoding a 56-bit limb from a byte buffer is an
+unaligned 8-byte load followed by an 8-bit mask --- no variable shift
+loop, no bit-offset bookkeeping. Two extra bits of width per limb
+buys back a chunk of the parsing machinery for nearly nothing, and
+$56 < 96$ so the Montgomery constant is still 1.
+
+This track is the newest and the least-ground-down. Whether the
+byte-aligned decode saves more than the slightly wider products cost
+is not yet settled.
+
+\subsection{Why $8 \times 32$ is still ahead}
+
+The $8 \times 32$ track has one structural advantage none of the
+others share: a single reducer serves both moduli. Both $p$ and $n$
+have a top 32-bit word of \texttt{0xFFFFFFFF}, so the
+$q=t[\text{top}]$ scheme handles both with one code path. Every
+Montgomery track needs the $c_p = 1$ trick for the field and
+something else for the order --- two reducers, or one reducer with a
+mode switch.
+
+That, plus a substantial head start in accumulated encoding tricks,
+keeps $8 \times 32$ in front. But the lead is not structural
+inevitability; it's accumulated effort. The other tracks have tricks
+the main build can't use --- Montgomery cancellations that only exist
+when there are $R$-factors to cancel --- and some of those haven't
+been fully mined.
 
 % ======================================================================
 \section{General principles}
