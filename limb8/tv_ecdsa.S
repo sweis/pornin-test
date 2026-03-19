@@ -476,7 +476,10 @@ cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
 
 /* fe_geq inlined.  Compare [rdi] ≥ [rsi] limb-by-limb from the
  * top; loopz falls out on first mismatch with cmp's CF live.
- * geq_p is op5 with s1=8 — decoder lands rsi on &cP.  No prelude. */
+ * geq_p is op5 with s1=8 — decoder lands rsi on &cP.  No prelude.
+ * std+repe cmpsq TRIED (892 B, +1): 5 B core wins vs 12 B loop body,
+ * but +8 B for two add r,24 pointer bumps + 2 B std/cld = +10 B setup.
+ * SIB indexing [reg+rcx*8-8] already gets high→low scan for free. */
 .Lop5:	push	4
 	pop	rcx
 1:	mov	rax, [rdi+rcx*8-8]

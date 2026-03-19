@@ -368,15 +368,16 @@ with ZF=0 on first mismatch or ZF=1 if rcx exhausted. **This is a
 **Use case — limb8 final check? No:** bc_v3 checks `diff1·diff2 == 0`
 via `repe scasq` against rax=0. That's the right primitive.
 
-**Use case — `.Lop5` (fe_geq)?** Current: 4-iteration loop `mov;cmp;
-loopz` = ~12 B body. `repe cmpsq` would give equality; but we need
-**geq**, which requires the final carry. After `repe cmpsq` exits on
-mismatch, CF is set from that `cmp` — it tells us `[rsi] < [rdi]` for
-that *limb*. But it scans **low-to-high** and we need **high-to-low**
-for bignum compare. `std; repe cmpsq; cld` would scan high→low (with
-pointers at the top)… 1+3+1 = 5 B + pointer setup vs current 12 B.
-**Plausible −4 to −7 B.** Depends on whether rsi/rdi can be cheaply
-pointed at limb 3. Flag as **worth prototyping.**
+**Use case — `.Lop5` (fe_geq)? PROTOTYPED, +1 B.** Current: `mov;cmp;
+loopz` = 12 B body, 20 B total. `std; repe cmpsq; cld` = 5 B core
+(−7 on body), but **pointer setup costs 8 B** (2× `add r,24` — rcx
+is &cP on entry, not zero, so no free bump). Plus `mov cl,4` (2 B)
+after the push-24 trick. Net: 21 B, **+1**. 607/607 pass, semantics
+correct (`setbe` captures CF|ZF for val≥mod fail). The `loopz` form's
+`[reg+rcx*8-8]` SIB indexing **already** gets high→low scan for free
+— that's the insight the estimate missed. Applies only when the
+baseline is a branchy `jb`/`ja` loop or when bc_run hands pointers
+already at the high limb.
 
 ### 5.4 `cmpsq` non-rep — 2 B (`48 A7`)
 
@@ -769,7 +770,7 @@ Ranked by probable net savings × likelihood of a fit.
 
 | Trick | Size win | Confidence | Where |
 |---|---|---|---|
-| `std; repe cmpsq; cld` for bignum geq | −4 to −7 B | medium | limb8 `.Lop5` |
+| `std; repe cmpsq; cld` for bignum geq | ~~−4 to −7 B~~ **+1 B** | measured | limb8 `.Lop5` — `loopz`+SIB already optimal; +8 B ptr setup kills it |
 | `cdq` for sign→{0,−1} mask | −4 B | medium | limb11 `.Lnorm` |
 | `not` vs `xor r,-1` | −1 B + flag clean | high | any future complement |
 | `lahf`/`sahf` flag transport | −3 B per use | low | future carry-save refactors |
@@ -782,8 +783,8 @@ Ranked by probable net savings × likelihood of a fit.
 | `cmpxchg` as eax-conditional-mov | −3 B | very low | no pattern match |
 | `mul` CF for overflow check | −2 B | low | no current per-mul test |
 
-**Immediate actionables:** the `cwde` one in limb11 (−1 B, high
-confidence); prototype the `std; repe cmpsq` geq in limb8.
+**Immediate actionables:** ~~the `cwde` one in limb11~~ (broken, bit15
+set); ~~`std; repe cmpsq` geq in limb8~~ (+1 B, see §5.3).
 
 ---
 
