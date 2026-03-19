@@ -372,14 +372,18 @@ bcrun_off:
 	 * bytes stay zero from the xor.  r12-r14 not clobbered. */
 	xor	ebp, ebp
 .Lbc:
-	movzx	eax, WORD PTR [rbx]
+	mov	eax, [rbx]          /* 2 B — over-reads 4 bytes.  Bits 16-31 are
+	                             * next-op garbage; `and eax,0xF` clears them
+	                             * and movzx edi/edx read only ah/al.  All
+	                             * reads stay in .text (bc_v1 terminator +3
+	                             * reaches fe_from_be_next code bytes). */
 	add	rbx, 2
 	/* END is byte1=0x00.  The two ops that naturally encode as
 	 * s2=0/op=0 (bc_rcb 0x00,0x0b; bc_v1 0x00,0xbb) are commuted
 	 * (Fmul commutes) so byte1≠0.  Terminator drops to 1 B × 3
-	 * streams = −3 B.  The word read past the terminator is the
-	 * next stream's first op (or garbage past bc_v1) — ah is dead
-	 * on the jz-taken path, doesn't matter. */
+	 * streams = −3 B.  The dword read past the terminator is the
+	 * next stream's first op (or code bytes past bc_v1) — ah/bits
+	 * 16-31 dead on the jz-taken path, doesn't matter. */
 	test	al, al
 	jz	.Lbce
 
