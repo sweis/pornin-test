@@ -212,9 +212,9 @@ ax.plot(tx, ty, ':', color='#b0b0b0', linewidth=0.7, zorder=2,
         label='tiny.S → limb8 (8×32, non-Mont)')
 ax.scatter(tx, ty, c='#4a6fa5', s=22, edgecolors='#2a4670',
            linewidths=0.5, zorder=3, alpha=0.7)
-# Tip annotation (limb8's current size).
-tip = TRAIL_SHOWN[-1]
-ax.annotate(f'{tip[0]}B', (tip[0], tip[1]),
+# Annotate the size floor (smallest byte count in the trail).
+size_floor = min(on_chart, key=lambda p: p[0])
+ax.annotate(f'{size_floor[0]}B', size_floor,
             textcoords="offset points", xytext=(-35, -12), fontsize=9,
             bbox=dict(boxstyle='round,pad=0.3', fc='#e0e8f5',
             ec='#4a6fa5', lw=0.8))
