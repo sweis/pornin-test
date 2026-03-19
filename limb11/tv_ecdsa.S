@@ -96,17 +96,6 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
  * rcx high bytes are DIRTY (bc_run lea's a stack address) — every
  * `mov cl,N` would leave a huge rcx. Use push;pop for loop counters. */
 
-.Lfmul: /* Fmul — MontMul mod p. m0inv = 1.  MULR2 = Fmul with s2=15. */
-	sub	rcx, SLOT           /* &cN − SLOT = &cP */
-	push	1
-	pop	r11
-	jmp	1f                  /* rel8 over .Lnmul (6 B) to shared trampoline */
-
-.Lnmul: /* Nmul — MontMul mod n.  bc_run preloads rcx=&cN; fe_mul11
- * preserves rcx (pop rcx not pop rax) so INV's 384 calls all inherit it. */
-	mov	r11d, 0xBC4F
-1:	jmp	fe_mul11            /* shared rel32 — one 5-B jmp, not two */
-
 .Lcopyhi: /* 8 slots from s1 → slot(dst+16). bc_v1 stages 0-7 then
  * single COPYHI(0,0,0) → 16-23. 8*K = 88 fits push imm8. */
 	add	rdi, 16*SLOT
@@ -255,53 +244,21 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	call	.Lcp_shared
 	pop	rdi
 	ret
-.Lcp_shared:	/* out-of-place carry-prop rsi → rdi. */
-	xor	edx, edx
-	push	K-1
-	pop	rcx
-1:	lodsq
-	add	rax, rdx
-	push	rax
-	pop	rdx                 /* −1 B vs mov rdx,rax (3→2) */
-	and	eax, MASK
-	stosq
-	sar	rdx, W
-	loop	1b
-	lodsq
-	add	rax, rdx
-	stosq
-	ret
 
-/* ── Decoders ── */
+/* ── Fmul/Nmul — moved here (end of handlers) so .Lfmul falls through
+ * into fe_mul11. Both offsets < 256 (jt u8). .Lnmul jmp rel8 over
+ * .Lfmul's 8-B body. .Lcp_shared + decoders moved AFTER fe_mul11 to
+ * keep handler region under 256. ── */
+.Lnmul: /* Nmul — MontMul mod n.  bc_run preloads rcx=&cN; fe_mul11
+ * preserves rcx (pop rcx not pop rax) so INV's 384 calls inherit it. */
+	mov	r11d, 0xBC4F
+	jmp	fe_mul11            /* rel8 — skips .Lfmul's 8 B */
 
-/* fe_from_be — byte-reverse into the unused top of the dst slot
- * (bytes 56-87), then decode from there with fe_from_le. Write
- * region [8i,8i+8) trails read region [56+3i,56+3i+4) by 5i−56 ≥ 0
- * for i < 11, so in-place is safe. Exits rsi = src+32, rdi = dst+88. */
-fe_from_be:
-	push	32
-	pop	rcx
-1:	lodsb
-	mov	[rdi + rcx + 55], al  /* rcx 32→1 → rdi+87→rdi+56. SIB+disp8. */
-	loop	1b
-	push	rsi                 /* = src+32 (lodsb advanced it) */
-	lea	rsi, [rdi + 56]     /* rdi untouched by this loop */
-	call	fe_from_le
-	pop	rsi
-	ret
-
-fe_from_le:
-	push	K-1
-	pop	rcx
-1:	mov	eax, [rsi]
-	and	eax, MASK
-	stosq
-	add	rsi, 3
-	loop	1b
-	xor	eax, eax
-	lodsw                       /* ax ← top 16 bits; rsi += 2 (chain) */
-	stosq
-	ret
+.Lfmul: /* Fmul — MontMul mod p. m0inv = 1.  MULR2 = Fmul with s2=15. */
+	sub	rcx, SLOT           /* &cN − SLOT = &cP */
+	push	1
+	pop	r11
+	/* FALLS THROUGH into fe_mul11 — no jmp needed. */
 
 /* ======================================================================
  * fe_mul11 — r11d = m0inv (set by Fmul=1 / Nmul=0xBC4F), rcx = m.
@@ -367,6 +324,55 @@ fe_mul11:
 	add	[rdi], rax
 	scasq
 	loop	.Lin
+	ret
+
+/* ── .Lcp_shared + decoders — moved here (after fe_mul11) to keep
+ * the handler region under 256 B for the jt u8 constraint. ── */
+
+.Lcp_shared:	/* out-of-place carry-prop rsi → rdi. */
+	xor	edx, edx
+	push	K-1
+	pop	rcx
+1:	lodsq
+	add	rax, rdx
+	push	rax
+	pop	rdx                 /* −1 B vs mov rdx,rax (3→2) */
+	and	eax, MASK
+	stosq
+	sar	rdx, W
+	loop	1b
+	lodsq
+	add	rax, rdx
+	stosq
+	ret
+
+/* fe_from_be — byte-reverse into the unused top of the dst slot
+ * (bytes 56-87), then decode from there with fe_from_le. Write
+ * region [8i,8i+8) trails read region [56+3i,56+3i+4) by 5i−56 ≥ 0
+ * for i < 11, so in-place is safe. Exits rsi = src+32, rdi = dst+88. */
+fe_from_be:
+	push	32
+	pop	rcx
+1:	lodsb
+	mov	[rdi + rcx + 55], al  /* rcx 32→1 → rdi+87→rdi+56. SIB+disp8. */
+	loop	1b
+	push	rsi                 /* = src+32 (lodsb advanced it) */
+	lea	rsi, [rdi + 56]     /* rdi untouched by this loop */
+	call	fe_from_le
+	pop	rsi
+	ret
+
+fe_from_le:
+	push	K-1
+	pop	rcx
+1:	mov	eax, [rsi]
+	and	eax, MASK
+	stosq
+	add	rsi, 3
+	loop	1b
+	xor	eax, eax
+	lodsw                       /* ax ← top 16 bits; rsi += 2 (chain) */
+	stosq
 	ret
 
 /* ======================================================================

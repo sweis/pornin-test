@@ -18,4 +18,6 @@ fec3c0d,1201,0,Full-chain decodes (zero lea's post-Qx); Gx² shared b-derive→G
 1b2e166,1163,10730000,SIGNED cP: p as 5 ±power-of-2 terms. CHKLT via Fsub+sign (−3). Trampoline (−3). Lsubm inline (−2).
 48168ed,1158,10730000,n-2 rodata: INV bt reads exponent directly (drop cmp/jb/je −7), verify +2 fixup (+4). Ported from limb5.
 044e0c5,1156,10730000,CHKNZ→CHKZ dst=1 flip; 88>>6=1 extracts bit. Ported from limb5.
-HEAD,1150,10730000,Single 8-slot COPYHI: bc_v1 stages 0-7 contiguously. −6 B bytecode. Ported from limb5.
+10a724b,1150,10730000,Single 8-slot COPYHI: bc_v1 stages 0-7 contiguously. −6 B bytecode. Ported from limb5.
+5dc2a53,1146,10730000,inc byte (3 B) beats inc qword (4 B) for 0→1. .Lset1 + cP×2 = −4 B.
+HEAD,1141,12090000,LAYOUT REORDER: .Lfmul falls through into fe_mul11. .Lcp_shared+decoders moved after. jt Fmul@251 (4 B headroom). −5 B.
