@@ -198,39 +198,39 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	pop	rbx
 	ret
 
-/* ── NORM / NORMN ──
- * Bring value to [0, m). In-place on s1. Subtract-until-negative
- * then add-once is correct for any value in a bounded range (no
- * top-limb-equality trap). r8 holds the modulus (not rcx, which
- * gets clobbered by loop counters). */
+/* ── NORM ──
+ * Bring value to [0, m). In-place on s1. Single merged loop:
+ * cqo reads rax's sign (top limb from .Lcp_shared; |limb| ≤ 2^18
+ * per range proof so bit 63 = sign). cqo gives rdx={0,−1} backwards;
+ * `not rdx` flips: neg→0 (add), pos→−1 (sub). Stash direction on
+ * stack (.Lcp_shared clobbers rdx). Terminate when we ADDED (edx=0)
+ * AND result ≥0 (eax bit31=0): `or edx,eax` SF=0 iff both. After a
+ * sub, popped edx=−1 forces SF=1 → always loop (correct: sub-phase
+ * never exits, add-after-overshoot does). .Laddm deleted. −3 B net
+ * (loop merge −5, .Lasmod imul→xor+sub +2). */
 
 .Lnorm:
 	/* All NORM bytecode has dst==s1 → bc_run gives rdi==rsi already.
 	 * Modulus = r15 (&cP — set in verify, preserved everywhere). */
-	call	.Lcprop             /* SF = sign of top limb (from final add) */
-	/* While top < 0: add m, re-carry. */
-1:	jns	2f
-	call	.Laddm              /* → .Lasmod → .Lcprop; SF at return */
-	jmp	1b
-	/* Subtract m until negative, then add m once. */
-2:	push	-1
-	pop	rdx                 /* non-REX pop (−1 B vs pop r9) */
-	call	.Lasmod             /* → .Lcprop; SF at return */
-	jns	2b
-	/* fall into .Laddm for the final add; its tail ret returns. */
-
-.Laddm:	/* [rdi] ±= [r8], carry-prop.  rdx ∈ {+1,−1}; imul rax,rdx (2-op
-	 * form, rdx untouched) conditionally negates. 4 B vs xor+sub 6 B;
-	 * push 1;pop rdx is +1 B vs xor edx. Net −1 B. */
-	push	1
+	call	.Lcprop             /* rax = top limb. Slot may be un-cprop'd
+	                             * (NORM follows Fsub in bc_v1, Fadd in bc_v3). */
+1:	cqo                         /* rdx ← sar(rax,63). 2 B. */
+	not	rdx                 /* {−1,0}→{0,−1}. Flag-preserving. 3 B. */
+	push	rdx
+	call	.Lasmod             /* ±m + cprop → rax = new top limb */
 	pop	rdx
-	/* falls through */
+	or	edx, eax            /* SF=1 ⇔ subbed ∨ still-neg */
+	js	1b
+	ret
+
 .Lasmod:
+	/* rdx ∈ {0,−1}: xor+sub conditional-negate (0→nop, −1→two's-comp). */
 	push	rdi
 	mov	rsi, r15            /* &cP — set once in verify */
 	mov	cl, K               /* rcx=0 — all entry paths came through .Lcprop's loop */
 1:	lodsq
-	imul	rax, rdx
+	xor	rax, rdx
+	sub	rax, rdx
 	add	[rdi], rax
 	scasq
 	loop	1b
