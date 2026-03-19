@@ -216,10 +216,11 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	jns	2b
 	/* fall into .Laddm for the final add; its tail ret returns. */
 
-.Laddm:	/* [rdi] += [r8], carry-prop.  rdx ∈ {0,−1} flag: xor/sub is a no-op
-	 * when 0, two's-complement negate when −1. NORM's bc_run s2 arg is
-	 * always 0 (unused) so rdx is free — saves REX on xor and pop. */
-	xor	edx, edx
+.Laddm:	/* [rdi] ±= [r8], carry-prop.  rdx ∈ {+1,−1}; imul rax,rdx (2-op
+	 * form, rdx untouched) conditionally negates. 4 B vs xor+sub 6 B;
+	 * push 1;pop rdx is +1 B vs xor edx. Net −1 B. */
+	push	1
+	pop	rdx
 	/* falls through */
 .Lasmod:
 	push	rdi
@@ -227,8 +228,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	push	K
 	pop	rcx
 1:	lodsq
-	xor	rax, rdx
-	sub	rax, rdx
+	imul	rax, rdx
 	add	[rdi], rax
 	scasq
 	loop	1b
