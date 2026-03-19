@@ -146,9 +146,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	loop	1b
 	neg	rdx                 /* CF = (rdx != 0) */
 	rcl	ebp, 1              /* CF → bit 0; prior bits shifted up */
-	sub	rdi, r14
-	shr	edi, 6              /* 0 or 88 → 0 or 1 */
-	xor	ebp, edi
+	xor	ebp, r9d            /* bc_run saved dst nibble — 0 or 1 direct */
 	ret
 
 .Lchklt: /* bpl |= (s1 >= s2). Subtract-and-check-sign — works for
@@ -379,8 +377,7 @@ fe_from_le:
 	lea	rdi, [r14 + oADD]
 	push	3*K
 	pop	rcx
-	rep	movsq
-	xor	edi, edi            /* obc_rcb = 0 */
+	rep	movsq               /* rcx = 0 out — bcrun_off takes offset in rcx */
 	jmp	bcrun_off           /* rel8 over pt_mul (~90 B) */
 
 pt_mul:
@@ -410,13 +407,13 @@ pt_mul:
 	jns	.Lpo
 	/* Dispatch final check — falls through. */
 	push	obc_v3
-	pop	rdi
+	pop	rcx
 
 bcrun_off:
 	push	rbp
 	push	rbx                 /* save first; lea goes straight to rbx */
 	lea	rbx, [rip + bc_rcb]
-	add	rbx, rdi
+	add	rbx, rcx            /* offset — .Lcadd's rep movsq leaves rcx=0 */
 	xor	ebp, ebp            /* fail-bit accumulator */
 	/* r12 = &.Ljt inherited from verify (set once, fe_mul11 preserves). */
 .Lbc:
@@ -431,6 +428,7 @@ bcrun_off:
 	imul	esi, esi, SLOT
 	add	rsi, r14
 	shr	edi, 4
+	mov	r9d, edi            /* raw dst nibble → CHKZ reads directly */
 	imul	edi, edi, SLOT
 	add	rdi, r14
 
@@ -540,7 +538,7 @@ tv_ecdsa_p256_verify_asm:
 
 	/* ── bc_v1 ── */
 	push	obc_v1
-	pop	rdi
+	pop	rcx
 	call	bcrun_off           /* returns eax = 0/−1 */
 	push	rax                 /* bc_v1 fail flag — pt_mul safe on garbage */
 	call	pt_mul              /* returns eax = 0/−1 via bc_v3 */

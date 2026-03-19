@@ -203,22 +203,20 @@ bc_v1:
 	.byte 0xa3,0x77            /* slot7 -= b             (Fsub)*/
 	.byte 0xb3,0x77            /* slot7 -= slot11        (Fsub)*/
 	.byte 0x07,0x70            /* check slot7 nonzero (op7)       */
-	/* Shamir staging: slots 4-7 ← 1,Qx,Qy,1 via Fmul(·, slot15=1).
-	 * Qx,Qy saved first (before INV clobbers slot0).  slot4/slot7
-	 * set to 1 AFTER INV — slot4 keeps cN through INV so fe_inv_m
-	 * can sub 2 and bt it directly.  Same 4 ops, reordered. */
+	/* INV dst = slot5 (was slot0): rdi = &slot5, so slot4 (n−2)
+	 * is [rdi−32] disp8 — bt drops REX (r8→rdi, −1 B).  slot0/1
+	 * (Qx,Qy) now survive INV unmodified, so ALL staging moves
+	 * after: seed → INV → Nmuls(read slot5) → stage 4,5,6,7.
+	 * Same 8 ops, 0 B delta here; −1 B in fe_inv_m. */
+	.byte 0xf0,0x5f            /* slot5 = 1·1 = 1  (fe_inv_m seed)  */
+	.byte 0x09,0x5d            /* INV (op9): slot5 = s⁻¹; dst=5,s1=13 */
+	.byte 0x54,0xde            /* slot13 = slot14·slot5 = e·s⁻¹ = u1 */
+	.byte 0x54,0xec            /* slot14 = slot12·slot5 = r·s⁻¹ = u2 */
+	/* Staging: slots 4-7 ← 1,Qx,Qy,1.  Qx,Qy still in 0,1. */
+	.byte 0xf0,0x4f            /* slot4 = 1·1 = 1  (G-backup Z) */
 	.byte 0xf0,0x50            /* slot5 = Qx·1 = Qx             */
 	.byte 0xf0,0x61            /* slot6 = Qy·1 = Qy             */
-	/* slot0 = 1 for fe_inv_m: loop starts r=1 at bit 255 instead
-	 * of r=a at bit 254 (bit 255 of n−2 is 1, so first iter gives
-	 * r=1²·a=a — same state, one iter later).  +2 B here; drops
-	 * rep movsq + r8 save/restore in fe_inv_m = −12 B. */
-	.byte 0xf0,0x0f            /* slot0 = 1·1 = 1  (fe_inv_m seed) */
-	.byte 0x09,0x0d            /* INV (op9): slot0 = s⁻¹ mod n    */
-	.byte 0xf0,0x4f            /* slot4 = 1·1 = 1  (G-backup Z) */
 	.byte 0xf0,0x7f            /* slot7 = 1·1 = 1  (Q-backup Z) */
-	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
-	.byte 0x04,0xec            /* slot14 = slot12·slot0 = r·s⁻¹ = u2 */
 	.byte 0x00
 
 .equ obc_rcb,  0
