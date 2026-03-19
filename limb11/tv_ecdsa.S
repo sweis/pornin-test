@@ -158,8 +158,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	push	rdi
 	call	.Lfsub
 	pop	rdi                 /* back to dst; push/pop beats sub rdi,SLOT */
-	call	.Lcprop
-	test	byte ptr [rdi + K*8 - 1], 0x80
+	call	.Lcprop             /* tail sets sign flags */
 	jnz	2f                  /* negative → s1 < s2 → pass */
 	inc	ebp                 /* ≥ 0 → fail */
 2:	ret
@@ -205,18 +204,15 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	lea	r8, [rcx - SLOT]    /* &cN − SLOT = &cP */
 	push	rsi
 	pop	rdi                 /* in-place on s1 */
-	call	.Lcprop
+	call	.Lcprop             /* tail-tests sign; jz = non-negative */
 	/* While top < 0: add m, re-carry. */
-1:	test	byte ptr [rdi + K*8 - 1], 0x80
-	jz	2f
-	call	.Laddm
+1:	jz	2f
+	call	.Laddm              /* → .Lasmod → .Lcprop; flags at return */
 	jmp	1b
-	/* Subtract m until negative, then add m once. .Lsubm inlined:
-	 * its only caller; 6-B body + 5-B call → 9-B inline = −2 B. */
+	/* Subtract m until negative, then add m once. */
 2:	push	-1
 	pop	rdx                 /* non-REX pop (−1 B vs pop r9) */
-	call	.Lasmod
-	test	byte ptr [rdi + K*8 - 1], 0x80
+	call	.Lasmod             /* → .Lcprop; flags at return */
 	jz	2b
 	/* fall into .Laddm for the final add; its tail ret returns. */
 
@@ -238,12 +234,15 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	loop	1b
 	pop	rdi
 	/* falls through */
-.Lcprop:	/* in-place wrapper — fe_mul11 calls .Lcp_shared directly. */
+.Lcprop:	/* in-place wrapper — fe_mul11 calls .Lcp_shared directly.
+	 * TAIL TESTS SIGN: all 3 callers (NORM×2 + CHKLT) branched on this
+	 * immediately after. Hoist here; pop/ret preserve flags. −8 B net. */
 	push	rdi
 	push	rdi
 	pop	rsi                 /* push;pop beats mov rsi,rdi by 1 B */
 	call	.Lcp_shared
 	pop	rdi
+	test	byte ptr [rdi + K*8 - 1], 0x80
 	ret
 
 /* ── Fmul/Nmul — moved here (end of handlers) so .Lfmul falls through
