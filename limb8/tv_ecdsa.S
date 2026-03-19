@@ -202,19 +202,19 @@ bc_v1:
 	.byte 0xb3,0x77            /* slot7 -= slot11        (Fsub)*/
 	.byte 0x07,0x70            /* check slot7 nonzero (op7)       */
 	/* Shamir staging: slots 4-7 ← 1,Qx,Qy,1 via Fmul(·, slot15=1).
-	 * Runs after curve check (slot7 now free), before INV (slot0
-	 * still Qx).  This +2 B here saves 18 B in verify.  −16 net. */
-	.byte 0xf0,0x4f            /* slot4 = 1·1 = 1  (G-backup Z) */
+	 * Qx,Qy saved first (before INV clobbers slot0).  slot4/slot7
+	 * set to 1 AFTER INV — slot4 keeps cN through INV so fe_inv_m
+	 * can sub 2 and bt it directly.  Same 4 ops, reordered. */
 	.byte 0xf0,0x50            /* slot5 = Qx·1 = Qx             */
 	.byte 0xf0,0x61            /* slot6 = Qy·1 = Qy             */
-	.byte 0xf0,0x7f            /* slot7 = 1·1 = 1  (Q-backup Z) */
 	/* slot0 = 1 for fe_inv_m: loop starts r=1 at bit 255 instead
 	 * of r=a at bit 254 (bit 255 of n−2 is 1, so first iter gives
 	 * r=1²·a=a — same state, one iter later).  +2 B here; drops
-	 * rep movsq + r8 save/restore in fe_inv_m = −12 B.  Qx already
-	 * safe in slot5. */
+	 * rep movsq + r8 save/restore in fe_inv_m = −12 B. */
 	.byte 0xf0,0x0f            /* slot0 = 1·1 = 1  (fe_inv_m seed) */
 	.byte 0x0a,0x0d            /* INV (opA): slot0 = s⁻¹ mod n    */
+	.byte 0xf0,0x4f            /* slot4 = 1·1 = 1  (G-backup Z) */
+	.byte 0xf0,0x7f            /* slot7 = 1·1 = 1  (Q-backup Z) */
 	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
 	.byte 0x04,0xec            /* slot14 = slot12·slot0 = r·s⁻¹ = u2 */
 	.byte 0x00
@@ -266,11 +266,9 @@ bc_v1:
 	\op	[rdi], ebp
 .endm
 
-/* oN hardcode: gas won't pick disp8 for forward-ref oN at the bt
- * in fe_inv_m.  Assert below.  fe_mul_m moved to AFTER the handler
- * block — Fmul's jmp is rel8 (forward 115 B; 12 B headroom).
- * fe_inv_m reaches it via Nmul → Fmul fallthrough → rel8 jmp. */
-.equ	oN_early, 75        /* 11-entry table */
+/* fe_mul_m moved to AFTER the handler block — Fmul's jmp is rel8
+ * (forward; ~20 B headroom).  fe_inv_m reaches it via Nmul → Fmul
+ * fallthrough → rel8 jmp. */
 
 /* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
  * 32 first, for chained decode (rdi already advanced by the prior
@@ -461,9 +459,6 @@ cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
  * headroom this frees lets fe_iszero inline into .Lop6. */
 
 .equ oN,   cN   - .Ljt
-.if oN - oN_early
-.error "oN moved — update oN_early (fe_inv_m bt uses hardcoded disp8)"
-.endif
 .if (cN - cGX) - 64
 .error "cGX..cN spacing changed — verify's 16-qword block copy depends on cGX,cGY,cN,cP contiguous"
 .endif
@@ -577,22 +572,17 @@ Fadd:	push	rsi
  * SEED COPY.  Caller (bc_v1) puts 1 in dst first; loop starts at
  * bit 255 instead of 254 — bit 255 of n−2 is 1 (top byte 0xFF),
  * so first iter gives r = 1² · a = a, identical to the old start
- * state one iteration later.  Drops rep movsq (9 B) + the r8
- * save/restore pair (6 B): fe_mul_m does NOT preserve rdi (.Lop3's
- * add-back path advances it), so each call is bracketed by push
- * rdi/pop rdi instead — 2 B per bracket, already present at .Le,
- * +2 B at .Lmul.  Net −12 B.
+ * state one iteration later.
  *
- * n and n−2 differ only in bits 1-4 (low byte 0x51 vs 0x4F — a
- * four-bit borrow cascade, no borrow into byte 1).  bt directly
- * on cN in .text and special-case ebx<5:
- *   ebx ∈ {0,1,2,3}: force mul (n−2 bits 0-3 = 1111)
- *   ebx == 4:        force skip (n bit4=1 but n−2 bit4=0)
- *   ebx ≥ 5:         n and n−2 agree — bt on cN is exact.
+ * EXPONENT: bc_v1 leaves cN in slot 4 until after INV (staging
+ * reordered).  At entry, rcx = r8 = &slot8 (decoder preload), so
+ * slot4 = [rcx−128] (disp8 exactly).  sub byte0 by 2 → slot4 = n−2.
+ * bt reads [r8−128] directly — r8 survives Nmul.  No special-case
+ * for bits 0-4: −7 B cmp/jb/je, −1 B bt (r8 no SIB vs r12), +4 B sub.
  *
- * Loop counter in rbx (callee-saved, survives Nmul).  src at
- * [rsp].  r12 = .Ljt (bc_run's hoist — fe_mul_m doesn't touch). */
+ * Loop counter in rbx (callee-saved, survives Nmul).  src at [rsp]. */
 fe_inv_m:
+	sub	BYTE PTR [rcx-128], 2   /* slot4: n → n−2.  rcx = r8 here. */
 	push	rbx
 	push	rsi                 /* src → [rsp] */
 	xor	ebx, ebx
@@ -604,12 +594,9 @@ fe_inv_m:
 	pop	rsi
 	call	Nmul                /* = lea rcx,&cN; jmp fe_mul_m. */
 	pop	rdi                 /* fe_mul_m may leave rdi at dst+32 */
-	cmp	ebx, 4
-	jb	.Lmul
-	je	.Lnx
-	bt	DWORD PTR [r12+oN_early], ebx   /* cN in .text, disp8 */
+	bt	DWORD PTR [r8-128], ebx     /* slot4 = n−2.  r8 no SIB, disp8. */
 	jnc	.Lnx
-.Lmul:	push	rdi
+	push	rdi
 	pop	rsi
 	pop	rdx                 /* src from prologue push; 2B vs 4B mov[rsp] */
 	push	rdx                 /* keep it there for next iter */
