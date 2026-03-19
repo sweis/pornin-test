@@ -157,7 +157,7 @@ bc_v3:
 	.byte 0x08,0x32            /* slot3  = n·Z  (MULCN, s1=Z)     */
 	.byte 0x33,0x37            /* slot3  = diff1 − n·Z    = diff2 */
 	.byte 0x70,0x33            /* slot3  = diff1·diff2            */
-	.byte 0x16,0x30            /* check slot3 nonzero (op6 s2=1)  */
+	.byte 0x07,0x30            /* check slot3 nonzero (op7)       */
 	.byte 0x00
 
 /* bc_v1: range checks + curve check + Shamir staging + s⁻¹ + u1,u2.
@@ -200,7 +200,7 @@ bc_v1:
 	.byte 0x11,0x71            /* slot7  = Qy²           (SQR) */
 	.byte 0xa3,0x77            /* slot7 -= b             (Fsub)*/
 	.byte 0xb3,0x77            /* slot7 -= slot11        (Fsub)*/
-	.byte 0x16,0x70            /* check slot7 nonzero (op6 s2=1)  */
+	.byte 0x07,0x70            /* check slot7 nonzero (op7)       */
 	/* Shamir staging: slots 4-7 ← 1,Qx,Qy,1 via Fmul(·, slot15=1).
 	 * Runs after curve check (slot7 now free), before INV (slot0
 	 * still Qx).  This +2 B here saves 18 B in verify.  −16 net. */
@@ -214,7 +214,7 @@ bc_v1:
 	 * rep movsq + r8 save/restore in fe_inv_m = −12 B.  Qx already
 	 * safe in slot5. */
 	.byte 0xf0,0x0f            /* slot0 = 1·1 = 1  (fe_inv_m seed) */
-	.byte 0x07,0x0d            /* INV (op7): slot0 = s⁻¹ mod n    */
+	.byte 0x0a,0x0d            /* INV (opA): slot0 = s⁻¹ mod n    */
 	.byte 0x04,0xde            /* slot13 = slot14·slot0 = e·s⁻¹ = u1 */
 	.byte 0x04,0xec            /* slot14 = slot12·slot0 = r·s⁻¹ = u2 */
 	.byte 0x00
@@ -270,7 +270,7 @@ bc_v1:
  * in fe_inv_m.  Assert below.  fe_mul_m moved to AFTER the handler
  * block — Fmul's jmp is rel8 (forward 115 B; 12 B headroom).
  * fe_inv_m reaches it via Nmul → Fmul fallthrough → rel8 jmp. */
-.equ	oN_early, 74        /* +1 for the geq_p table entry */
+.equ	oN_early, 75        /* 11-entry table */
 
 /* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
  * 32 first, for chained decode (rdi already advanced by the prior
@@ -439,13 +439,15 @@ bc_run:
  * 64 B — .Lop8 (fe_inv_m) is the furthest. */
 .Ljt:
 	.byte	.Lop0-.Ljt, .Lop1-.Ljt, .Lop2-.Ljt, .Lop3-.Ljt
-	.byte	.Lop4-.Ljt, .Lop5-.Ljt, .Lop6-.Ljt
-	.byte	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only (op 7) */
+	.byte	.Lop4-.Ljt, .Lop5-.Ljt
+	.byte	.Lop6-.Ljt  /* checkzero  (op 6) */
+	.byte	.Lop6-.Ljt  /* checknonzero (op 7) — SAME handler, sense=op bit0 */
 	.byte	.Lop9-.Ljt  /* MULCN (op 8) */
 	.byte	.Lop5p-.Ljt /* geq_p (op 9): rsi=r13=&cP, for Qx<p/Qy<p */
-/* op6 = check (s2 bit0: 0=checkzero, 1=checknonzero).  The old
- * separate checknonzero op was absorbed — s2 encodes sense.  The
- * table entry and handler it freed let fe_sub_raw inline in .Lop3. */
+	.byte	.Lop8-.Ljt  /* INV = fe_inv_m, mod-n only (op A) */
+/* op6/7 = check (op bit0: 0=checkzero, 1=checknonzero).  Sense
+ * encoded in opcode low bit: handler XORs al with [rbx-2] bit0
+ * directly.  +1 B table entry; −3 B handler body.  INV moved to opA. */
 
 cGX:	.quad 0xf4a13945d898c296, 0x77037d812deb33a0
 	.quad 0xf8bce6e563a440f2, 0x6b17d1f2e12c4247
@@ -484,19 +486,18 @@ cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
 	loopz	1b
 	setae	al
 	jmp	.Lor
-/* s2 bit0 (= bit4 of byte1 at [rbx-2]) selects sense.  s2=0
- * checkzero (fail if zero), s2=1 checknonzero (fail if nonzero).
- * fe_iszero inlined (cP removal freed the headroom — .Lop8 at
- * 219 + this 10 B = 229, still fits u8). */
+/* op bit0 selects sense: op6 (bit0=0) checkzero, op7 (bit0=1)
+ * checknonzero.  xor al,[rbx-2] (byte1 = (s2<<4)|op) flips al
+ * bit0 iff op bit0 is set; and al,1 masks.  5 B vs test;jz;xor's
+ * 8 B.  fe_iszero inlined. */
 .Lop6:	push	4
 	pop	rcx
 	xor	eax, eax
 2:	or	rax, [rdi+rcx*8-8]
 	loop	2b
 	sete	al
-	test	BYTE PTR [rbx-2], 0x10
-	jz	.Lor
-	xor	al, 1
+	xor	al, [rbx-2]
+	and	al, 1
 .Lor:	or	bpl, al
 	ret
 /* MULCN: Fmul with b = &cN (.text) instead of a slot.  bc_v3
