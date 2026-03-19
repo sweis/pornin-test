@@ -230,8 +230,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 .Lasmod:
 	push	rdi
 	mov	rsi, r8
-	push	K
-	pop	rcx
+	mov	cl, K               /* rcx = 0 — all paths here came through .Lcprop's loop */
 1:	lodsq
 	xor	rax, r9
 	sub	rax, r9
@@ -349,24 +348,28 @@ fe_mul5:
 	add	r9, 8
 	jnz	.Lcios
 
-	/* Carry-prop: acc[K..2K-1] (128-bit) → dst[0..K-1]. r10 ended
-	 * at &acc[K-1]; source = r10+16. rbx = hi accumulator (free). */
+	/* Carry-prop: acc[K..2K-1] (128-bit) → dst[0..K-1]. r10 ended at
+	 * &acc[K-1]; source = r10+16. Running carry in rdx:rbx; lodsq ×2
+	 * advances rsi by 16 (rax is scratch per iter). Top limb ≤ 2^42
+	 * (range proof) so dropping hi in the tail is correct. */
 	lea	rsi, [r10 + 16]
 	mov	rdi, [rbp + 16]
-	xor	eax, eax
+	xor	edx, edx
 	xor	ebx, ebx
 	mov	cl, K-1
-.Lcp5:	add	rax, [rsi]
-	adc	rbx, [rsi + 8]
-	mov	rdx, rax
-	and	rdx, r13
-	mov	[rdi], rdx
-	shrd	rax, rbx, W
+.Lcp5:	lodsq
+	add	rdx, rax
+	lodsq
+	adc	rbx, rax
+	push	rdx
+	pop	rax                 /* 2 B vs mov=3 B */
+	and	rax, r13
+	stosq
+	shrd	rdx, rbx, W
 	sar	rbx, W
-	lea	rsi, [rsi + 16]
-	scasq
 	loop	.Lcp5
-	add	rax, [rsi]
+	lodsq
+	add	rax, rdx
 	stosq
 
 	leave
@@ -399,20 +402,20 @@ fe_mul5:
 	jmp	bcrun_off
 
 pt_mul:
-	/* r12 holds &.Ljt (set in verify) — use direct disp32 bt's here.
-	 * The two bt encodings are 9 B each; prior lea+bt+bt was 7+5+6=18.
-	 * Wash on pt_mul, but frees r12 for bc_run to inherit. */
+	/* rbp = verify's frame pointer = r14 + FRAME (bc_run push/pops rbp
+	 * so it's restored across .Lcadd). u1 at slot 22 = rbp−88, u2 at
+	 * slot 23 = rbp−48 — both disp8 from rbp. Saves 6 B vs [r14+disp32]. */
 	push	K-1
 	pop	r15
 .Lpo:	push	W-1
 	pop	rbx
 .Lpi:	mov	rsi, r14
 	call	.Lcadd
-	bt	[r14 + r15*8 + oU1], ebx
+	bt	[rbp + r15*8 - (FRAME - oU1)], ebx
 	jnc	1f
 	lea	rsi, [r14 + oBAK]
 	call	.Lcadd
-1:	bt	[r14 + r15*8 + oU1 + SLOT], ebx
+1:	bt	[rbp + r15*8 - (FRAME - oU1 - SLOT)], ebx
 	jnc	2f
 	lea	rsi, [r14 + oBAK + 3*SLOT]
 	call	.Lcadd
