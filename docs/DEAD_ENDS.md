@@ -7,6 +7,30 @@ sessions don't redo the analysis. Grouped by scope.
 
 ## Architectural (whole-approach)
 
+### Shamir-free via Hamburg signed-binary ladder
+**Why dead:** +277 B measured (prototype at 1168 B), structural floor
+~+110-140 B. The literature survey's "−30 to +20 B" counted bytecode
+ops and missed three asm cost centers:
+1. **Hamburg conditional init (~50 B):** bytecode can't branch. Test
+   scalar bit 0 → odd path vs even path (4× NOT qword for negate).
+   RCB's init is 12 B flat (zero 3 slots + poke 1).
+2. **Two-call verify tail (+117 B):** arg setup × 2; bc_norm corrupts
+   slots between calls; combine = save R1 → bc_add → check Z → check
+   X → restore → bc_dbl. vs limb8's 27-B tail.
+3. **Coordinate mismatch (+33 B):** CMO98 Jacobian, we're homogeneous.
+   Final combine needs one input affine → mod-p inversion.
+
+**The deep finding:** RCB's 43-op COMPLETE formula costs only 7 B more
+than bc_dbl(43)+bc_add(37)=80 B incomplete. Branch-free completeness
+is nearly free at the bytecode level — RCB is MORE efficient than the
+op-count suggests.
+
+tcId 204 (u1·G = u2·Q, expected VALID) mandates full 3-way combine.
+The Hamburg invariant DOES hold for u ∈ [1,n−1] (u=1 fine; only u=0
+needs special case) — the survey's correctness concern was unfounded,
+but the size estimate was catastrophically off.
+→ `docs/hamburg_assessment.md`
+
 ### WW-AMM single-iteration s=256
 **Why dead:** `−p⁻¹ mod 2^256 = 0xffffffff00000002…00000001`, not 1.
 The survey conflated per-LIMB m0inv (=1 at W≤96, because p's low W

@@ -52,7 +52,12 @@ force). p256-m uses point_add_or_double_leaky (3-way branch, ~30 B).
 **If RCB must stay for this one call, the 38 B bytecode savings
 evaporate.**
 
-**Net estimate: −30 to +20 B.** Worth the experiment.
+~~**Net estimate: −30 to +20 B.** Worth the experiment.~~
+
+**MEASURED: +277 B (prototype 1168 B). Dead end.** The estimate
+counted bytecode ops and missed three asm cost centers — see
+`docs/hamburg_assessment.md`. RCB's completeness costs only 7 B at
+the bytecode level; the infrastructure to AVOID it costs 100+ B.
 
 ### ~~WW-AMM single-iteration (s=256)~~ — REFUTED
 
