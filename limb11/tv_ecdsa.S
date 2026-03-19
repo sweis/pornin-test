@@ -323,20 +323,20 @@ fe_mul11:
 	pop	rdi
 	rep	stosq               /* rcx = 0 out */
 
-	lea	r8, [rsi + K*8]
-
 	/* CIOS: for each row i, do schoolbook row + Montgomery reduce
-	 * row in one pass.  Same math as two-phase; one outer loop. */
+	 * row in one pass.  a[i] indexed via [rsi+r9+K*8] — disp8=88 fits,
+	 * no lea r8 needed. rsi bracketed across the two .Lcnt calls. */
 	push	-K*8
 	pop	r9
-.Lcios:	mov	rbx, [r8 + r9]              /* a[i] */
+.Lcios:	mov	rbx, [rsi + r9 + K*8]       /* a[i] */
 	lea	rdi, [rbp + r9 - K*8]       /* &acc[i] */
+	push	rsi                         /* preserve &a[0] */
 	push	rdi
 	mov	rsi, [rbp + 8]              /* b */
 	call	.Lcnt
 
 	pop	rdi
-	mov	eax, [rdi]                  /* acc[i] low32 — enough for q */
+	mov	eax, [rdi]
 	imul	eax, r11d
 	and	eax, MASK
 	push	rax
@@ -346,10 +346,11 @@ fe_mul11:
 	call	.Lcnt
 
 	pop	rdi
-	mov	rax, [rdi]                  /* acc[i] ≡ 0 mod 2^W now */
+	mov	rax, [rdi]
 	sar	rax, W
 	add	[rdi + 8], rax
 
+	pop	rsi
 	add	r9, 8
 	jnz	.Lcios
 
