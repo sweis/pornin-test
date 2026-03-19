@@ -84,7 +84,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
  * constant. gas .if can't forward-ref, so the u8-fit assert lives
  * at the end of the file (after all .Lop labels are defined). ── */
 .Ljt:
-	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, .Lnmul-.Ljt
+	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, fe_mul11-.Ljt
 	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv-.Ljt, .Lnorm-.Ljt
 	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lcopyhi-.Ljt
 
@@ -177,7 +177,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	push	rsi
 	pop	rdi
 	pop	rdx
-	call	.Lnmul              /* dst = dst² */
+	call	fe_mul11            /* dst = dst². r11d set by bc_run dispatch. */
 	bt	dword ptr [rip + cN], ebx   /* rodata IS n-2 now */
 	jnc	.Lnx
 .Lmul:	pop	rdi
@@ -186,7 +186,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	push	rdi                 /* stack restored */
 	push	rdi
 	pop	rsi
-	call	.Lnmul
+	call	fe_mul11
 .Lnx:	dec	ebx
 	jns	.Le
 	pop	rax
@@ -245,15 +245,10 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	pop	rdi
 	ret
 
-/* ── Fmul/Nmul — moved here (end of handlers) so .Lfmul falls through
- * into fe_mul11. Both offsets < 256 (jt u8). .Lnmul jmp rel8 over
- * .Lfmul's 8-B body. .Lcp_shared + decoders moved AFTER fe_mul11 to
- * keep handler region under 256. ── */
-.Lnmul: /* Nmul — MontMul mod n.  bc_run preloads rcx=&cN; fe_mul11
- * preserves rcx (pop rcx not pop rax) so INV's 384 calls inherit it. */
-	mov	r11d, 0xBC4F
-	jmp	fe_mul11            /* rel8 — skips .Lfmul's 8 B */
-
+/* ── .Lfmul — end of handlers so it falls through into fe_mul11.
+ * Nmul's jt entry points DIRECTLY at fe_mul11 (offset < 256); bc_run
+ * pre-sets r11d=0xBC4F before every dispatch. .Lfmul overrides to 1.
+ * INV's 510 fe_mul11 calls inherit the bc_run-set r11d. ── */
 .Lfmul: /* Fmul — MontMul mod p. m0inv = 1.  MULR2 = Fmul with s2=15. */
 	sub	rcx, SLOT           /* &cN − SLOT = &cP */
 	push	1
@@ -449,6 +444,7 @@ bcrun_off:
 	mov	al, [r12 + rax]     /* high bytes already 0 from the and */
 	add	rax, r12
 	lea	rcx, [r14 + oCN]    /* cN; Fmul/NORM subtract SLOT for cP */
+	mov	r11d, 0xBC4F        /* n m0inv — Nmul jt entry = fe_mul11 direct */
 	call	rax
 	jmp	.Lbc
 
