@@ -180,15 +180,15 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	jz	2b
 	/* fall into .Laddm for final add */
 
-.Laddm:
-	xor	r9d, r9d
+.Laddm:                             /* rdx free: NORM ignores bc_run's s2 arg */
+	xor	edx, edx
 .Lasmod:
 	push	rdi
 	mov	rsi, r8
 	mov	cl, K               /* rcx = 0 — all paths here came through .Lcprop's loop */
 1:	lodsq
-	xor	rax, r9
-	sub	rax, r9
+	xor	rax, rdx
+	sub	rax, rdx
 	add	[rdi], rax
 	scasq
 	loop	1b
@@ -212,7 +212,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 
 .Lsubm:
 	push	-1
-	pop	r9
+	pop	rdx
 	jmp	.Lasmod
 
 .Linv_s: /* Stub — .Linv body lives after fe_mul5 to make room in u8. */
