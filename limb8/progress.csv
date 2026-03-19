@@ -1,0 +1,10 @@
+commit,bytes,cycles,note
+# 8×32 q=t[top_dword] track (non-Montgomery). Thomas at 928/4482467 with 5×54.
+# SMALL_MUL8 build. Baseline 933 B was the long-standing floor.
+# Each row is a 607/607 checkpoint.
+b51fb24,932,4686000,fe_from_be: push 4;pop rcx → mov cl,4. All sites have rcx≤65 (high bytes 0). −1 B.
+b5c8326,930,4686000,op6/op7 sense via opcode bit0: xor al,[rbx-2];and al,1 (5B) beats test;jz;xor (8B). Table +1 INV→opA. −2 B.
+429e09e,926,4686000,bt slot4=n−2: bc_v1 reorder keeps cN in slot4 through INV. sub BYTE [rcx-128],2 prologue (4B); bt [r8-128] (5B no-SIB). Drop cmp/jb/je (−7). −4 B. BEATS THOMAS.
+ca8d294,922,4686000,r12=&.Ljt hoisted to verify + bytecode→.text. bc_run drops push/pop/lea r12 (−11). verify +11. cGX lea [r12+oGX] disp8 (−2). bcrun_off SIB lea [r12+rdi+bc_rcb-.Ljt] (−2). −4 B.
+b11ebda,920,4686000,bcrun_off: lea directly into rbx after save-push. Drops push rdi;pop rbx. −2 B.
+2f5d9a9,916,4686000,block-copy 24 qw (was 12): rdi lands AT slot8 — drops lea rdi,[rdi+96]. Junk in 5,6,7 harmless (never read before staged). −4 B.
