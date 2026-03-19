@@ -97,9 +97,10 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
  * Must preserve rbx (bc ptr), r12 (jt), rbp (fail bits), r13 (MASK),
  * r14 (slot base), r15 (unused here — pt_mul's counter).
  *
- * Layout: .Lfmul/.Lnmul moved to immediately precede fe_mul5 so .Lnmul
- * falls through (−5 B) and .Lfmul's jmp is rel8 over the movabs (−3 B).
- * .Linv's body moves after fe_mul5 (stub keeps .Ljt entry in u8). */
+ * Layout: .Lfmul → .Lnmul → .Linv → fe_mul5. .Linv body fits between
+ * .Lnmul and fe_mul5 (46 B) — .Lfmul's jmp is rel8 over 58 B, .Linv's
+ * jt entry lands at ~223. No stub needed (−5 B). .Lnmul pays +2 B for
+ * its jmp but that's still net −3 B. */
 
 .Lcopyhi: /* 8 slots from s1 → slot(dst+16). Single call in bc_v1. */
 	add	rdi, 16*SLOT
@@ -221,19 +222,48 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	pop	rdx
 	jmp	.Lasmod
 
-.Linv_s: /* Stub — .Linv body lives after fe_mul5 to make room in u8. */
-	jmp	.Linv
-
-.Lfmul: /* MontMul mod p. Jump rel8 over .Lnmul's movabs into fe_mul5. */
+.Lfmul: /* MontMul mod p. rel8 over .Lnmul + .Linv (58 B). */
 	sub	rcx, SLOT           /* cP = cN − 1 slot (slot 8) */
 	push	1
 	pop	r11
-	jmp	fe_mul5             /* rel8 — 10 B away */
+	jmp	fe_mul5
 
-.Lnmul: /* MontMul mod n. Falls through to fe_mul5.
- * fe_mul5 preserves rcx so INV's 384 calls all inherit &cN. */
+.Lnmul: /* MontMul mod n. fe_mul5 preserves rcx so INV's 384 calls
+ * all inherit &cN. */
 	movabs	r11, 0x11c8aaee00bc4f
-	/* FALL THROUGH */
+	jmp	fe_mul5             /* rel8 — over .Linv body (46 B) */
+
+/* ── INV — s^(n−2) mod n via Fermat. n−2 stored directly in rodata
+ * so `bt` works on all bits without special-casing. Lives here (between
+ * .Lnmul and fe_mul5) so it fits the u8 jt slot directly — no stub. ── */
+.Linv:
+	push	rbx
+	push	rsi                 /* s_mont */
+	push	rdi                 /* accumulator — seeded with s_mont */
+	xor	ebx, ebx
+	mov	bl, 254             /* bit 255 implicit (seed = s_mont) */
+.Le:	pop	rsi
+	push	rsi
+	push	rsi
+	push	rsi
+	pop	rdi
+	pop	rdx
+	call	.Lnmul              /* dst = dst² */
+	bt	dword ptr [rip + cN], ebx   /* cN stored as n−2 */
+	jnc	.Lnx
+.Lmul:	pop	rdi
+	pop	rdx
+	push	rdx
+	push	rdi
+	push	rdi
+	pop	rsi
+	call	.Lnmul
+.Lnx:	dec	ebx
+	jns	.Le
+	pop	rax
+	pop	rax
+	pop	rbx
+	ret
 
 /* ======================================================================
  * fe_mul5 — Montgomery multiply, 5×54, 128-bit accumulator.
@@ -318,39 +348,6 @@ fe_mul5:
 	adc	[rdi+8], rdx
 	lea	rdi, [rdi+16]
 	loop	.Lin
-	ret
-
-/* ── INV — s^(n−2) mod n via Fermat. n−2 differs from n only in bits
- * 1..4 (low byte 0x51 → 0x4F). bt on cN directly, special-case 0..4.
- * Moved here (post-fe_mul5) so .Lnmul can fall through; .Linv_s is the
- * u8-reachable stub. ── */
-.Linv:
-	push	rbx
-	push	rsi                 /* s_mont */
-	push	rdi                 /* accumulator — seeded with s_mont */
-	xor	ebx, ebx
-	mov	bl, 254             /* bit 255 implicit (seed = s_mont) */
-.Le:	pop	rsi
-	push	rsi
-	push	rsi
-	push	rsi
-	pop	rdi
-	pop	rdx
-	call	.Lnmul              /* dst = dst² */
-	bt	dword ptr [rip + cN], ebx   /* cN stored as n−2 */
-	jnc	.Lnx
-.Lmul:	pop	rdi
-	pop	rdx
-	push	rdx
-	push	rdi
-	push	rdi
-	pop	rsi
-	call	.Lnmul
-.Lnx:	dec	ebx
-	jns	.Le
-	pop	rax
-	pop	rax
-	pop	rbx
 	ret
 
 /* ── Decoders ──
