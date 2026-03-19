@@ -372,22 +372,25 @@ fe_from_be:
 	loop	1b                  /* rsi=src+32, rdx=rdi+8, rcx=0 */
 	/* FALL THROUGH — rsi preserved through fe_from_le (uses ebx,ecx,rdx). */
 
+/* 54 = 48 + 6, so byte-offset 6i and shift 6i extract bits 48i+6i = 54i.
+ * Need 64 bits after shift for full 54-bit limb, but shr by 6i leaves only
+ * 64−6i bits — insufficient for i≥2. shrd with [rdx+6i+8] supplies the
+ * high bits (iter-3 reads bytes 26..33: 2 B past, valid but value masked
+ * off). Iter 4 WOULD read [rdx+32] = past input; skip that load, shrd
+ * with rbx=0 ≡ shr (limb 4 is 40 bits, doesn't need high qword). */
 fe_from_le:
-	xor	ebx, ebx            /* bit offset: 0, 54, 108, 162 */
-1:	mov	ecx, ebx
-	shr	ecx, 3              /* byte offset: 0, 6, 13, 20 */
-	mov	rax, [rdx + rcx]
-	mov	cl, bl
-	and	cl, 7               /* shift: 0, 6, 4, 2 */
-	shr	rax, cl
+	xor	ecx, ecx
+1:	mov	rax, [rdx + rcx]
+	xor	ebx, ebx
+	cmp	cl, 24
+	jae	2f                  /* iter 4: leave rbx=0 (shrd ≡ shr) */
+	mov	rbx, [rdx + rcx + 8]
+2:	shrd	rax, rbx, cl
 	and	rax, r13
 	stosq
-	add	ebx, W
-	cmp	bl, 4*W             /* 216 — stop before limb 4 */
+	add	ecx, 6
+	cmp	cl, 30
 	jne	1b
-	mov	rax, [rdx + 24]     /* limb 4: (24,24) */
-	shr	rax, 24
-	stosq
 	add	rdx, 32
 	ret
 
