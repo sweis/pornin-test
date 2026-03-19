@@ -269,12 +269,17 @@ bc_v1:
  * (forward; ~20 B headroom).  fe_inv_m reaches it via Nmul → Fmul
  * fallthrough → rel8 jmp. */
 
-/* fe_from_be — cold (5 calls at setup).  _next entry bumps rsi by
- * 32 first, for chained decode (rdi already advanced by the prior
- * call's stosq×4).  Two call sites each drop their own add rsi,32.
- * mov cl: all 5 call sites have rcx ≤ 65 (high bytes zero — first
+/* fe_from_be — cold (3 calls at setup).  _pair entry decodes TWO
+ * consecutive fields: calls fe_from_be (retaddr = next instr = the
+ * add rsi,32 below), so the ret lands on add rsi,32 → falls back
+ * into fe_from_be → that ret goes to _pair's caller.  Two 10-B
+ * call-pair sites become 5 B each.  −5 B net (helper costs 5 B).
+ * mov cl: all entry paths have rcx ≤ 65 (high bytes zero — first
  * call is right after `cmp rcx,65;jne`, rest have rcx=0 from prior
  * loop exit).  −1 B vs push;pop. */
+fe_from_be_pair:
+	call	fe_from_be
+	/* ret lands here — FALLTHROUGH decodes the second field */
 fe_from_be_next:
 	add	rsi, 32
 fe_from_be:
@@ -818,8 +823,7 @@ tv_ecdsa_p256_verify_asm:
 	push	rdi                 /* sig → stack */
 	lea	rdi, [r14+rsi*8-128]  /* r14 + 64·8 − 128 = r14+384 = slot12 */
 	pop	rsi                 /* rsi = sig */
-	call	fe_from_be
-	call	fe_from_be_next     /* rsi+=32; rdi flowed to slot 13 */
+	call	fe_from_be_pair     /* r → slot12, s → slot13; rdi → slot14 */
 
 	/* HASH DECODE here — rdi = slot 14 from sig-decode flowthrough.
 	 * Slot 13 (s) untouched so bc_v1 can check it AND invert it;
@@ -852,8 +856,7 @@ tv_ecdsa_p256_verify_asm:
 	cmp	al, 0x04
 	jne	.Lf2
 	mov	rdi, r14            /* slot 0 */
-	call	fe_from_be
-	call	fe_from_be_next     /* rsi+=32; Qy → slot1.  rdi exits at slot2. */
+	call	fe_from_be_pair     /* Qx → slot0, Qy → slot1; rdi → slot2 */
 
 	/* ONE 16-qword copy: cGX,cGY,cN,cP → slots 2,3,4,5.  G → 2,3
 	 * (survives to Shamir — bc_v1 never writes them).  cN,cP → 4,5

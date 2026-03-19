@@ -15,3 +15,4 @@ a9f95b3,914,4686000,bc_run: mov eax,[rbx] over-reads 4B (was movzx WORD). and ea
 8c4e26d,908,4686000,Drop .Lop5p: geq_p = op5 s1=8 (decoder rsi=r14+256=&cP). INV→op9. Table 11→10. −4 B. 20 B under Thomas.
 797bc4f,904,5165000,.Lop3: dec;jnz→loop (both). Preserves CF for sbb/adc chain. ~70K iters vs mul8's 10M. +10% cyc on size floor. −4 B.
 37176ed,903,5200000,INV dst=slot5: bt [rdi-32] drops REX (was [r8-128]). bc_v1 staging all post-INV (slot0/1 survive). −1 B. 25 B under Thomas.
+PENDING,898,5134000,fe_from_be_pair: call fe_from_be falls through to _next. 2× 10B call-pair → 5B. Helper +5B. −5 B. UNDER 900.
