@@ -125,24 +125,23 @@ cGY:	.quad	0x57ce95560a8571ff, 0xe434a7e55cddf253
 	inc	byte ptr [rdi - 2*K*8] /* middle slot byte 0: all-zero → byte inc ≡ qword inc */
 	ret
 
-.Lfadd:
-	push	K
-	pop	rcx
-1:	lodsq
-	add	rax, [rdx]
-	stosq
-	lea	rdx, [rdx+8]
-	loop	1b
-	ret
-
+/* Fadd/Fsub merged: r8 = ±1 sign, imul the s2 limb. −2 B vs two separate
+ * loops (34→32). r8,r9 clobbered — handler spec allows r8-r11. */
 .Lfsub:
+	push	-1
+	jmp	1f
+.Lfadd:
+	push	1
+1:	pop	r8
 	push	K
 	pop	rcx
-1:	lodsq
-	sub	rax, [rdx]
+2:	lodsq
+	mov	r9, [rdx]
+	imul	r9, r8
+	add	rax, r9
 	stosq
 	lea	rdx, [rdx+8]
-	loop	1b
+	loop	2b
 	ret
 
 /* CHKZ with dst-as-flag: dst=0 → shift (s1≠0) into ebp; dst=1 → shift
@@ -177,9 +176,12 @@ cGY:	.quad	0x57ce95560a8571ff, 0xe434a7e55cddf253
 /* ── NORM — bring value to [0, p). In-place on s1. All 3 bytecode
  * calls encode dst==s1 → bc_run gives rdi==rsi already. .Lcprop's
  * last `add [rdi],rdx` sets SF from the top limb; .Laddm/.Lsubm
- * both fall into .Lcprop so SF is live at every loop head. ── */
+ * both fall into .Lcprop so SF is live at every loop head.
+ *
+ * .Lasmod's cP source = r15 (set in verify to &slot8). Drops the
+ * `mov r8,rdx` preload (−3 B). rdx∈{+1,−1} via push/pop; imul
+ * replaces xor+sub conditional-negate (4 B vs 6 B, −2; .Laddm +1). ── */
 .Lnorm:
-	mov	r8, rdx             /* s2=8 in bytecode → rdx = &cP from bc_run */
 	call	.Lcprop
 1:	jns	2f
 	call	.Laddm
@@ -190,15 +192,15 @@ cGY:	.quad	0x57ce95560a8571ff, 0xe434a7e55cddf253
 	jns	2b
 	/* fall into .Laddm for final add */
 
-.Laddm:                             /* rdx free: NORM ignores bc_run's s2 arg */
-	xor	edx, edx
+.Laddm:
+	push	1
+	pop	rdx
 .Lasmod:
 	push	rdi
-	mov	rsi, r8
+	mov	rsi, r15            /* &cP — set once in verify, preserved everywhere */
 	mov	cl, K               /* rcx = 0 — all paths here came through .Lcprop's loop */
 1:	lodsq
-	xor	rax, rdx
-	sub	rax, rdx
+	imul	rax, rdx            /* rdx ∈ {+1, −1} */
 	add	[rdi], rax
 	scasq
 	loop	1b
@@ -256,8 +258,8 @@ cGY:	.quad	0x57ce95560a8571ff, 0xe434a7e55cddf253
 	pop	rbx
 	ret
 
-.Lfmul: /* MontMul mod p. FALLS THROUGH to fe_mul5. jt offset 247 (< 256). */
-	sub	rcx, SLOT           /* cP = cN − 1 slot (slot 8) */
+.Lfmul: /* MontMul mod p. FALLS THROUGH to fe_mul5. */
+	mov	rcx, r15            /* &cP (r15 set in verify). 3 B vs sub 4 B. */
 	push	1
 	pop	r11
 
@@ -387,36 +389,43 @@ fe_from_le:
  * ====================================================================== */
 
 /* .Lcadd: copy 3 slots → addend, dispatch bc_rcb. rcx = 0 after rep
- * movsq → bcrun_off takes offset in rcx (obc_rcb = 0 for free). */
+ * movsq → bcrun_off takes offset in rcx (obc_rcb = 0 for free).
+ * r15 = r14+oCP = r14+320; oADD=200 → r15−120 (disp8, −3 B). */
 .Lcadd:
-	lea	rdi, [r14 + oADD]
+	lea	rdi, [r15 - (oCP - oADD)]
 	push	3*K
 	pop	rcx
 	rep	movsq
 	jmp	bcrun_off
 
 pt_mul:
-	/* rbp = verify's frame pointer = r14 + FRAME (bc_run push/pops rbp
-	 * so it's restored across .Lcadd). u1 at slot 22 = rbp−88, u2 at
-	 * slot 23 = rbp−48 — both disp8 from rbp. Saves 6 B vs [r14+disp32]. */
-	push	K-1
-	pop	r15
-.Lpo:	push	W-1
-	pop	rbx
+	/* Packed counter: ebx = limb·64 + bit. bt [rbp-88], ebx indexes bit
+	 * ebx of the u1 array (bt spans qwords — unbounded bit addressing).
+	 * Each limb is a qword; useful bits [0,W−1]. Crossing detection:
+	 * (ebx+1) & 63 == 0 iff dec took us from limb·64+0 to (limb−1)·64+63.
+	 * NOT `cmp bl, W` — bl = ebx mod 256, tracks bit-within-limb only
+	 * for limbs {0, K−1} where limb·64 ≡ 0 mod 256.
+	 *
+	 * vs 2-loop: control +3 B; bt −4 B (drops SIB index r15·8 + REX.X).
+	 * Net −1 B. r15 freed for &cP pointer (−7 B net across .Lfmul,
+	 * NORM, .Lcadd, bc_run). rbp = r14+FRAME; u1 at −88. */
+	mov	ebx, (K-1)*64 + (W-1)    /* 4·64+55 = 311 */
 .Lpi:	mov	rsi, r14
 	call	.Lcadd
-	bt	[rbp + r15*8 - (FRAME - oU1)], ebx
+	bt	[rbp - (FRAME - oU1)], ebx
 	jnc	1f
 	lea	rsi, [r14 + oBAK]
 	call	.Lcadd
-1:	bt	[rbp + r15*8 - (FRAME - oU1 - SLOT)], ebx
+1:	bt	[rbp - (FRAME - oU1 - SLOT)], ebx
 	jnc	2f
 	lea	rsi, [r14 + oBAK + 3*SLOT]
 	call	.Lcadd
 2:	dec	ebx
-	jns	.Lpi
-	dec	r15
-	jns	.Lpo
+	lea	eax, [rbx+1]        /* crossed iff (ebx+1) ≡ 0 (mod 64) */
+	test	al, 63
+	jnz	.Lpi
+	sub	ebx, 64-W           /* rebiase: (limb−1)·64+63 → (limb−1)·64+W−1 */
+	jns	.Lpi                /* ebx ≥ 0: more limbs */
 	/* falls through to final check */
 	push	obc_v3
 	pop	rcx
@@ -452,7 +461,7 @@ bcrun_off:
 	and	eax, 0xF
 	mov	al, [r12 + rax]     /* high bytes zero from the `and` above */
 	add	rax, r12
-	lea	rcx, [r14 + oCN]
+	lea	rcx, [r15 + SLOT]   /* &cN = &cP + SLOT (r15 disp8, −3 B vs r14+disp32) */
 	call	rax
 	jmp	.Lbc
 
@@ -533,6 +542,11 @@ tv_ecdsa_p256_verify_asm:
 	mov	rsi, r8             /* hv */
 	call	fe_from_be          /* e  → 7; rdi = slot 8 */
 
+	/* r15 = &cP. Preserved by all handlers + fe_mul5 (never touched);
+	 * pt_mul's packed counter uses ebx only. Reaches oADD (−120),
+	 * oCN (+40), oCP (+0) all disp8. bc_run, .Lfmul, .Lcadd, .Lasmod. */
+	mov	r15, rdi
+
 	/* cP → slot 8, SIGNED limb form: (−1, 2^40, 0, 2^24, 2^32−1).
 	 * p = 2^256 − 2^224 + 2^192 + 2^96 − 1. At W=56: 96=56+40,
 	 * 192=3·56+24, 224=4·56+0, 256=4·56+32 → limb 4 = 2^32 − 2^0.
@@ -548,14 +562,15 @@ tv_ecdsa_p256_verify_asm:
 	inc	byte ptr [rdi - 13]         /* limb 3 byte 3: 0→1 → 2^24 */
 	dec	dword ptr [rdi - 8]         /* limb 4 low dword: 0→0xFFFFFFFF, no REX */
 
-	/* Constants (LE). cN,cR2N,cGX,cGY → 9,10,11,12. Stack-slot counter:
-	 * fe_from_le doesn't push (no call, no frame), so [rsp] stays put. */
+	/* Constants (LE). cN,cR2N,cGX,cGY → 9,10,11,12. rbx counter: the
+	 * 7-byte-stride decoder doesn't touch rbx (no shrd). −1 B vs
+	 * stack-slot (push+dec[rsp]+pop = 6 B → push+pop+dec = 5 B). */
 	lea	rdx, [rip + cN]
 	push	4
+	pop	rbx
 1:	call	fe_from_le
-	dec	byte ptr [rsp]
+	dec	ebx
 	jnz	1b
-	pop	rcx                         /* discard */
 
 	jmp	.Ltail
 

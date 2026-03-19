@@ -125,24 +125,23 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	inc	byte ptr [rdi - 2*K*8] /* middle slot byte 0: all-zero → byte inc ≡ qword inc */
 	ret
 
-.Lfadd:
-	push	K
-	pop	rcx
-1:	lodsq
-	add	rax, [rdx]
-	stosq
-	lea	rdx, [rdx+8]
-	loop	1b
-	ret
-
+/* Fadd/Fsub merged: r8 = ±1 sign, imul the s2 limb. −2 B vs two separate
+ * loops (34→32). r8,r9 clobbered — handler spec allows r8-r11. */
 .Lfsub:
+	push	-1
+	jmp	1f
+.Lfadd:
+	push	1
+1:	pop	r8
 	push	K
 	pop	rcx
-1:	lodsq
-	sub	rax, [rdx]
+2:	lodsq
+	mov	r9, [rdx]
+	imul	r9, r8
+	add	rax, r9
 	stosq
 	lea	rdx, [rdx+8]
-	loop	1b
+	loop	2b
 	ret
 
 /* CHKZ with dst-as-flag: dst=0 → shift (s1≠0) into ebp; dst=1 → shift
@@ -177,9 +176,12 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 /* ── NORM — bring value to [0, p). In-place on s1. All 3 bytecode
  * calls encode dst==s1 → bc_run gives rdi==rsi already. .Lcprop's
  * last `add [rdi],rdx` sets SF from the top limb; .Laddm/.Lsubm
- * both fall into .Lcprop so SF is live at every loop head. ── */
+ * both fall into .Lcprop so SF is live at every loop head.
+ *
+ * .Lasmod's cP source = r15 (set in verify to &slot8). Drops the
+ * `mov r8,rdx` preload (−3 B). rdx∈{+1,−1} via push/pop; imul
+ * replaces xor+sub conditional-negate (4 B vs 6 B, −2; .Laddm +1). ── */
 .Lnorm:
-	mov	r8, rdx             /* s2=8 in bytecode → rdx = &cP from bc_run */
 	call	.Lcprop
 1:	jns	2f
 	call	.Laddm
@@ -190,15 +192,15 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	jns	2b
 	/* fall into .Laddm for final add */
 
-.Laddm:                             /* rdx free: NORM ignores bc_run's s2 arg */
-	xor	edx, edx
+.Laddm:
+	push	1
+	pop	rdx
 .Lasmod:
 	push	rdi
-	mov	rsi, r8
+	mov	rsi, r15            /* &cP — set once in verify, preserved everywhere */
 	mov	cl, K               /* rcx = 0 — all paths here came through .Lcprop's loop */
 1:	lodsq
-	xor	rax, rdx
-	sub	rax, rdx
+	imul	rax, rdx            /* rdx ∈ {+1, −1}: 4 B vs xor+sub 6 B */
 	add	[rdi], rax
 	scasq
 	loop	1b
@@ -240,7 +242,8 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	mov	bl, 254             /* bit 255 implicit (seed = s_mont) */
 .Le:	pop	rsi
 	push	rsi
-	mov	rdx, rsi
+	push	rsi                 /* 2 B vs mov rdx,rsi 3 B */
+	pop	rdx
 	call	.Lnsp               /* rdi←rsi; dst = dst² */
 	bt	dword ptr [rip + cN], ebx   /* cN stored as n−2 */
 	jnc	.Lnx
@@ -256,8 +259,8 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	pop	rbx
 	ret
 
-.Lfmul: /* MontMul mod p. FALLS THROUGH to fe_mul5. jt offset 247 (< 256). */
-	sub	rcx, SLOT           /* cP = cN − 1 slot (slot 8) */
+.Lfmul: /* MontMul mod p. FALLS THROUGH to fe_mul5. */
+	mov	rcx, r15            /* &cP (r15 set in verify). 3 B vs sub 4 B. */
 	push	1
 	pop	r11
 
@@ -359,12 +362,11 @@ fe_mul5:
  * BE chain: exit rsi=src+32, rdi=dst+40 (rdx garbage). */
 
 fe_from_be:
-	lea	rdx, [rdi + 40]
+	lea	rdx, [rdi + 8]      /* in-slot buffer start (what fe_from_le wants) */
 	push	32
 	pop	rcx
 1:	lodsb
-	dec	rdx
-	mov	[rdx], al
+	mov	[rdx+rcx-1], al     /* rcx counts 32→1: writes bytes 31→0 (reversed). 4 B vs dec+mov 5 B. */
 	loop	1b                  /* rsi=src+32, rdx=rdi+8, rcx=0 */
 	/* FALL THROUGH — rsi preserved through fe_from_le (uses ebx,ecx,rdx). */
 
@@ -397,52 +399,68 @@ fe_from_le:
  * ====================================================================== */
 
 /* .Lcadd: copy 3 slots → addend, dispatch bc_rcb. rcx = 0 after rep
- * movsq → bcrun_off takes offset in rcx (obc_rcb = 0 for free). */
+ * movsq → bcrun_off takes offset in rcx (obc_rcb = 0 for free).
+ * r15 = r14+oCP = r14+320; oADD=200 → r15−120 (disp8, −3 B). */
 .Lcadd:
-	lea	rdi, [r14 + oADD]
+	lea	rdi, [r15 - (oCP - oADD)]
 	push	3*K
 	pop	rcx
 	rep	movsq
 	jmp	bcrun_off
 
 pt_mul:
-	/* rbp = verify's frame pointer = r14 + FRAME (bc_run push/pops rbp
-	 * so it's restored across .Lcadd). u1 at slot 22 = rbp−88, u2 at
-	 * slot 23 = rbp−48 — both disp8 from rbp. Saves 6 B vs [r14+disp32]. */
-	push	K-1
-	pop	r15
-.Lpo:	push	W-1
-	pop	rbx
+	/* Packed counter: ebx = limb*64 + bit. bt [rbp-88], ebx indexes bit
+	 * ebx of the u1 array (unbounded — bt spans qwords, dword addressing:
+	 * addr = base + 4*(ebx/32), bit = ebx%32).  ebx = limb*64+bit → same
+	 * physical bit as the old [rbp+r15*8-88],ebx with r15=limb.
+	 *
+	 * Wrap: dec from limb*64+0 → (limb-1)*64+63. Valid ebx has ebx&63
+	 * ∈ [0,53]; only 63 ever appears in [54,63] (exactly after wrap).
+	 * (ebx+1)&63 == 0 ⟺ just wrapped. For limb<4, (limb*64)&0xFF is
+	 * 0/64/128/192 — all have bits 0-5 clear, so test al,63 works.
+	 *
+	 * Setup 5 B vs 7 B. bt 4 B each vs 6 B (drops REX.X SIB). Loop
+	 * control 14 B vs 9 B. Net −1 B. r15 freed for &cP base. */
+	mov	ebx, (K-1)*64 + (W-1)    /* 4*64+53 = 309 */
 .Lpi:	mov	rsi, r14
 	call	.Lcadd
-	bt	[rbp + r15*8 - (FRAME - oU1)], ebx
+	bt	[rbp - (FRAME - oU1)], ebx
 	jnc	1f
 	lea	rsi, [r14 + oBAK]
 	call	.Lcadd
-1:	bt	[rbp + r15*8 - (FRAME - oU1 - SLOT)], ebx
+1:	bt	[rbp - (FRAME - oU1 - SLOT)], ebx
 	jnc	2f
 	lea	rsi, [r14 + oBAK + 3*SLOT]
 	call	.Lcadd
 2:	dec	ebx
+	lea	eax, [rbx+1]        /* eax = pre-dec value */
+	test	al, 63              /* 0 ⟺ pre-dec ebx was limb*64 */
+	jnz	.Lpi
+	sub	ebx, 64-W           /* rebiase: (limb-1)*64+63 → (limb-1)*64+53 */
 	jns	.Lpi
-	dec	r15
-	jns	.Lpo
 	/* falls through to final check */
 	push	obc_v3
 	pop	rcx
 
 bcrun_off:
+	/* bc pointer in rsi (not rbx): lodsw loads+advances in 2 B (was
+	 * mov+add = 6 B). Caller's rsi not preserved — pt_mul/.Ltail set
+	 * rsi before each bcrun_off anyway. rbx preserved passively
+	 * (handlers preserve it, we don't touch) — pt_mul's packed counter
+	 * in ebx survives .Lcadd calls. push/pop rsi in-loop around
+	 * handler (which sets rsi = s1). Net: −4 B.
+	 * lodsw's upper-eax stale bits are harmless: movzx from ah/al
+	 * ignores them; `and eax,0xF` zero-extends to full rax. */
 	push	rbp
-	push	rbx                 /* save first; lea goes straight to rbx */
-	lea	rbx, [rip + bc_rcb]
-	add	rbx, rcx            /* offset in rcx — .Lcadd has rcx=0 from rep movsq */
+	lea	rsi, [rip + bc_rcb]
+	add	rsi, rcx            /* offset in rcx — .Lcadd has rcx=0 from rep movsq */
 	xor	ebp, ebp
 	/* r12 = &.Ljt inherited from verify; fe_mul5 preserves it. */
 .Lbc:
-	mov	eax, [rbx]          /* over-read 2 B — and eax,0xF later clears */
-	add	rbx, 2
+	lodsw                       /* ax = [rsi]; rsi += 2 */
 	test	al, al
 	jz	.Lbce
+	push	rsi                 /* save bc ptr — handler sets rsi to s1 */
 
 	movzx	edi, ah
 	mov	esi, edi
@@ -462,13 +480,13 @@ bcrun_off:
 	and	eax, 0xF
 	mov	al, [r12 + rax]     /* high bytes zero from the `and` above */
 	add	rax, r12
-	lea	rcx, [r14 + oCN]
+	lea	rcx, [r15 + SLOT]   /* &cN = &cP + SLOT (r15 disp8, −3 B vs r14+disp32) */
 	call	rax
+	pop	rsi                 /* restore bc ptr */
 	jmp	.Lbc
 
 .Lbce:	neg	ebp
 	sbb	eax, eax
-	pop	rbx
 	pop	rbp
 	ret
 
@@ -528,20 +546,28 @@ tv_ecdsa_p256_verify_asm:
 	shr	r13, 64-W           /* MASK = 2^54−1; movabs is 10 B, this is 8 */
 	lea	r12, [rip + .Ljt]   /* jump table — preserved by handlers + fe_mul5 */
 
-	push	rdi                 /* sig — r8 (hv) is untouched by fe_from_be */
-
 	/* BE chain at slot 3 (3*SLOT = 120: disp8). Qx,Qy,r,s,e → 3..7.
-	 * rdi ends at slot 8, ready for LE constants. The bc_v1 layout
-	 * stages all 8 Shamir values at slots 0..7 → one rep movsq. */
+	 * 2-pair loop for pub (Qx,Qy) then sig (r,s): push both sources,
+	 * pop per iteration. fe_from_be chains rsi +32. −2 B vs unrolled. */
+	push	rdi                 /* sig — popped in iteration 2 */
 	lea	rsi, [rdx + 1]
+	push	rsi                 /* pub+1 — popped in iteration 1 */
 	lea	rdi, [r14 + 3*SLOT]
-	call	fe_from_be          /* Qx → 3 */
-	call	fe_from_be          /* Qy → 4 */
-	pop	rsi                 /* sig */
-	call	fe_from_be          /* r  → 5 */
-	call	fe_from_be          /* s  → 6 */
+	push	2
+	pop	rcx
+1:	pop	rsi
+	push	rcx
+	call	fe_from_be          /* iter1: Qx,Qy → 3,4. iter2: r,s → 5,6. */
+	call	fe_from_be
+	pop	rcx
+	loop	1b
 	mov	rsi, r8             /* hv */
 	call	fe_from_be          /* e  → 7; rdi = slot 8 */
+
+	/* r15 = &cP. Preserved by all handlers + fe_mul5 (never touched).
+	 * Reaches oADD (−120), oCN (+40), oCP (+0) all disp8. Used by
+	 * bc_run, .Lfmul, .Lcadd, .Lasmod. Frees pt_mul's r15 counter. */
+	mov	r15, rdi
 
 	/* cP → slot 8, SIGNED limb form: (−1, 2^42, 0, 2^30, 2^40−256).
 	 * p = 2^256 − 2^224 + 2^192 + 2^96 − 1 — five ±power-of-2 terms.
@@ -557,14 +583,15 @@ tv_ecdsa_p256_verify_asm:
 	mov	byte ptr [rdi - 13], 0x40   /* limb 3 byte 3: 2^30 */
 	dec	dword ptr [rdi - 7]         /* limb 4 bytes 1-4: 2^40−256 = 0x00FFFFFFFF00 */
 
-	/* Constants (LE). cN,cR2N,cGX,cGY → 9,10,11,12. Stack-slot counter:
-	 * fe_from_le doesn't push (no call, no frame), so [rsp] stays put. */
+	/* Constants (LE). cN,cR2N,cGX,cGY → 9,10,11,12. rcx=0 from rep
+	 * stosd above (cP patches don't touch it) → mov cl,4 is 2 B and
+	 * safe. push/pop around call since fe_from_le clobbers rcx. */
 	lea	rdx, [rip + cN]
-	push	4
-1:	call	fe_from_le
-	dec	byte ptr [rsp]
-	jnz	1b
-	pop	rcx                         /* discard */
+	mov	cl, 4
+1:	push	rcx
+	call	fe_from_le
+	pop	rcx
+	loop	1b
 
 	jmp	.Ltail
 

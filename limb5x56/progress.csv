@@ -1,2 +1,3 @@
 commit,bytes,cycles,note
 # 5×56 signed-limb Montgomery. Forked from limb5x54. See CONVERSION.md.
+de151cc,1125,3040902,Phase 1: 607/607. 7-byte decoder (-13) + inc-byte cP (-3). Already < limb5x54 1141.
