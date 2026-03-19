@@ -103,9 +103,9 @@ bc_v1:
 	.byte	0x0b, 0x24  /* COPYHI  2 ←  4,  0 */
 	.byte	0x0b, 0x46  /* COPYHI  4 ←  6,  0 */
 	.byte	0x0b, 0x60  /* COPYHI  6 ←  0,  0 */
-	.byte	0x0c, 0x00  /* ZERO    0 ←  0,  0 */
+	.byte	0x02, 0x00  /* Fsub    0 ←  0,  0 */
 	.byte	0x08, 0x10  /* SET1    1 ←  0,  0 */
-	.byte	0x0c, 0x20  /* ZERO    2 ←  0,  0 */
+	.byte	0x22, 0x22  /* Fsub    2 ←  2,  2 */
 	.byte	0x00  /* END */
 	/* 87 B */
 

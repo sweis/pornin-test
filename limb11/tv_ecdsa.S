@@ -85,7 +85,6 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	.byte	.Lfmul-.Ljt, .Lfadd-.Ljt, .Lfsub-.Ljt, .Lnmul-.Ljt
 	.byte	.Lchklt-.Ljt, .Lchkz-.Ljt, .Linv-.Ljt, .Lnorm-.Ljt
 	.byte	.Lset1-.Ljt, .Lcopy-.Ljt, .Lchknz-.Ljt, .Lcopyhi-.Ljt
-	.byte	.Lzero-.Ljt
 
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cP.
@@ -118,14 +117,10 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	rep	movsq
 	ret
 
-.Lzero: /* dst = {0, 0, ..., 0}.  Shares tail with SET1. */
-	xor	eax, eax
-	jmp	.Lset_limb0
-.Lset1: /* dst = {1, 0, ..., 0}. */
+.Lset1: /* dst = {1, 0, ..., 0}.  (ZERO dropped — Fsub(x,x)=0 in bytecode.) */
 	push	1
 	pop	rax
-.Lset_limb0:
-	stosq                       /* limb 0 = rax, rdi → limb 1 */
+	stosq
 	xor	eax, eax
 	push	K-1
 	pop	rcx

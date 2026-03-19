@@ -26,10 +26,10 @@ import sys
 
 # MULR2 = Fmul with s2=15 (bc_run already sets rdx). SQR never used.
 # COPYHI: dst nibble means slot(dst+16) — reaches Shamir backup slots.
-# ZERO/SET1: write 0 or 1 to limb 0, zero the rest. Shared tail.
+# ZERO dropped — Fsub(x,x)=0 (slots hold valid values at init time).
 OPS = {'Fmul':0, 'Fadd':1, 'Fsub':2, 'Nmul':3,
        'CHKLT':4, 'CHKZ':5, 'INV':6, 'NORM':7,
-       'SET1':8, 'COPY':9, 'CHKNZ':10, 'COPYHI':11, 'ZERO':12}
+       'SET1':8, 'COPY':9, 'CHKNZ':10, 'COPYHI':11}
 
 # cR2_p DROPPED — projective scale-invariance. Q stays plain (level 0),
 # G scales by Gx_mont: backup = (Gx², Gx·Gy, Gx_mont), all level 1.
@@ -218,9 +218,9 @@ V3 = [
 READS  = {'Fmul':(1,2), 'Fadd':(1,2), 'Fsub':(1,2),
           'Nmul':(1,2), 'CHKLT':(1,2), 'CHKZ':(1,), 'INV':(0,1),
           'NORM':(1,), 'SET1':(), 'COPY':(1,), 'CHKNZ':(1,),
-          'COPYHI':(1,), 'ZERO':()}
+          'COPYHI':(1,)}
 WRITES = {'Fmul', 'Fadd', 'Fsub', 'Nmul', 'INV',
-          'NORM', 'SET1', 'COPY', 'ZERO'}
+          'NORM', 'SET1', 'COPY'}
 
 def simulate(name, ops, initial, must_survive):
     """Track what each slot holds. Flag reads of dead slots and
