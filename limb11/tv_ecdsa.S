@@ -214,15 +214,16 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	/* Subtract m until negative, then add m once. .Lsubm inlined:
 	 * its only caller; 6-B body + 5-B call → 9-B inline = −2 B. */
 2:	push	-1
-	pop	r9
+	pop	rdx                 /* non-REX pop (−1 B vs pop r9) */
 	call	.Lasmod
 	test	byte ptr [rdi + K*8 - 1], 0x80
 	jz	2b
 	/* fall into .Laddm for the final add; its tail ret returns. */
 
-.Laddm:	/* [rdi] += [r8], carry-prop.  xor/sub r9 is a no-op when r9=0,
-	 * two's-complement negate when r9=−1 — shared body for add/sub. */
-	xor	r9d, r9d
+.Laddm:	/* [rdi] += [r8], carry-prop.  rdx ∈ {0,−1} flag: xor/sub is a no-op
+	 * when 0, two's-complement negate when −1. NORM's bc_run s2 arg is
+	 * always 0 (unused) so rdx is free — saves REX on xor and pop. */
+	xor	edx, edx
 	/* falls through */
 .Lasmod:
 	push	rdi
@@ -230,8 +231,8 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	push	K
 	pop	rcx
 1:	lodsq
-	xor	rax, r9
-	sub	rax, r9
+	xor	rax, rdx
+	sub	rax, rdx
 	add	[rdi], rax
 	scasq
 	loop	1b
