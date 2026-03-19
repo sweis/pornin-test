@@ -1081,7 +1081,8 @@ taught something about where the bytes actually go.
 
 \subsection{What a limb is and why its width matters}
 
-A 256-bit integer doesn't fit in a machine register, so it's stored
+A 256-bit integer doesn't fit in a general-purpose register --- the
+64-bit kind you can \texttt{add} and \texttt{mul} --- so it's stored
 as an array of $K$ smaller pieces --- \emph{limbs} --- of $W$ bits
 each, with $K \cdot W \ge 256$. The slack $K \cdot W - 256$ is
 headroom for carries to accumulate between reductions --- a style
