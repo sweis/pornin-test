@@ -8,3 +8,10 @@ b5c8326,930,4686000,op6/op7 sense via opcode bit0: xor al,[rbx-2];and al,1 (5B) 
 ca8d294,922,4686000,r12=&.Ljt hoisted to verify + bytecode→.text. bc_run drops push/pop/lea r12 (−11). verify +11. cGX lea [r12+oGX] disp8 (−2). bcrun_off SIB lea [r12+rdi+bc_rcb-.Ljt] (−2). −4 B.
 b11ebda,920,4686000,bcrun_off: lea directly into rbx after save-push. Drops push rdi;pop rbx. −2 B.
 2f5d9a9,916,4686000,block-copy 24 qw (was 12): rdi lands AT slot8 — drops lea rdi,[rdi+96]. Junk in 5,6,7 harmless (never read before staged). −4 B.
+17e1c1e,915,4686000,lea [r14+rsi*8-128] replaces imul+add: rsi=64, 64·8−128=384. −128 is exact disp8 floor. −1 B.
+a9f95b3,914,4686000,bc_run: mov eax,[rbx] over-reads 4B (was movzx WORD). and eax,0xF clears garbage bits 16-31. −1 B.
+9bd05db,913,4686000,hv_len check: sub r9,rcx (rcx=65 from prior cmp,jne) saves an imm8. Range r9-65∈[-33,-1]. −1 B.
+92f0fd1,912,4686000,.Lop3: push 4;pop rcx. CF=0 on all entries (add rax,r12 / P−s2 no-borrow / add rsp,72); xor's CF-clear redundant. −1 B.
+8c4e26d,908,4686000,Drop .Lop5p: geq_p = op5 s1=8 (decoder rsi=r14+256=&cP). INV→op9. Table 11→10. −4 B. 20 B under Thomas.
+797bc4f,904,5165000,.Lop3: dec;jnz→loop (both). Preserves CF for sbb/adc chain. ~70K iters vs mul8's 10M. +10% cyc on size floor. −4 B.
+37176ed,903,5200000,INV dst=slot5: bt [rdi-32] drops REX (was [r8-128]). bc_v1 staging all post-INV (slot0/1 survive). −1 B. 25 B under Thomas.

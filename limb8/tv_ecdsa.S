@@ -1,7 +1,7 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 949 B default build; 935 B with -DSMALL_MUL8.  The SMALL_MUL8 knob
+ * 917 B default build; 903 B with -DSMALL_MUL8.  The SMALL_MUL8 knob
  * trades −14 B for ~+30% cycles — `scasd` stays (the real size win),
  * `loop` is gone.  cP built at runtime (r8 = &cP, slot22 = rbp−40).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
@@ -36,11 +36,11 @@
  * BYTECODE INTERPRETER
  *
  *   2-byte ops over 22 stack slots (16 work + 6 backup).  Nibble
- *   encoding: byte1 = (s2<<4)|op, byte2 = (dst<<4)|s1.  9 handlers
+ *   encoding: byte1 = (s2<<4)|op, byte2 = (dst<<4)|s1.  8 handlers
  *   in a u8 jump table right before the constants — &cP and &cN
  *   are disp8-reachable from r12 (= &.Ljt).  .Lop8 (fe_inv_m, the
- *   biggest handler) lands at offset 252/255 — 3 B headroom since
- *   Fmul's jmp went rel8.  Streams: bc_rcb (88B), bc_v3 (16B), bc_v1 (60B).
+ *   biggest handler) lands at offset 217/255 — 38 B headroom.
+ *   Streams: bc_rcb (88B), bc_v3 (16B), bc_v1 (60B).
  *
  * KEY INVARIANTS
  *
