@@ -227,8 +227,7 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 .Lasmod:
 	push	rdi
 	mov	rsi, r15            /* &cP — set once in verify */
-	push	K
-	pop	rcx
+	mov	cl, K               /* rcx=0 — all entry paths came through .Lcprop's loop */
 1:	lodsq
 	imul	rax, rdx
 	add	[rdi], rax
@@ -359,8 +358,7 @@ fe_mul11:
  * region [8i,8i+8) trails read region [56+3i,56+3i+4) by 5i−56 ≥ 0
  * for i < 11, so in-place is safe. Exits rsi = src+32, rdi = dst+88. */
 fe_from_be:
-	push	32
-	pop	rcx
+	mov	cl, 32              /* rcx ∈ {65,0} at entry (pub_len or fe_from_le exit) — high bytes clean */
 1:	lodsb
 	mov	[rdi + rcx + 55], al  /* rcx 32→1 → rdi+87→rdi+56. SIB+disp8. */
 	loop	1b
@@ -371,8 +369,7 @@ fe_from_be:
 	ret
 
 fe_from_le:
-	push	K-1
-	pop	rcx
+	mov	cl, K-1             /* rcx ∈ {0,1,2,3} — fe_from_be loop, rep stosq, or LE-loop counter */
 1:	lodsd                       /* 1 B; rsi += 4 */
 	dec	rsi                 /* net +3. Beats mov eax,[rsi]+add rsi,3 by 2 B */
 	and	eax, MASK
@@ -534,8 +531,7 @@ tv_ecdsa_p256_verify_asm:
 	 * at slot 9.  fe_mul11/NORM arithmetic is already signed; CHKLT
 	 * changed to Fsub-based to handle this. */
 	xor	eax, eax
-	push	K
-	pop	rcx
+	mov	cl, K               /* rcx=0 — fe_from_le's loop exit */
 	rep	stosq               /* all zero; rdi → slot 9 */
 	dec	qword ptr [rdi - 88]   /* limb 0 = −1 */
 	inc	byte ptr [rdi - 56]    /* limb 4 = 1 (byte inc — slot is zeroed) */
@@ -549,8 +545,7 @@ tv_ecdsa_p256_verify_asm:
 	lea	rsi, [rip + cN]
 	call	fe_from_le          /* cN (= n−2) → 9; rdi now at slot 10 */
 	add	byte ptr [rdi - SLOT], 2   /* slot 9 limb 0: 0x63254f → 0x632551 */
-	push	3                   /* loop cR2_n, cGX, cGY — fe_from_le zeroes */
-	pop	rcx                 /*   rcx (loop decrements) so push/pop each */
+	mov	cl, 3               /* rcx=0 — fe_from_le exit. Loop cR2_n, cGX, cGY. */
 1:	push	rcx
 	call	fe_from_le
 	pop	rcx
