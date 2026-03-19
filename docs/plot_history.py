@@ -137,16 +137,13 @@ TRAIL = [
     (3265, 570, "fast2.S — BEATS fast.S"),
 ]
 
-# Thomas's track: v1–v7.  v7 (928B, 5×54 signed limbs) takes the size
-# corner — tiny.S 933 no longer dominates.  v7 is ON the frontier.
+# Thomas's track: v1–v7.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
                 (989, 4150), (955, 4325), (928, 4482)]
-THOMAS    = (928, 4482)     # v7 — 5×54, ON the frontier now
+THOMAS    = (928, 4482)     # v7 — ON the frontier
 CLAUDE    = (933, 4674)     # 20-run median; WAS size corner
 
-# limb11 (11×24 Montgomery) and limb5 (5×54 Montgomery) tracks —
-# read from progress.csv so they stay current.  Cycles in raw kcyc
-# (this machine; tiny.S ≈ 3500K here vs chart's nominal 3608K, close).
+# Montgomery tracks — read from progress.csv so they stay current.
 def read_progress_csv(path):
     import csv
     out = []
@@ -160,7 +157,8 @@ def read_progress_csv(path):
     return out
 
 LIMB11_TRACK = read_progress_csv('limb11/progress.csv')
-LIMB5_TRACK  = read_progress_csv('limb5/progress.csv')
+LIMB5X54_TRACK = read_progress_csv('limb5x54/progress.csv')
+LIMB5X56_TRACK = read_progress_csv('limb5x56/progress.csv')
 LIMB8_TRACK  = read_progress_csv('limb8/progress.csv')
 
 # Join TRAIL + limb8 (limb8 IS the tiny.S continuation). Filter to self-
@@ -193,7 +191,7 @@ def pareto(pts):
     return front
 
 ALL_XY = ([(b, c) for b, c, _ in TRAIL_SHOWN] + THOMAS_TRACK
-          + LIMB11_TRACK + LIMB5_TRACK)
+          + LIMB11_TRACK + LIMB5X54_TRACK + LIMB5X56_TRACK)
 FRONT = pareto(ALL_XY)
 
 # ======================================================================
@@ -237,7 +235,7 @@ ax.scatter(px, py, c='#c41e3a', s=20, marker='o',
 ttx = [p[0] for p in THOMAS_TRACK]
 tty = [p[1] for p in THOMAS_TRACK]
 ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.2, zorder=4,
-        label='Thomas (5×54 from v7)')
+        label='Thomas')
 ax.scatter(ttx, tty, c='#2e8b57', s=25, marker='o',
            edgecolors='#1a5235', linewidths=0.6, zorder=5)
 ax.annotate(f'Thomas v7 — {THOMAS[0]}B', THOMAS,
@@ -261,20 +259,33 @@ if LIMB11_TRACK:
                 bbox=dict(boxstyle='round,pad=0.3', fc='#e8d5ff',
                 ec='#8a2be2', lw=0.8))
 
-# limb5 (5×54 signed-limb Montgomery) — teal.  Same arch as Thomas.
-# Baseline already ~4× faster than limb11 (K²=25 vs 121 products).
-if LIMB5_TRACK:
-    l5x = [p[0] for p in LIMB5_TRACK]
-    l5y = [p[1] for p in LIMB5_TRACK]
+# limb5x54 (5×54 signed-limb Montgomery) — teal.
+if LIMB5X54_TRACK:
+    l5x = [p[0] for p in LIMB5X54_TRACK]
+    l5y = [p[1] for p in LIMB5X54_TRACK]
     ax.plot(l5x, l5y, '-', color='#008b8b', linewidth=1.4, zorder=4,
-            label='limb5 (5×54)')
+            label='limb5x54 (5×54)')
     ax.scatter(l5x, l5y, c='#008b8b', s=50, marker='s',
                edgecolors='#005555', linewidths=0.7, zorder=5)
-    tip = LIMB5_TRACK[-1]
-    ax.annotate(f'limb5 — {tip[0]}B', tip,
+    tip = LIMB5X54_TRACK[-1]
+    ax.annotate(f'5×54 — {tip[0]}B', tip,
                 textcoords="offset points", xytext=(10, -12), fontsize=9,
                 bbox=dict(boxstyle='round,pad=0.3', fc='#d0f0f0',
                 ec='#008b8b', lw=0.8))
+
+# limb5x56 (5×56 signed-limb Montgomery) — dark cyan. Byte-aligned decode.
+if LIMB5X56_TRACK:
+    l6x = [p[0] for p in LIMB5X56_TRACK]
+    l6y = [p[1] for p in LIMB5X56_TRACK]
+    ax.plot(l6x, l6y, '-', color='#006666', linewidth=1.4, zorder=4,
+            label='limb5x56 (5×56)')
+    ax.scatter(l6x, l6y, c='#006666', s=50, marker='^',
+               edgecolors='#003333', linewidths=0.7, zorder=5)
+    tip = LIMB5X56_TRACK[-1]
+    ax.annotate(f'5×56 — {tip[0]}B', tip,
+                textcoords="offset points", xytext=(10, 8), fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', fc='#c0e8e8',
+                ec='#006666', lw=0.8))
 
 ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
