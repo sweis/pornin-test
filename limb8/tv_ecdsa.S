@@ -367,31 +367,36 @@ pt_mul:
  * in .text now, so bc_rcb−.Ljt is a same-section assembly-time
  * constant usable as disp32.  lea targets rbx DIRECTLY (after the
  * save push) — drops push rdi; pop rbx.  8+2 → 8.  −2 B. */
+/* bcptr in RSI (was rbx): lodsw (2B) reads ax and advances rsi
+ * by 2 — drops `add rbx,2` (4B).  rbx is now UNUSED in bc_run
+ * (handlers preserve it: fe_mul_m/fe_inv_m push/pop it, others
+ * don't touch).  Outer rbx=slot16 survives WITHOUT push/pop
+ * here (−2B).  rsi clobbered by decoder → push/pop around
+ * call (+2B).  .Lop6's xor al,[rbx-2] → xor al,r9b (stash
+ * byte0 in r9d fresh each iter, +3B; r9 caller-saved, only
+ * fe_mul_m clobbers but .Lop6 never calls it).  Net: −4+3+2−2
+ * = −1 B.  lodsw doesn't zero-extend (16-bit op) but `and
+ * eax,0xF` clears the garbage; movzx edi/edx read ah/al only. */
 bcrun_r14:
 bcrun_off:
 	push	rbp
-	push	rbx
-	lea	rbx, [r12 + rdi + bc_rcb - .Ljt]
+	lea	rsi, [r12 + rdi + bc_rcb - .Ljt]
 	/* r14 = slot base, r12 = &.Ljt (both inherited).  Check
 	 * accumulator in ebp (no REX).  Only bpl is ever OR'd; upper
 	 * bytes stay zero from the xor.  r12-r14 not clobbered. */
 	xor	ebp, ebp
 .Lbc:
-	mov	eax, [rbx]          /* 2 B — over-reads 4 bytes.  Bits 16-31 are
-	                             * next-op garbage; `and eax,0xF` clears them
-	                             * and movzx edi/edx read only ah/al.  All
-	                             * reads stay in .text (bc_v1 terminator +3
-	                             * reaches fe_from_be_next code bytes). */
-	add	rbx, 2
+	lodsw                       /* ax = [rsi], rsi += 2.  66 AD = 2 B. */
+	mov	r9d, eax            /* stash byte0 for .Lop6's sense xor */
 	/* END is byte1=0x00.  The two ops that naturally encode as
 	 * s2=0/op=0 (bc_rcb 0x00,0x0b; bc_v1 0x00,0xbb) are commuted
 	 * (Fmul commutes) so byte1≠0.  Terminator drops to 1 B × 3
-	 * streams = −3 B.  The dword read past the terminator is the
-	 * next stream's first op (or code bytes past bc_v1) — ah/bits
-	 * 16-31 dead on the jz-taken path, doesn't matter. */
+	 * streams = −3 B.  lodsw reads exactly 2 B — terminator byte +
+	 * next byte (ah = next stream's byte0 or code; dead on jz). */
 	test	al, al
 	jz	.Lbce
 
+	push	rsi                 /* save bcptr — decoder clobbers rsi */
 	/* Nibble layout: al=(s2<<4)|op, ah=(dst<<4)|s1.  Straight-line
 	 * decode: no push/pop, no loop.  Slot stride is 32 bytes; a
 	 * nibble in bits [7:4] is already ×16, so lea scale-2 finishes it.
@@ -419,12 +424,12 @@ bcrun_off:
 	 * r8 caller-saved but never clobbered in the call tree. */
 	mov	rcx, r8
 	call	rax
+	pop	rsi                 /* restore bcptr */
 	jmp	.Lbc
 
 /* NEG sets CF=1 iff operand was nonzero.  pops/ret preserve flags —
  * callers branch on CF directly. */
 .Lbce:	neg	ebp
-	pop	rbx
 	pop	rbp
 	ret
 
@@ -491,7 +496,7 @@ cN:	.quad 0xf3b9cac2fc632551, 0xbce6faada7179e84
 	xor	eax, eax
 	repe	scasq
 	sete	al
-	xor	al, [rbx-2]
+	xor	al, r9b             /* r9b = byte0 (stashed in bc_run); bit0=op bit0 */
 	and	al, 1
 .Lor:	or	bpl, al
 	ret
