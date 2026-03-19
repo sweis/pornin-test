@@ -49,7 +49,7 @@
 \begin{abstract}\noindent
 This report walks through how an ECDSA/P-256 signature verifier was
 shrunk from \bytes{3076} of portable C down to \bytes{890} of x86-64
-machine code --- a factor of 3.4$\times$. The target context is a
+machine code --- a factor of 3.5$\times$. The target context is a
 boot~ROM: the code must fit in a tiny mask-programmed memory, has no
 libc, and verifies exactly one signature before jumping to firmware.
 Every byte in a boot~ROM is paid for in silicon.
@@ -207,7 +207,7 @@ a function for field-multiply, a function for field-add, a function
 for field-subtract, and then \texttt{pt\_dbl} and \texttt{pt\_add}
 calling them in sequence.
 
-On x86-64, calling a three-argument function costs about 15 bytes:
+On x86-64, calling a three-argument function costs about 17 bytes:
 \begin{lstlisting}[language={[x86masm]Assembler}]
     lea   rdi, [r14 + 32*DST]    ; 4 bytes (or 7 if disp > 127)
     lea   rsi, [r14 + 32*SRC1]   ; 4 bytes
@@ -320,7 +320,7 @@ slide a 9-word window from the top down. At each position $j$:
 
 Why is $q = t[j{+}8]$ a good quotient estimate? Because $m$'s top
 word is $2^{32}-1$, the true quotient
-$\lfloor t_{\text{window}} / m \rfloor$ is within 1 of
+$\lfloor t_{\text{window}} / m \rfloor$ (the brackets mean round down) is within 1 of
 $\lfloor t_{\text{window}} / 2^{256} \rfloor = t[j{+}8]$.
 
 Concretely: write the window as $W = q \cdot 2^{256} + L$ with
@@ -370,8 +370,10 @@ the reduce stayed at 32-bit granularity. This is why
 \section{The projective final check: deleting an inversion}
 \label{sec:projcheck}
 
-\noindent\emph{From \bytes{1216} to \bytes{1195}. One of those rare
-wins that's both smaller and faster.}
+\noindent\emph{From \bytes{1216} to \bytes{1195}. (Table~\ref{tab:journey}
+attributes \bytes{105} to this milestone: the gap from \bytes{1300} is
+micro-grind between milestones; this section covers the final idea.)
+One of those rare wins that's both smaller and faster.}
 
 \subsection{Where the mod-$p$ inversion was hiding}
 
@@ -408,11 +410,13 @@ check becomes:
   \quad\textsc{or}\quad
   X \equiv (r+n) \cdot Z \pmod p.
 \]
-When $r \ge p - n$ --- a roughly $2^{-128}$ sliver of the $r$ range
---- the sum $r + n$ wraps around mod~$p$ and the second disjunct
-tests a spurious value. That's harmless: forcing the scalar
-multiplication to land on a \emph{specific} spurious point is as hard
-as the discrete log problem the whole scheme rests on.
+When $r < p - n$ --- a roughly $2^{-128}$ sliver of the $r$ range,
+since $p - n$ is only a 127-bit number --- the second disjunct is
+genuinely needed. The rest of the time $r + n$ wraps around mod~$p$
+and the second disjunct tests a spurious value. That's harmless:
+forcing the scalar multiplication to land on a \emph{specific}
+spurious point is as hard as the discrete log problem (the hard
+mathematical problem ECDSA's security rests on).
 
 \subsection{Folding the \textsc{or} into a multiply}
 
@@ -611,7 +615,8 @@ The trick needs backup copies of both $G$ and $Q$ that survive the
 whole loop, because the ``working'' addend slots get overwritten.
 After the RCB switch, each point is 3 slots $(X, Y, Z)$. So the
 setup is: copy $G$ (3 slots) and $Q$ (3 slots) to backup slots
-16--21.
+16--21. (These live outside the bytecode's 4-bit addressable range
+--- only native code touches them.)
 
 The naive setup was three separate copies: $G$'s $X,Y$ from one
 place, a borrowed $Z=1$ from another, $Q$ from a third. About 28
@@ -962,8 +967,8 @@ Coordinate-system mismatch     & \spent{33} & Needs a mod-$p$ inversion back \\
 \end{center}
 
 The bytecode saving is real --- RCB's 43-operation complete formula
-compresses to \bytes{87}, and the two simpler incomplete formulas
-together compress to \bytes{80}. Seven bytes is the cost of
+compresses to \bytes{88}, and the two simpler incomplete formulas
+together compress to \bytes{80}. Eight bytes is the cost of
 completeness at the bytecode level. That is astonishingly cheap.
 
 Everything else is infrastructure we already have for free and would
@@ -1022,7 +1027,8 @@ Two standard speedups for scalar multiplication:
   any point by a fixed large constant almost for free --- and you can
   split a 256-bit scalar into two 128-bit halves, halving the loop.
   P-256 has no such endomorphism. This is a property of the curve's
-  algebraic structure (its $j$-invariant) and is not fixable.
+  algebraic structure (a number called the $j$-invariant that
+  classifies curves by their endomorphism ring) and is not fixable.
 \item Recoding the scalar in a sparser base (non-adjacent form, window
   methods) reduces the number of additions, because more digits are
   zero. This saves arithmetic operations --- but our bytecode is two
@@ -1211,7 +1217,7 @@ is longer because there are more limbs to walk.
 \paragraph{$5 \times 54$.} Twenty-five multiplies. The $K^2$ scaling
 wins decisively on arithmetic count. But 54-bit limbs mean 108-bit
 products, handled as \texttt{rdx:rax} pairs, and the reduction
-involves 128-bit-wide shift-and-add chains. And 54 doesn't divide 8:
+involves 128-bit-wide shift-and-add chains. And 54 is not a multiple of 8:
 decoding a big-endian input into 54-bit limbs requires loading a
 word, shifting by a variable amount, and masking --- a bit-twiddling
 loop that the byte-granular tracks don't need.
@@ -1219,7 +1225,7 @@ loop that the byte-granular tracks don't need.
 \paragraph{$5 \times 56$.} Same $K=5$ as above, so the same 25
 multiplies and the same $c_p = 1$. The difference is that 56 bits is
 exactly 7 bytes. Decoding a 56-bit limb from a byte buffer is an
-unaligned 8-byte load followed by an 8-bit mask --- no variable shift
+unaligned 8-byte load followed by masking off the top byte --- no variable shift
 loop, no bit-offset bookkeeping. Two extra bits of width per limb
 buys back a chunk of the parsing machinery for nearly nothing, and
 $56 < 96$ so the Montgomery constant is still 1.
@@ -1354,7 +1360,7 @@ Peter L.\ Montgomery.
 Mathematics of Computation, 44(170):519--521, 1985.
 
 \bibitem{wycheproof}
-Google Security Team.
+Google Security Team (now community-maintained under C2SP).
 \textit{Project Wycheproof: Testing crypto libraries against known attacks}.
 \url{https://github.com/C2SP/wycheproof}
 
@@ -1378,8 +1384,9 @@ throughputs and micro-operation breakdowns}.
 \bibitem{hamburg}
 Mike Hamburg.
 \textit{Faster Montgomery and double-add ladders for short Weierstrass curves}.
-Talk at ECC 2015, Bordeaux.
-\url{http://ecc2015.math.u-bordeaux1.fr/documents/hamburg.pdf}
+IACR Transactions on Cryptographic Hardware and Embedded Systems
+2020(4):189--208. IACR ePrint 2020/437.
+\url{https://eprint.iacr.org/2020/437}
 
 \bibitem{p256m}
 Manuel P\'egouri\'e-Gonnard.
