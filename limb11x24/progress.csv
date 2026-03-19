@@ -36,3 +36,4 @@ b1faca3,1094,12200000,limb5x56 ports: r15=&cP (−5) + packed-ebx bit counter w/
 6a141ae,1074,12090000,shr-bitmask BE loop: r,s,Qx,Qy,e chain slots 3..7. bc_v1 reorder consumes r,s early. Port from limb5x56.
 HEAD,1071,12090000,cqo+not merge .Lnorm two loops→one. Terminate: or edx,eax SF=0 ⇔ added∧≥0. .Laddm gone. xor+sub .Lasmod (+2). Net −3.
 HEAD,1077,4080000,FAST build (-DFAST): .Lin scasq→add rdi + loop→dec;jnz (+4); Fadd/Fsub loop→dec;jnz (+2). −64% cycles. imul latency hidden by OoO — separate Fadd/Fsub tested same speed.
+HEAD,1070,12090000,stosq;ret suffix share: fe_from_le jmp rel8 back 43 B to .Lcp_shared tail. Native-gadget sweep finding.

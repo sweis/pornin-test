@@ -351,6 +351,7 @@ fe_mul11:
 	loop	1b
 	lodsq
 	add	rax, rdx
+.Lstret:	/* fe_from_le jmps here — stosq;ret shared (native-gadget sweep) */
 	stosq
 	ret
 
@@ -378,8 +379,7 @@ fe_from_le:
 	loop	1b
 	xor	eax, eax
 	lodsw                       /* ax ← top 16 bits; rsi += 2 (chain) */
-	stosq
-	ret
+	jmp	.Lstret             /* rel8 back 43 B — stosq;ret shared (−1 B) */
 
 /* ======================================================================
  * bc_run — bytecode interpreter
