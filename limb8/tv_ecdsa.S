@@ -653,19 +653,26 @@ fe_mul_m:
 	/* 64-BIT SCHOOLBOOK (default): 4×4 qword muls.  Same 512-bit
 	 * product as 32-bit; reduce stays 32-bit regardless (q=t[top]
 	 * trick needs top DWORD = -1, top qword isn't).  REX on every
-	 * op grows the body but 16 iterations vs 64 wins net. */
-	push	-32
-	pop	r11
+	 * op grows the body but 16 iterations vs 64 wins net.
+	 *
+	 * COUNTDOWN r11 = i·W: drops disp8 from both SIB loads AND
+	 * lands rdi at rsp+32 on exit (last iter: lea rdi=[rsp+0],
+	 * mul8 advances +32).  Addition commutes; iter order free.
+	 * sub rdi,N (4 B) gone, +32's gone (−2 B).  −6 B. */
 #ifdef SMALL_MUL8
-.Lm:	mov	ebx, [r10+r11+32]   /* a[i], dword */
-	lea	rdi, [rsp+r11+32]   /* &t[i] */
+	push	28
+	pop	r11
+.Lm:	mov	ebx, [r10+r11]      /* a[i], dword — no disp */
+	lea	rdi, [rsp+r11]      /* &t[i] — no disp */
 	mov	rsi, r9             /* b */
-	mul8	add                 /* t[i..i+8] += a[i]·b */
-	add	r11, 4
-	jnz	.Lm
+	mul8	add                 /* t[i..i+8] += a[i]·b; rdi +=32 */
+	sub	r11, 4
+	jns	.Lm
 #else
-.Lm:	mov	rbx, [r10+r11+32]   /* a[i], qword (same 5 B — REX.W|XB) */
-	lea	rdi, [rsp+r11+32]   /* &t[i] */
+	push	24
+	pop	r11
+.Lm:	mov	rbx, [r10+r11]      /* a[i], qword — no disp */
+	lea	rdi, [rsp+r11]      /* &t[i] — no disp */
 	mov	rsi, r9             /* b */
 	mov	cl, 4
 	xor	ebp, ebp            /* 32-bit op zero-extends rbp */
@@ -680,19 +687,11 @@ fe_mul_m:
 	dec	ecx
 	jnz	7b
 	add	[rdi], rbp
-	add	r11, 8
-	jnz	.Lm
+	sub	r11, 8
+	jns	.Lm
 #endif
-
-	/* REDUCE.  rdi flowed out of the schoolbook loop at rsp+60
-	 * (SMALL_MUL8: last iter lea=rsp+28, mul8 +32) or rsp+56
-	 * (default: lea=rsp+24, 4×lea+8=+32).  Want rsp+32 = &t[8].
-	 * sub is 4 B vs 5 B for a fresh lea [rsp+32]. */
-#ifdef SMALL_MUL8
-	sub	rdi, 28
-#else
-	sub	rdi, 24
-#endif
+	/* rdi = rsp+32 = &t[8] from last iter (lea [rsp+0] + mul8 +32).
+	 * rcx = 0 from mul8 dec-to-0.  r11 = −W, dead. */
 .Lr:	mov	ebx, [rdi+32]       /* q = t[j+8] — NOT cleared */
 	test	ebx, ebx
 	jz	4f

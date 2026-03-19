@@ -55,9 +55,9 @@ bc_v3:
 	.byte	0x32, 0x35  /* Fsub    3 ←  5,  3 */
 	.byte	0x42, 0x45  /* Fsub    4 ←  5,  4 */
 	.byte	0x40, 0x33  /* Fmul    3 ←  3,  4 */
-	.byte	0x07, 0x33  /* NORM    3 ←  3,  0 */
+	.byte	0x87, 0x33  /* NORM    3 ←  3,  8 */
 	.byte	0x05, 0x03  /* CHKZ    0 ←  3,  0 */
-	.byte	0x07, 0x22  /* NORM    2 ←  2,  0 */
+	.byte	0x87, 0x22  /* NORM    2 ←  2,  8 */
 	.byte	0x05, 0x12  /* CHKZ    1 ←  2,  0 */
 	.byte	0x00  /* END */
 	/* 23 B */
@@ -91,7 +91,7 @@ bc_v1:
 	.byte	0xf0, 0x11  /* Fmul    1 ←  1, 15 */
 	.byte	0x10, 0x1a  /* Fmul    1 ← 10,  1 */
 	.byte	0x12, 0x22  /* Fsub    2 ←  2,  1 */
-	.byte	0x07, 0x22  /* NORM    2 ←  2,  0 */
+	.byte	0x87, 0x22  /* NORM    2 ←  2,  8 */
 	.byte	0x05, 0x02  /* CHKZ    0 ←  2,  0 */
 	.byte	0x09, 0xd6  /* COPY   13 ←  6,  0 */
 	.byte	0x06, 0xd6  /* INV    13 ←  6,  0 */

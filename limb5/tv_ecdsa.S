@@ -179,7 +179,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
  * last `add [rdi],rdx` sets SF from the top limb; .Laddm/.Lsubm
  * both fall into .Lcprop so SF is live at every loop head. ── */
 .Lnorm:
-	lea	r8, [rcx - SLOT]    /* &cN − SLOT = &cP (slot 8) */
+	mov	r8, rdx             /* s2=8 in bytecode → rdx = &cP from bc_run */
 	call	.Lcprop
 1:	jns	2f
 	call	.Laddm
@@ -380,9 +380,11 @@ fe_from_le:
 1:	mov	rax, [rdx + rcx]
 	xor	ebx, ebx
 	cmp	cl, 24
-	jae	2f                  /* iter 4: leave rbx=0 (shrd ≡ shr) */
-	mov	rbx, [rdx + rcx + 8]
-2:	shrd	rax, rbx, cl
+	cmovb	rbx, [rdx + rcx + 8]   /* iter 4: cl=24, CF=0, rbx stays 0.
+	                                * cmov LOADS regardless — [rdx+32]
+	                                * always valid (rodata chain or
+	                                * in-frame slot buffer). −1 B. */
+	shrd	rax, rbx, cl
 	and	rax, r13
 	stosq
 	add	ecx, 6

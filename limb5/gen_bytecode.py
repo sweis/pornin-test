@@ -176,7 +176,7 @@ V1 = [
     ('Fmul',  1,  1, 15),  # Z³  @ −2
     ('Fmul',  1, 10,  1),  # b·Z³  @ −2
     ('Fsub',  2,  2,  1),
-    ('NORM',  2,  2,  0),
+    ('NORM',  2,  2,  8),   # s2=8: bc_run preloads rdx=&cP for .Lnorm
     ('CHKZ',  0,  2,  0),
 
     # ── INV (s_mont @ 6; w_mont → 13) ──
@@ -223,10 +223,10 @@ V3 = [
     ('Fsub',  3,  5,  3),  # d1 = X·1 − r·Z
     ('Fsub',  4,  5,  4),  # d2 = X·1 − (r+n)·Z
     ('Fmul',  3,  3,  4),  # d1·d2
-    ('NORM',  3,  3,  0),
+    ('NORM',  3,  3,  8),   # s2=8: rdx=&cP
     ('CHKZ',  0,  3,  0),
     # ∞ check (Wycheproof tcId=292 — Z can be kp, NORM required)
-    ('NORM',  2,  2,  0),
+    ('NORM',  2,  2,  8),
     ('CHKNZ', 0,  2,  0),
 ]
 
