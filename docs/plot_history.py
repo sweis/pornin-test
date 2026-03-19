@@ -163,6 +163,26 @@ LIMB11_TRACK = read_progress_csv('limb11/progress.csv')
 LIMB5_TRACK  = read_progress_csv('limb5/progress.csv')
 LIMB8_TRACK  = read_progress_csv('limb8/progress.csv')
 
+# Join TRAIL + limb8 (limb8 IS the tiny.S continuation). Filter to self-
+# Pareto: keep a point only if NO other point in the same sequence (past
+# or future) dominates it. Drops the #ifdef back-and-forth and the
+# superseded limb8 intermediates, keeps only enduring milestones.
+# Chronological order preserved.
+FULL_CHRON = [(b, c, lbl) for b, c, lbl in TRAIL] + \
+             [(b, c, None) for b, c in LIMB8_TRACK]
+
+def self_pareto_ordered(seq):
+    pts = [(b, c) for b, c, _ in seq]
+    shown = []
+    for i, (b, c, lbl) in enumerate(seq):
+        # Labeled points are architectural milestones — always shown.
+        if lbl or not any(b2 <= b and c2 <= c and (b2 < b or c2 < c)
+                          for j, (b2, c2) in enumerate(pts) if j != i):
+            shown.append((b, c, lbl))
+    return shown
+
+TRAIL_SHOWN = self_pareto_ordered(FULL_CHRON)
+
 def pareto(pts):
     front = []
     for i, (b, c) in enumerate(pts):
@@ -172,8 +192,8 @@ def pareto(pts):
     front.sort(key=lambda i: pts[i][0])
     return front
 
-ALL_XY = ([(b, c) for b, c, _ in TRAIL] + THOMAS_TRACK
-          + LIMB11_TRACK + LIMB5_TRACK + LIMB8_TRACK)
+ALL_XY = ([(b, c) for b, c, _ in TRAIL_SHOWN] + THOMAS_TRACK
+          + LIMB11_TRACK + LIMB5_TRACK)
 FRONT = pareto(ALL_XY)
 
 # ======================================================================
@@ -183,13 +203,19 @@ fig, ax = plt.subplots(figsize=(13, 8), dpi=100)
 ax.plot(BC_TRACK, [BC_Y]*len(BC_TRACK), 'o-', color='#d0d0d0',
         markersize=4, linewidth=1, zorder=1, label='bc.S baseline (ratio 1.0)')
 
-# Chronological trail — dotted gray with small blue dots
-tx = [p[0] for p in TRAIL]
-ty = [p[1] for p in TRAIL]
+# Chronological trail (filtered to running-Pareto, joined with limb8)
+tx = [p[0] for p in TRAIL_SHOWN]
+ty = [p[1] for p in TRAIL_SHOWN]
 ax.plot(tx, ty, ':', color='#b0b0b0', linewidth=0.7, zorder=2,
         label='optimization trail')
 ax.scatter(tx, ty, c='#4a6fa5', s=22, edgecolors='#2a4670',
            linewidths=0.5, zorder=3, alpha=0.7)
+# Tip annotation (limb8's current size).
+tip = TRAIL_SHOWN[-1]
+ax.annotate(f'{tip[0]}B', (tip[0], tip[1]),
+            textcoords="offset points", xytext=(-35, -12), fontsize=9,
+            bbox=dict(boxstyle='round,pad=0.3', fc='#e0e8f5',
+            ec='#4a6fa5', lw=0.8))
 
 # Pareto frontier — thin line, small dots.  The frontier is dense on the
 # left (many sub-1000B points separated by single bytes), so big diamonds
@@ -243,32 +269,6 @@ if LIMB5_TRACK:
                 textcoords="offset points", xytext=(10, -12), fontsize=9,
                 bbox=dict(boxstyle='round,pad=0.3', fc='#d0f0f0',
                 ec='#008b8b', lw=0.8))
-
-# limb8 continues tiny.S — same blue dots as the main optimization trail.
-# Filter to points that expanded the frontier at commit time (keeps order).
-if LIMB8_TRACK:
-    prior = THOMAS_TRACK + [(b, c) for b, c, _ in TRAIL]
-    shown = []
-    for p in LIMB8_TRACK:
-        b, c = p
-        if not any(b2 <= b and c2 <= c and (b2 < b or c2 < c)
-                   for b2, c2 in prior):
-            shown.append(p)
-            prior.append(p)
-    l8x = [p[0] for p in shown]
-    l8y = [p[1] for p in shown]
-    # Connect from tiny.S's last point (933, SMALL_MUL8) to the new work.
-    prev = (933, 4674)  # tiny.S SMALL_MUL8 median
-    ax.plot([prev[0]] + l8x, [prev[1]] + l8y, ':', color='#b0b0b0',
-            linewidth=0.7, zorder=2)
-    ax.scatter(l8x, l8y, c='#4a6fa5', s=22, edgecolors='#2a4670',
-               linewidths=0.5, zorder=3, alpha=0.7)
-    if shown:
-        tip = shown[-1]
-        ax.annotate(f'{tip[0]}B', tip,
-                    textcoords="offset points", xytext=(-35, -12), fontsize=9,
-                    bbox=dict(boxstyle='round,pad=0.3', fc='#e0e8f5',
-                    ec='#4a6fa5', lw=0.8))
 
 ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
