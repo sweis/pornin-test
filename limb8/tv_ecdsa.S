@@ -409,8 +409,10 @@ bcrun_off:
 	and	dl, 0xF0            /* edx = s2<<4 */
 	lea	rdx, [r14+rdx*2]    /* r14 + s2*32 */
 
-	and	eax, 0xF            /* op — ah already dead */
-	movzx	eax, BYTE PTR [r12+rax]
+	and	eax, 0xF            /* op — ah already dead; bits 4-31 now zero */
+	mov	al, BYTE PTR [r12+rax]  /* 4 B — `and` zeroed bits 8-31 so mov al
+	                             * (no zero-extend) gives eax = offset.  movzx
+	                             * was 5 B; the extend was redundant.  −1 B. */
 	add	rax, r12
 	/* Preload rcx = &P: most handlers want it (Fmul/Fsub/Fadd),
 	 * the rest overwrite it.  r8 = &cP (slot22), set by verify.
