@@ -30,3 +30,4 @@ a83557c,1146,0,Inline .Lsubm (single caller): +3 at site, −5 stub (−2)
 27d89d5,1144,0,.Lfmul falls through to fe_mul5 — prior shrinks put it at jt 247 (−2)
 9591b61,1142,0,cmovb in fe_from_le (−1); NORM s2=8 → mov r8,rdx not lea (−1)
 d6daa8e,1141,2996000,.Lnsp stub: push rsi;pop rdi shared by both .Linv call sites (−1)
+fc89ce3,1120,3005000,r15=&cP base + packed ebx counter + lodsw bc_ptr + misc (−21). Packed bt: ebx=limb*64+bit; wrap check (ebx+1)&63==0 via lea+test al. r15 reaches oADD/oCN/oCP disp8 — bc_run/.Lfmul/.Lcadd/.Lasmod all shrink. lodsw: rsi=bc_ptr (drops push/pop rbx; rbx preserved passively). Fadd/Fsub imul merge. fe_from_be [rdx+rcx-1] indexed. BE 2-pair loop. LE mov cl (rcx=0 from rep).

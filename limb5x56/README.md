@@ -1,26 +1,26 @@
-# limb5/ — 5×54 signed-limb Montgomery track
+# limb5x56/ — 5×56 signed-limb Montgomery track
 
-Thomas at **928 B / 4.48M cyc** with this architecture.
-limb11 at 1244 B (estimated floor ~1067 B). Target: **< 928 B**.
-
-## Why 5×54 when limb11 exists
-
-See `ASSESSMENT.md`. Short version: 11×24 probably can't reach 928
-(structural floor ~1067 B from Montgomery tax + 88-byte slot stride).
-5×54 pays the SAME Montgomery tax but has 40-byte slots → 4 slots in
-disp8. Thomas proved it's reachable. We don't know how.
+Fork of limb5x54 with W=56. Same K=5, same 40 B slots, same 128-bit
+accumulator — but **byte-aligned** decode (7 bytes/limb exactly) and
+a cleaner signed cP.
 
 ## Status
 
-**Not started.** Phase 1 (baseline) is the next step.
+**1113 B / 3.05M cyc.** 607/607. 28 B under limb5x54's working 1141 B.
+
+Structural savings vs W=54:
+- fe_from_le: 7-byte stride (no shrd) — 25 B vs 38 B (−13)
+- cP limb 4 = 0xFFFFFFFF (dec dword [rdi-8]); limbs 1,3 are inc byte (−3)
+
+Plus ports of limb5x54 tricks with a fixed packed-bit pt_mul counter
+(their source has a broken `cmp bl, W` version — see fc89ce3 commit).
 
 ## Files
 
-- `PLAN.md` — roadmap. Read first.
-- `ASSESSMENT.md` — honest comparison of 11×24 vs 5×54 floors.
-- `fe_mul.S` — 5×54 Montgomery multiply (start from `../limb11/fe_mul_5x54.S`).
+- `CONVERSION.md` — W=54→56 derivation. Constants, offsets, decode.
+- `tv_ecdsa.S` — main source.
+- `fe_mul.S` + `test_mul.c` + `gen_vectors.py` — fe_mul5 unit test.
 - `progress.csv` — trajectory.
-- `Makefile` — same targets as limb11.
 
 ## Workflow
 
