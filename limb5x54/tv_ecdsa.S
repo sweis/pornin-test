@@ -351,47 +351,49 @@ fe_mul5:
 
 /* ── Decoders ──
  * Limb i starts at bit 54i → byte 54i/8, shift 54i&7. Loop i=0..3 with
- * a running bit-offset (ebx); unroll i=4 as (24,24) — the natural (27,0)
+ * a running bit-offset (ecx); unroll i=4 as (24,24) — the natural (27,0)
  * would read bytes 27..34 (3 past a 32-B input).
  *
  * fe_from_le takes its SOURCE in rdx (not rsi). This lets fe_from_be
  * fall through: its reversal loop leaves rsi=src+32 (for BE chaining)
  * and rdx=rdi+8 (in-slot buffer start) — exactly what fe_from_le wants.
- * fe_from_le clobbers rbx (only called from verify, never as a handler).
+ * fe_from_le clobbers r9 (only called from verify, never as a handler;
+ * r9 is hv_len−32 junk after spec checks). rbx preserved — the BE
+ * loop's shr-bitmask lives there across calls.
  * LE chain: exit rdx=src+32, rdi=dst+40.
  * BE chain: exit rsi=src+32, rdi=dst+40 (rdx garbage). */
 
 fe_from_be:
 	lea	rdx, [rdi + 8]      /* in-slot buffer start (what fe_from_le wants) */
-	mov	cl, 32              /* entry rcx ∈ {0,1,2,30} (BE-loop counters or fe_from_le exit) — all <256 */
+	mov	cl, 32              /* entry rcx ∈ {65,30} (pub_len / fe_from_le exit) — both <256 */
 1:	lodsb
 	mov	[rdx+rcx-1], al     /* rcx counts 32→1: writes bytes 31→0 (reversed). 4 B vs dec+mov 5 B. */
 	loop	1b                  /* rsi=src+32, rdx=rdi+8, rcx=0 */
-	/* FALL THROUGH — rsi preserved through fe_from_le (uses ebx,ecx,rdx). */
+	/* FALL THROUGH — rsi preserved through fe_from_le (uses r9,ecx,rdx). */
 
 /* 54 = 48 + 6, so byte-offset 6i and shift 6i extract bits 48i+6i = 54i.
  * Need 64 bits after shift for full 54-bit limb, but shr by 6i leaves only
  * 64−6i bits — insufficient for i≥2. shrd with [rdx+6i+8] supplies the
- * high bits. Limb 4 is 40 bits; shrd with rbx=0 ≡ shr suffices.
+ * high bits. Limb 4 is 40 bits; shrd with r9=0 ≡ shr suffices.
  *
- * Single-cmp: cmovb PRELOADS rbx for the NEXT iter (after `add ecx,6`
+ * Single-cmp: cmovb PRELOADS r9 for the NEXT iter (after `add ecx,6`
  * so rcx already holds next-iter offset). cmp cl,24: CF=1 for cl∈{6,12,18}
  * (next iter ≠ last → load); CF=0 ZF=1 for cl=24 (next is iter 4 → keep
  * zeroed); CF=0 ZF=0 for cl=30 (exit). jbe loops on CF|ZF = 5 iters.
  * Iter 0 shrd count = 0 → no-op (Intel SDM: count=0 leaves dest+flags
- * unchanged) so entry-rbx is irrelevant. cmov reads regardless; max
+ * unchanged) so entry-r9 is irrelevant. cmov reads regardless; max
  * [rdx+38] — 14 B past LE source, in-frame for BE, page slack for rodata.
- * −3 B vs two-cmp (drops cmp, hoists xor out of crit path). */
+ * rbx→r9: +1 B (`xor r9d,r9d` is 3B vs 2B) — buys BE shr-bitmask (−9). */
 fe_from_le:
 	xor	ecx, ecx
 1:	mov	rax, [rdx + rcx]
-	shrd	rax, rbx, cl        /* iter 0: cl=0 → no-op */
+	shrd	rax, r9, cl         /* iter 0: cl=0 → no-op */
 	and	rax, r13
 	stosq
-	xor	ebx, ebx            /* pre-zero for next iter's cmovb-skip case */
+	xor	r9d, r9d            /* pre-zero for next iter's cmovb-skip case */
 	add	ecx, 6
 	cmp	cl, 24
-	cmovb	rbx, [rdx + rcx + 8]   /* preload for NEXT iter; skipped when cl≥24 */
+	cmovb	r9, [rdx + rcx + 8]    /* preload for NEXT iter; skipped when cl≥24 */
 	jbe	1b                  /* cl ≤ 24: loop (5 iters total) */
 	add	rdx, 32
 	ret
@@ -529,19 +531,6 @@ tv_ecdsa_p256_verify_asm:
 	pop	rbx
 	ret
 
-/* Dispatch tail — lives here so both `jmp .Lfail` (up, −32) and the
- * final `jmp .Ltail` (up, from .Lok end) fit rel8. Inlined at the end
- * of .Lok it blows the .Lfail jmp past −128. */
-.Ltail:
-	mov	cl, obc_v1          /* entry rcx=0 (LE loop exit via `loop`) */
-	call	bcrun_off
-	push	rax
-	call	pt_mul
-	pop	rdx
-	or	eax, edx
-	inc	eax
-	jmp	.Lfail
-
 .Lok:
 	mov	r14, rsp
 	push	-1
@@ -549,21 +538,26 @@ tv_ecdsa_p256_verify_asm:
 	shr	r13, 64-W           /* MASK = 2^54−1; movabs is 10 B, this is 8 */
 
 	/* BE chain at slot 3 (3*SLOT = 120: disp8). Qx,Qy,r,s,e → 3..7.
-	 * 2-pair loop for pub (Qx,Qy) then sig (r,s): push both sources,
-	 * pop per iteration. fe_from_be chains rsi +32. −2 B vs unrolled. */
-	push	rdi                 /* sig — popped in iteration 2 */
-	lea	rsi, [rdx + 1]
-	push	rsi                 /* pub+1 — popped in iteration 1 */
+	 * rdi ends at slot 8, ready for cP build.
+	 *
+	 * 5 decodes, 3 source groups: pub+1(×2), sig(×2), hv(×1). fe_from_be
+	 * leaves rsi=src+32 naturally (fe_from_le preserves rsi). Bitmask
+	 * ebx=0b10101 drives chain-vs-pop: `shr ebx,1` yields CF=bit0 and
+	 * ZF=(ebx==0) in one 2-B instruction. CF=1 (iters 1,3,5) → rsi
+	 * already advanced; CF=0 (iters 2,4) → pop next src. jc/pop
+	 * preserve the shr's ZF for the loop test. Stack balanced: 2 pushes
+	 * (hv,sig), 2 pops (iters 2,4). ebx=0 at exit. 26 B vs 35 B. */
+	push	r8                  /* hv — popped on iter 4 */
+	push	rdi                 /* sig — popped on iter 2 */
+	lea	rsi, [rdx + 1]      /* initial rsi = pub+1 */
 	lea	rdi, [r14 + 3*SLOT]
-	mov	cl, 2               /* entry rcx=65 (pub_len, checked above, <256) */
-1:	pop	rsi
-	push	rcx
-	call	fe_from_be          /* iter1: Qx,Qy → 3,4. iter2: r,s → 5,6. */
-	call	fe_from_be
-	pop	rcx
-	loop	1b
-	mov	rsi, r8             /* hv */
-	call	fe_from_be          /* e  → 7; rdi = slot 8 */
+	push	0b10101
+	pop	rbx
+1:	call	fe_from_be
+	shr	ebx, 1              /* CF = chain-bit, ZF = done */
+	jc	2f                  /* CF=1: rsi already = src+32 (chain) */
+	pop	rsi                 /* CF=0: next source group */
+2:	jnz	1b
 
 	/* r15 = &cP. Preserved by all handlers + fe_mul5 (never touched).
 	 * Reaches oADD (−120), oCN (+40), oCP (+0) all disp8. Used by
@@ -594,6 +588,17 @@ tv_ecdsa_p256_verify_asm:
 	pop	rcx
 	loop	1b
 
-	jmp	.Ltail
+	/* Dispatch tail — inlined now that .Lok shrank (BE loop −9 B).
+	 * `jmp .Lfail` below reaches back −108 B (9 B .Lfail + 99 B .Lok),
+	 * fits rel8 with 20 B margin. `je .Lok` now jumps forward only
+	 * over .Lfail (9 B) — also still rel8. rcx=0 (LE loop exit). */
+	mov	cl, obc_v1
+	call	bcrun_off
+	push	rax
+	call	pt_mul
+	pop	rdx
+	or	eax, edx
+	inc	eax
+	jmp	.Lfail
 
 	.section .note.GNU-stack,"",@progbits
