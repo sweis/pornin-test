@@ -146,8 +146,8 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	ret
 
 /* CHKZ with dst-as-flag: dst=0 → shift (s1≠0) into ebp; dst=1 → shift
- * (s1==0). rdi = r14 + dst·SLOT from bc_run; dst·SLOT is 0 or 40.
- * 40>>5 = 1. xor ebp with that bit AFTER the rcl → flips bit 0 iff dst=1. */
+ * (s1==0). bc_run preloads r9d = dst nibble (0 or 1). xor ebp with
+ * that bit AFTER the rcl → flips bit 0 iff dst=1. */
 .Lchkz:
 	xor	edx, edx
 	push	K
@@ -157,9 +157,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	loop	1b
 	neg	rdx                 /* CF = (rdx != 0) */
 	rcl	ebp, 1
-	sub	rdi, r14
-	shr	edi, 5              /* 0 or 1 */
-	xor	ebp, edi
+	xor	ebp, r9d            /* dst nibble: 0 = keep, 1 = flip */
 	ret
 
 /* CHKLT — bpl |= (s1 ≥ s2). Subtract-and-check-sign: Fsub then
@@ -456,6 +454,7 @@ bcrun_off:
 	imul	esi, esi, SLOT
 	add	rsi, r14
 	shr	edi, 4
+	mov	r9d, edi            /* save dst nibble for CHKZ's flip-bit */
 	imul	edi, edi, SLOT
 	add	rdi, r14
 
