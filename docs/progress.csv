@@ -1,0 +1,96 @@
+track,commit,bytes,cycles,note
+limb8,b51fb24,932,4686000,fe_from_be: push 4;pop rcx → mov cl
+limb8,b5c8326,930,4686000,op6/op7 sense via opcode bit0: xor al
+limb8,429e09e,926,4686000,bt slot4=n−2: bc_v1 reorder keeps cN in slot4 through INV. sub BYTE [rcx-128]
+limb8,ca8d294,922,4686000,r12=&.Ljt hoisted to verify + bytecode→.text. bc_run drops push/pop/lea r12 (−11). verify +11. cGX lea [r12+oGX] disp8 (−2). bcrun_off SIB lea [r12+rdi+bc_rcb-.Ljt] (−2). −4 B.
+limb8,b11ebda,920,4686000,bcrun_off: lea directly into rbx after save-push. Drops push rdi;pop rbx. −2 B.
+limb8,2f5d9a9,916,4686000,block-copy 24 qw (was 12): rdi lands AT slot8 — drops lea rdi
+limb8,17e1c1e,915,4686000,lea [r14+rsi*8-128] replaces imul+add: rsi=64
+limb8,a9f95b3,914,4686000,bc_run: mov eax
+limb8,9bd05db,913,4686000,hv_len check: sub r9
+limb8,92f0fd1,912,4686000,.Lop3: push 4;pop rcx. CF=0 on all entries (add rax
+limb8,8c4e26d,908,4686000,Drop .Lop5p: geq_p = op5 s1=8 (decoder rsi=r14+256=&cP). INV→op9. Table 11→10. −4 B. 20 B under Thomas.
+limb8,797bc4f,904,5165000,.Lop3: dec;jnz→loop (both). Preserves CF for sbb/adc chain. ~70K iters vs mul8's 10M. +10% cyc on size floor. −4 B.
+limb8,37176ed,903,5200000,INV dst=slot5: bt [rdi-32] drops REX (was [r8-128]). bc_v1 staging all post-INV (slot0/1 survive). −1 B. 25 B under Thomas.
+limb8,93ceaad,898,5134000,fe_from_be_pair: call fe_from_be falls through to _next. 2× 10B call-pair → 5B. Helper +5B. −5 B. UNDER 900.
+limb8,15e27f7,912,3954000,DEFAULT build (64-bit product). DOMINATES THOMAS 928/4.48M. Shared-code grind shrunk all 3 variants.
+limb8,15e27f7,970,3470000,SOLINAS_P build. Same shared-code shrink.
+limb8,9e717ab,916,3401000,DEFAULT: #ifdef .Lop3 loop→dec;jnz. +4 B −560K cyc. SMALL_MUL8 floor 898 B untouched. 12 B + 1.08M cyc under Thomas.
+limb8,9e717ab,974,2917000,SOLINAS_P: same #ifdef. +4 B −553K cyc (also benefits from .Lop3 fix).
+limb8,d05d1a6,897,5134000,bc_run: mov al (4B) not movzx (5B) for table lookup. and eax 0xF already zeroed bits 8-31. Pure win all 3 variants. −1 B.
+limb8,d3e0868,893,5134000,.Lop6: repe scasq (3B) replaces or-loop (5+2B). Scans for first nonzero qword; ZF=1 iff all-zero. rdi clobbered but dead. rax stays 0 (scasq read-only). −4 B.
+limb8,8a109b1,892,5134000,fe_mul_m: tail-jmp to .Lop3. pop rbp/rbx FIRST (.Lop3 touches neither) then jmp rel32. .Lop3 ret → caller. Stack: pushes land [retaddr-24..-8]; t buf at [-104..-32]. −1 B.
+limb8,db6dad8,891,5242000,bc_run: bcptr in rsi via lodsw. Drops add rbx
+limb8,8eb4e3c,890,5245000,.Lf2: stc;jmp .Lsbb (3B) reuses success path's sbb;inc. sbb eax
+limb11x24,a1f8ce0,158,0,fe_mul11 standalone (103/103 unit test)
+limb11x24,1260a47,1488,0,PHASE 1 BASELINE — 607/607 pass. Not golfed.
+limb11x24,89f89c2,1319,12185000,Phase 2 grind: −169 B. Chaining + .Lcp share + enter/leave + xor-neg add/sub + INV stack tricks
+limb11x24,6de9a83,1312,12185000,CIOS merge in fe_mul11 (schoolbook+reduce → one loop)
+limb11x24,670e5e0,1254,0,Slot reshuffle: constants chain 9-11; r
+limb11x24,387114e,1244,11920000,ZERO op: bc_v1 tail does acc=(0:1:0); pt_mul drops 15-B init. SET1/ZERO shared tail.
+limb11x24,d1a05bc,1219,0,PROJECTIVE R-CANCELLATION: cR2_p dropped. G@1 Q@0 b@1; RCB preserves X=Y=Z level. On-curve via Y²Z=X³−3XZ²+bZ³.
+limb11x24,fec3c0d,1201,0,Full-chain decodes (zero lea's post-Qx); Gx² shared b-derive→G-scale; rcl/inc ebp (no REX)
+limb11x24,4777e87,1194,12030000,CHKNZ=call CHKZ+xor ebp
+limb11x24,206341d,1191,12030000,Speculative setup before checks → tail jmp rel8 (disp8=−127
+limb11x24,6ed59f9,1182,12030000,fe_mul11 b on stack (no r12) — limb5 agent's trick ported back
+limb11x24,0b4faf3,1181,12030000,fe_mul11: drop lea r8 via [rsi+r9+K*8] disp8
+limb11x24,926f9c4,1171,10730000,push;pop wins + fe_from_be SIB indexing + lodsw tail (−10 B)
+limb11x24,1b2e166,1163,10730000,SIGNED cP: p as 5 ±power-of-2 terms. CHKLT via Fsub+sign (−3). Trampoline (−3). Lsubm inline (−2).
+limb11x24,48168ed,1158,10730000,n-2 rodata: INV bt reads exponent directly (drop cmp/jb/je −7)
+limb11x24,044e0c5,1156,10730000,CHKNZ→CHKZ dst=1 flip; 88>>6=1 extracts bit. Ported from limb5.
+limb11x24,10a724b,1150,10730000,Single 8-slot COPYHI: bc_v1 stages 0-7 contiguously. −6 B bytecode. Ported from limb5.
+limb11x24,5dc2a53,1146,10730000,inc byte (3 B) beats inc qword (4 B) for 0→1. .Lset1 + cP×2 = −4 B.
+limb11x24,5d8eb1f,1141,12090000,LAYOUT REORDER: .Lfmul falls through into fe_mul11. .Lcp_shared+decoders moved after. jt Fmul@251 (4 B headroom). −5 B.
+limb11x24,54055a3,1139,12090000,Lasmod r9→rdx: NORM bytecode s2=0 (unused) so rdx free. Non-REX xor+pop. Ported from limb5.
+limb11x24,2bbb851,1137,12090000,fe_from_le: lodsd+dec rsi beats mov+add for +3 advance (−2).
+limb11x24,3fee5eb,1129,12090000,Hoist sign-test into .Lcprop tail — 3 callers branch on returned flags (−8).
+limb11x24,4728422,1127,12090000,bcrun_off: lea directly into rbx after push (drops push rdi;pop rbx). Ported from limb8.
+limb11x24,8629b61,1120,12090000,SF from Lcp_shared's add (−4
+limb11x24,cd37a0f,1119,12090000,Lasmod: imul rax
+limb11x24,caef18f,1116,12090000,Loop 3 fe_from_le calls (cR2N/Gx/Gy). 12 B vs 15 B direct.
+limb11x24,2aefca3,1114,12090000,Nmul jt → fe_mul11 direct; bc_run presets r11d=0xBC4F every dispatch. .Lnmul (8B) gone.
+limb11x24,b67f17f,1108,12090000,limb5 ports: NORM dst==s1 drop push;pop (−2); bc_run saves dst nibble→r9d for CHKZ (−2); bcrun_off offset-in-rcx (−2).
+limb11x24,b1faca3,1094,12200000,limb5x56 ports: r15=&cP (−5) + packed-ebx bit counter w/ FIXED crossing test frees r13 (−3) + lodsw bc_ptr (−4) + Fadd/Fsub merge via imul (−2).
+limb11x24,054e320,1089,12090000,mov-cl audit — 5 provable rcx<256 sites (.Lasmod/fe_from_be/fe_from_le/cP/LE-loop). Port from limb5x54.
+limb11x24,8e84ad8,1084,12090000,xlatb + r12 drop. rbx=&.Ljt inside bcrun_off (push/pop). Port from limb5x54.
+limb11x24,6a141ae,1074,12090000,shr-bitmask BE loop: r
+limb11x24,HEAD,1071,12090000,cqo+not merge .Lnorm two loops→one. Terminate: or edx
+limb11x24,HEAD,1077,4080000,FAST build (-DFAST): .Lin scasq→add rdi + loop→dec;jnz (+4); Fadd/Fsub loop→dec;jnz (+2). −64% cycles. imul latency hidden by OoO — separate Fadd/Fsub tested same speed.
+limb11x24,HEAD,1070,12090000,stosq;ret suffix share: fe_from_le jmp rel8 back 43 B to .Lcp_shared tail. Native-gadget sweep finding.
+limb11x24,HEAD,1068,12090000,INV epilogue → jmp fe_mul11 tail (pop rcx;pop rax;pop rbx;ret). rcx dead at handler ret. Reorder INV after .Lcprop → disp8=108.
+limb5x54,6f07517,1324,3207000,Phase 1 baseline 607/607. rodata 357 (bc 197 + 5 consts inc cP 160) text 967. No golf.
+limb5x54,466471b,1313,0,CHKNZ=call+xor; r12=.Ljt set once; mov al encoding (−11)
+limb5x54,8064542,1288,0,fe_from_le loop (bit-offset); fe_from_be in-slot reversal (−25)
+limb5x54,6ff298a,1270,0,fe_mul5 CIOS merge: schoolbook+reduce one loop r10=&acc[i] (−18)
+limb5x54,886c4ac,1256,0,fe_from_be FALLS THROUGH to fe_from_le (rdx=src); MASK via shr −1 (−14)
+limb5x54,8422cf1,1245,0,verify: loop 5× fe_from_le (r15 counter) (−11)
+limb5x54,af650f8,1235,0,pt_mul rbp-relative bt (disp8); .Lcp5 lodsq×2; .Lasmod mov cl (−10)
+limb5x54,eee3b8d,1227,0,Drop ZERO handler — Fsub(x
+limb5x54,1799b97,1224,0,Layout: .Lnmul falls into fe_mul5; .Lfmul rel8; .Linv stub (−3)
+limb5x54,14311a8,1217,3009000,fe_mul5: b on stack (r12 untouched no push/pop); rbx=CIOS counter (−7). FASTER than baseline.
+limb5x54,30d2ee9,1210,0,fe_from_le: shrd loop w/ byte-offset=shift=6i — tail gone (−7)
+limb5x54,6c666c4,1208,0,.Lasmod r9→rdx (non-REX); NORM ignores s2 (−2)
+limb5x54,af8acc2,1207,0,.Lset1: zero-all-then-inc (−1)
+limb5x54,399adde,1198,0,Slot layout: BE@slot3 disp8; stage 0-7→1 COPYHI; bc_v1 43→40 ops (−9)
+limb5x54,3e87635,1196,0,CHKNZ→CHKZ dst=1 flip; JT 12→11 (−2)
+limb5x54,0ce8f91,1189,3094000,.Lcprop add-push-pop (−4); cN=n-2 rodata + bc_v1 Fadd×2 fixup; cN/cP swap (−3)
+limb5x54,7f59b6a,1169,0,Signed cP built in verify; Fsub-CHKLT+NORM use SF from Lcprop's add (−20)
+limb5x54,ea5fb24,1166,0,rep stosd (no REX); stack-loop counter; .Ltail hoist both jmps rel8 (−3)
+limb5x54,3931d97,1163,0,.Linv between .Lnmul/fe_mul5 — drop stub (−5) .Lnmul jmp (+2) (−3)
+limb5x54,75cd59b,1160,0,COPYHI dst=15 encoding — bc_run gives rdi=r14+600; +SLOT disp8 (−3)
+limb5x54,c18772b,1156,0,bcrun_off: lea→rbx (port limb11) + offset-in-rcx drops xor edi (−4)
+limb5x54,bc31266,1152,0,SET1 clears 3 slots: drops Fsub(0)+Fsub(2) from bc_v1 (−4 rodata)
+limb5x54,d1a96be,1150,0,bc_run saves dst nibble→r9d; CHKZ: sub+shr+xor (8B) → xor r9d (3B) (−2)
+limb5x54,33f03b6,1148,0,NORM: drop push rsi;pop rdi — dst==s1 always
+limb5x54,a83557c,1146,0,Inline .Lsubm (single caller): +3 at site
+limb5x54,27d89d5,1144,0,.Lfmul falls through to fe_mul5 — prior shrinks put it at jt 247 (−2)
+limb5x54,9591b61,1142,0,cmovb in fe_from_le (−1); NORM s2=8 → mov r8
+limb5x54,d6daa8e,1141,2996000,.Lnsp stub: push rsi;pop rdi shared by both .Linv call sites (−1)
+limb5x54,fc89ce3,1120,3005000,r15=&cP base + packed ebx counter + lodsw bc_ptr + misc (−21). Packed bt: ebx=limb*64+bit; wrap check (ebx+1)&63==0 via lea+test al. r15 reaches oADD/oCN/oCP disp8 — bc_run/.Lfmul/.Lcadd/.Lasmod all shrink. lodsw: rsi=bc_ptr (drops push/pop rbx; rbx preserved passively). Fadd/Fsub imul merge. fe_from_be [rdx+rcx-1] indexed. BE 2-pair loop. LE mov cl (rcx=0 from rep).
+limb5x54,f762d9d,1108,3031000,r12 dropped + xlatb + shrd single-cmp + mov-cl audit (−12). lodsw freed rbx → .Ljt ptr local to bcrun (push/pop; no REX on xlatb). r12 wholly unused: drop push/pop/lea (−11 verify +8 bcrun). xlatb: 1B vs mov al 3B. fe_from_le: cmovb preloads NEXT-iter rbx AFTER inc — one cmp serves cmovb AND jbe; iter-0 shrd-by-0 is nop so entry rbx irrelevant (−3). mov cl audit: 4× push/pop→mov cl where rcx<256 on entry (ecx=30 from fe_from_le; pub_len=65; LE-loop-exit 0; fe_from_be entry {0
+limb5x54,607d9bd,1098,3016000,shr-bitmask BE chain + .Ltail inline (−10). Port from limb5x56/limb11x24: ebx=0b10101 drives chain-vs-pop — shr ebx yields CF=bit ZF=done in one 2B insn; jc/pop preserve ZF. fe_from_be leaves rsi=src+32 (fe_from_le preserves rsi) so CF=1=chain is FREE (vs limb5x56's push rdx variant +1B). 26B vs 35B (−9). Cost: fe_from_le rbx→r9 so bitmask survives calls (+1B for xor r9d vs xor ebx; r9 dead after hv_len check). Decode order Qx Qy r s e = bc_v1's expected 3..7 — NO bytecode change. Bonus: .Lok shrank 9B → inlined .Ltail jmp .Lfail now −108 (was splitting to keep it rel8) (−2). 15B ahead of limb5x56.
+limb5x54,HEAD,1097,2768000,cqo+not single-loop .Lnorm — port of limb11 135a928 nets −1 here (vs −3 there). Two 5x54-specific costs: (1) .Lcprop restructure +1 B — `loop 2f` mid-body; iters 1..K-1 jump to mask+store+sar; iter K falls through with rax=unmasked top (push/pop/loop/stosq/pop/ret all preserve SF for .Lchklt). limb11's .Lcp_shared tail is `lodsq;add rax rdx;stosq` which gives rax=top FREE. (2) `or rdx rax` 3 B not `or edx eax` 2 B — K=5 W=54 top limb <2^44 (vs limb11 K=11 smear → ≤2^18); bit 31 is data not sign. .Laddm deleted; .Lasmod imul→xor+sub (+2). Trick 2 DEAD: `pop rax;pop rax;pop rbx;ret` appears at .Linv(0xe9) AND fe_mul5(0x181) but 152 B apart — rel8 max +127. No other ≥3 B tail repeats within range. BONUS: −248K cyc (−8.2%) from DSB shift — perf: same insn count; DSB uops +18M MITE uops −18M. Pure alignment; may reverse next byte.
+limb5x56,de151cc,1125,3040902,Phase 1: 607/607. 7-byte decoder (-13) + inc-byte cP (-3). Already < limb5x54 1141.
+limb5x56,fc89ce3,1113,3047684,r15=&cP disp8 + FIXED packed counter ((ebx+1)&63==0 not cmp bl W) + merged Fadd/Fsub + imul-cond-neg + rbx LE ctr (-12)
+limb5x56,72c7de0,1094,3057000,shr-bitmask BE loop (ebx=0b10101: CF=chain/pop ZF=exit one insn) + lodsq/dec/lodsd decoder (W=56=7B limb 32b top) + esi-offset .Lcadd + rbx=rcx=0 mov bl/cl (-19)
+limb5x56,1f2d8cb,1084,3069000,xlatb backport from limb11x24: bcptr rbx->rsi (lodsw) jt r12->rbx (xlatb) r12 unused -> drop push/pop/lea (-11) bcrun +2 fe_from_be mov cl (-1). Net -10. FRAME 968->960 (4 pushes)

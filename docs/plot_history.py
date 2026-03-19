@@ -143,23 +143,25 @@ THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
 THOMAS    = (928, 4482)     # v7 — ON the frontier
 CLAUDE    = (933, 4674)     # 20-run median; WAS size corner
 
-# Montgomery tracks — read from progress.csv so they stay current.
-def read_progress_csv(path):
+# All tracks — read from unified docs/progress.csv.
+def read_unified(track_name):
     import csv
     out = []
-    with open(path) as f:
+    with open('docs/progress.csv') as f:
         for row in csv.reader(f):
-            if not row or row[0].startswith('#') or row[0] == 'commit':
+            if not row or row[0].startswith('#') or row[0] == 'track':
                 continue
-            b, c = int(row[1]), int(row[2])
+            if row[0] != track_name:
+                continue
+            b, c = int(row[2]), int(row[3])
             if b > 500 and c > 0:   # skip pre-607 fe_mul-only rows
                 out.append((b, c // 1000))
     return out
 
-LIMB11_TRACK = read_progress_csv('limb11x24/progress.csv')
-LIMB5X54_TRACK = read_progress_csv('limb5x54/progress.csv')
-LIMB5X56_TRACK = read_progress_csv('limb5x56/progress.csv')
-LIMB8_TRACK  = read_progress_csv('limb8/progress.csv')
+LIMB11_TRACK = read_unified('limb11x24')
+LIMB5X54_TRACK = read_unified('limb5x54')
+LIMB5X56_TRACK = read_unified('limb5x56')
+LIMB8_TRACK  = read_unified('limb8')
 
 # Join TRAIL + limb8 (limb8 IS the tiny.S continuation). Filter to self-
 # Pareto: keep a point only if NO other point in the same sequence (past
