@@ -2,3 +2,4 @@ commit,bytes,cycles,note
 # 5×56 signed-limb Montgomery. Forked from limb5x54. See CONVERSION.md.
 de151cc,1125,3040902,Phase 1: 607/607. 7-byte decoder (-13) + inc-byte cP (-3). Already < limb5x54 1141.
 fc89ce3,1113,3047684,r15=&cP disp8 + FIXED packed counter ((ebx+1)&63==0 not cmp bl W) + merged Fadd/Fsub + imul-cond-neg + rbx LE ctr (-12)
+72c7de0,1094,3057000,shr-bitmask BE loop (ebx=0b10101: CF=chain/pop ZF=exit one insn) + lodsq/dec/lodsd decoder (W=56=7B limb 32b top) + esi-offset .Lcadd + rbx=rcx=0 mov bl/cl (-19)
