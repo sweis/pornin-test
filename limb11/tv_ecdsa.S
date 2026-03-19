@@ -419,15 +419,10 @@ pt_mul:
 	pop	rdi
 
 bcrun_off:
-	lea	rax, [rip + bc_rcb]
-	add	rdi, rax
-	/* falls through */
-
-bc_run:
 	push	rbp
-	push	rbx
-	push	rdi
-	pop	rbx                 /* bytecode ptr */
+	push	rbx                 /* save first; lea goes straight to rbx */
+	lea	rbx, [rip + bc_rcb]
+	add	rbx, rdi
 	xor	ebp, ebp            /* fail-bit accumulator */
 	/* r12 = &.Ljt inherited from verify (set once, fe_mul11 preserves). */
 .Lbc:

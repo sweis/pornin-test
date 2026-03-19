@@ -161,6 +161,7 @@ def read_progress_csv(path):
 
 LIMB11_TRACK = read_progress_csv('limb11/progress.csv')
 LIMB5_TRACK  = read_progress_csv('limb5/progress.csv')
+LIMB8_TRACK  = read_progress_csv('limb8/progress.csv')
 
 def pareto(pts):
     front = []
@@ -172,7 +173,7 @@ def pareto(pts):
     return front
 
 ALL_XY = ([(b, c) for b, c, _ in TRAIL] + THOMAS_TRACK
-          + LIMB11_TRACK + LIMB5_TRACK)
+          + LIMB11_TRACK + LIMB5_TRACK + LIMB8_TRACK)
 FRONT = pareto(ALL_XY)
 
 # ======================================================================
@@ -242,6 +243,21 @@ if LIMB5_TRACK:
                 textcoords="offset points", xytext=(10, -12), fontsize=9,
                 bbox=dict(boxstyle='round,pad=0.3', fc='#d0f0f0',
                 ec='#008b8b', lw=0.8))
+
+# limb8 (8×32 q=t[top], no Montgomery) — coral. Original tiny.S track.
+# First to go under Thomas (916 B @ 2f5d9a9).
+if LIMB8_TRACK:
+    l8x = [p[0] for p in LIMB8_TRACK]
+    l8y = [p[1] for p in LIMB8_TRACK]
+    ax.plot(l8x, l8y, '-', color='#ff7f50', linewidth=1.4, zorder=4,
+            label='limb8 (8×32, non-Mont)')
+    ax.scatter(l8x, l8y, c='#ff7f50', s=50, marker='D',
+               edgecolors='#cc5530', linewidths=0.7, zorder=5)
+    tip = LIMB8_TRACK[-1]
+    ax.annotate(f'limb8 — {tip[0]}B', tip,
+                textcoords="offset points", xytext=(-50, -15), fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', fc='#ffe4d5',
+                ec='#ff7f50', lw=0.8))
 
 ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
