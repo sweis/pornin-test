@@ -184,7 +184,9 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 1:	jns	2f
 	call	.Laddm
 	jmp	1b
-2:	call	.Lsubm
+2:	push	-1
+	pop	rdx
+	call	.Lasmod             /* .Lsubm inlined — single caller */
 	jns	2b
 	/* fall into .Laddm for final add */
 
@@ -217,11 +219,6 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	add	[rdi], rdx
 	pop	rdi
 	ret
-
-.Lsubm:
-	push	-1
-	pop	rdx
-	jmp	.Lasmod
 
 .Lfmul: /* MontMul mod p. rel8 over .Lnmul + .Linv (58 B). */
 	sub	rcx, SLOT           /* cP = cN − 1 slot (slot 8) */
