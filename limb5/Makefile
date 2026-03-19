@@ -16,8 +16,8 @@ test: test-mul
 
 regen: bytecode.inc
 
-bytecode.inc: $(COMMON)/gen_bytecode.py
-	python3 $(COMMON)/gen_bytecode.py > $@ 2>$(TMP)_bc_check.txt
+bytecode.inc: gen_bytecode.py
+	python3 gen_bytecode.py > $@ 2>$(TMP)_bc_check.txt
 	@cat $(TMP)_bc_check.txt
 
 check:

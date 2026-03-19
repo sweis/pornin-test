@@ -97,9 +97,9 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
  * falls through (−5 B) and .Lfmul's jmp is rel8 over the movabs (−3 B).
  * .Linv's body moves after fe_mul5 (stub keeps .Ljt entry in u8). */
 
-.Lcopyhi: /* 2 slots from s1 → slot(dst+16). */
+.Lcopyhi: /* 8 slots from s1 → slot(dst+16). Single call in bc_v1. */
 	add	rdi, 16*SLOT
-	push	2*K
+	push	8*K
 	jmp	.Lcopy_n
 .Lcopy:
 	push	K
@@ -516,29 +516,28 @@ tv_ecdsa_p256_verify_asm:
 	shr	r13, 64-W           /* MASK = 2^54−1; movabs is 10 B, this is 8 */
 	lea	r12, [rip + .Ljt]   /* jump table — preserved by handlers + fe_mul5 */
 
-	push	rdi                 /* sig */
-	push	r8                  /* hv */
+	push	rdi                 /* sig — r8 (hv) is untouched by fe_from_be */
 
-	/* User inputs (BE). Qx,Qy,e chain 5,6,7. rdi ends at slot 8. */
+	/* BE chain at slot 3 (3*SLOT = 120: disp8). Qx,Qy,r,s,e → 3..7.
+	 * rdi ends at slot 8, ready for LE constants. The bc_v1 layout
+	 * stages all 8 Shamir values at slots 0..7 → one rep movsq. */
 	lea	rsi, [rdx + 1]
-	lea	rdi, [r14 + 5*SLOT]
-	call	fe_from_be          /* Qx → 5 */
-	call	fe_from_be          /* Qy → 6 */
-	pop	rsi
+	lea	rdi, [r14 + 3*SLOT]
+	call	fe_from_be          /* Qx → 3 */
+	call	fe_from_be          /* Qy → 4 */
+	pop	rsi                 /* sig */
+	call	fe_from_be          /* r  → 5 */
+	call	fe_from_be          /* s  → 6 */
+	mov	rsi, r8             /* hv */
 	call	fe_from_be          /* e  → 7 */
 
-	/* Constants (LE). cP,cN,cR2N,cGX,cGY → 8,9,10,11,12. rdx chains
-	 * +32 per call; rdi chains +40 per call (exits at slot 13). */
+	/* Constants (LE). cP,cN,cR2N,cGX,cGY → 8,9,10,11,12. */
 	lea	rdx, [rip + cP]
 	push	5
 	pop	r15
 1:	call	fe_from_le
 	dec	r15
 	jnz	1b
-
-	pop	rsi                 /* sig */
-	call	fe_from_be          /* r → 13 */
-	call	fe_from_be          /* s → 14 */
 
 	push	obc_v1
 	pop	rdi

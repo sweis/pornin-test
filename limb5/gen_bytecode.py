@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Generate bytecode for tv_ecdsa_limb11.S.
+"""Generate bytecode for limb5/tv_ecdsa.S. Forked from common/ — the
+slot layout diverged: BE decode chain starts at slot 3 (disp8 reach),
+all 8 backup values staged contiguous at slots 0-7 for one COPYHI.
 
 Emits bc_rcb, bc_v3, bc_v1 as .byte directives with slot-usage
 validation. The RCB schedule is tiny.S's, remapped to avoid reserved
@@ -116,71 +118,67 @@ for op, d, s1, s2 in RCB:
 # X,Y,Z always same level. Final check: X·1 vs r·Z both at L−1.
 
 V1 = [
-    # Entry: r@13, s@14, Qx@5, Qy@6, e@7, cP@8, cN@9, cR2_n@10, Gx@11, Gy@12.
-    # Free: 0,1,2,3,4. Temps: 2,3 (on-curve). INV dst: 3.
+    # Entry: Qx@3, Qy@4, r@5, s@6, e@7, cP@8, cN@9, cR2_n@10, Gx@11, Gy@12.
+    # Exit stages slots 0-7 = (G.X, G.Y, G.Z, Q.X, Q.Y, Q.Z, u1, u2) for
+    # one rep movsq to 16-23. Qx,Qy never move (already at 3,4). Temps
+    # routed around slot 0 (Gx²) and slots 3,4,5,6 (inputs alive longer).
 
     # ── Range checks ──
-    ('CHKLT', 0, 13, 9),  # r < n
-    ('CHKLT', 0, 14, 9),  # s < n
-    ('CHKLT', 0,  5, 8),  # Qx < p
-    ('CHKLT', 0,  6, 8),  # Qy < p
+    ('CHKLT', 0,  5, 9),  # r < n
+    ('CHKLT', 0,  6, 9),  # s < n
+    ('CHKLT', 0,  3, 8),  # Qx < p
+    ('CHKLT', 0,  4, 8),  # Qy < p
 
-    # ── s_mont → 14 (overwrite s); consumes cR2_n @ 10 ──
-    ('Nmul', 14, 14, 10),
+    # ── s_mont → 6 (overwrite s); consumes cR2_n @ 10 ──
+    ('Nmul',  6,  6, 10),
 
-    # ── b-derive (G @ 11,12; b → 10). Gx² → slot 2, survives for G-scale. ──
+    # ── b-derive (G @ 11,12; b → 10). Gx² → slot 0, SURVIVES to G-scale. ──
     ('Fmul', 10, 12, 12),
-    ('Fmul',  2, 11, 11),  # Gx² → 2 (REUSED by G-scale)
-    ('Fmul',  4,  2, 11),  # Gx³ = Gx²·Gx
-    ('Fsub', 10, 10,  4),
-    ('Fadd',  4, 11, 11),
-    ('Fadd',  4,  4, 11),
-    ('Fadd', 10, 10,  4),
+    ('Fmul',  0, 11, 11),  # Gx² → 0 (on-curve temps avoid slot 0)
+    ('Fmul', 13,  0, 11),  # Gx³
+    ('Fsub', 10, 10, 13),
+    ('Fadd', 13, 11, 11),
+    ('Fadd', 13, 13, 11),
+    ('Fadd', 10, 10, 13),
 
-    # ── On-curve: Y²Z − X³ + 3XZ² − bZ³ ≡ 0, all @ level −2 ──
-    # Z=1 @ 15 (RCB-safe). 3Qx temp → slot 0 (free — r moved to 13).
-    # Slot 2 stays Gx² (not touched here).
+    # ── On-curve: temps 1,2,13 (slot 0 stays Gx²; 3,4 stay Qx,Qy). ──
     ('SET1', 15,  0,  0),  # Z = 1
-    ('Fmul',  4,  6,  6),  # Qy²  @ −1
-    ('Fmul',  4,  4, 15),  # Qy²·Z  @ −2
-    ('Fmul',  3,  5,  5),  # Qx²  @ −1
-    ('Fmul',  3,  3,  5),  # Qx³  @ −2
-    ('Fsub',  4,  4,  3),
-    ('Fmul',  3, 15, 15),  # Z²  @ −1
-    ('Fadd',  0,  5,  5),  # 2Qx  @ 0
-    ('Fadd',  0,  0,  5),  # 3Qx  @ 0
-    ('Fmul',  0,  0,  3),  # 3Qx·Z²  @ −2
-    ('Fadd',  4,  4,  0),
-    ('Fmul',  3,  3, 15),  # Z³  @ −2
-    ('Fmul',  3, 10,  3),  # b·Z³  @ −2
-    ('Fsub',  4,  4,  3),
-    ('NORM',  4,  4,  0),
-    ('CHKZ',  0,  4,  0),
+    ('Fmul',  2,  4,  4),  # Qy²  @ −1
+    ('Fmul',  2,  2, 15),  # Qy²·Z  @ −2
+    ('Fmul',  1,  3,  3),  # Qx²  @ −1
+    ('Fmul',  1,  1,  3),  # Qx³  @ −2
+    ('Fsub',  2,  2,  1),
+    ('Fmul',  1, 15, 15),  # Z²  @ −1
+    ('Fadd', 13,  3,  3),  # 2Qx  @ 0
+    ('Fadd', 13, 13,  3),  # 3Qx  @ 0
+    ('Fmul', 13, 13,  1),  # 3Qx·Z²  @ −2
+    ('Fadd',  2,  2, 13),
+    ('Fmul',  1,  1, 15),  # Z³  @ −2
+    ('Fmul',  1, 10,  1),  # b·Z³  @ −2
+    ('Fsub',  2,  2,  1),
+    ('NORM',  2,  2,  0),
+    ('CHKZ',  0,  2,  0),
 
-    # ── INV (s_mont @ 14; w_mont → 3) ──
-    ('COPY',  3, 14,  0),
-    ('INV',   3, 14,  0),
+    # ── INV (s_mont @ 6; w_mont → 13) ──
+    ('COPY', 13,  6,  0),
+    ('INV',  13,  6,  0),
 
-    # ── (r+n) → 14 for bc_v3 (r·Z derived as (r+n)Z − nZ); u1,u2 → 0,1 ──
-    ('Fadd', 14, 13,  9),  # (r+n) @ level 0 → 14. r<n, n<2^256 → r+n<2^257.
-    ('Nmul',  1, 13,  3),  # u2 = r·w → 1
-    ('Nmul',  0,  7,  3),  # u1 = e·w → 0
+    # ── (r+n) → 14; u1 → 6 (overwrites s_mont), u2 → 7 (overwrites e) ──
+    ('Fadd', 14,  5,  9),  # (r+n) → 14
+    ('Nmul',  6,  7, 13),  # u1 = e·w → 6
+    ('Nmul',  7,  5, 13),  # u2 = r·w → 7
 
-    # ── G-scale: (Gx², Gx·Gy, Gx_mont) → 2,3,4. Gx² already @ 2 from b-derive. ──
-    ('COPY',  4, 11,  0),  # Gx_mont → 4 (Z_G)
-    ('Fmul',  3, 11, 12),  # Gx·Gy → 3
+    # ── G-scale: (Gx², Gx·Gy, Gx_mont) → 0,1,2. Gx² already @ 0. ──
+    ('Fmul',  1, 11, 12),  # Gx·Gy → 1
+    ('COPY',  2, 11,  0),  # Gx_mont → 2 (Z_G)
 
-    # ── Z_Q = plain 1 ──
-    ('COPY',  7, 15,  0),
+    # ── Z_Q = plain 1 → slot 5 (r@5 consumed by u2 above) ──
+    ('COPY',  5, 15,  0),
 
-    # ── Shamir backup ──
-    ('COPYHI', 0,  2, 0),  # 2,3 → 16,17 (Gx², Gx·Gy)
-    ('COPYHI', 2,  4, 0),  # 4,5 → 18,19 (Gx_mont=Z_G, Qx)
-    ('COPYHI', 4,  6, 0),  # 6,7 → 20,21 (Qy, 1=Z_Q)
-    ('COPYHI', 6,  0, 0),  # 0,1 → 22,23 (u1, u2)
+    # ── Shamir backup: slots 0-7 contiguous → one COPYHI (8 slots). ──
+    ('COPYHI', 0,  0, 0),  # 0..7 → 16..23
 
-    # ── acc = (0:1:0). Fsub(x,x)=0 — ZERO handler not needed. Both
-    # slots hold valid values here (0=u1, 2=Gx²) so self-subtract is safe. ──
+    # ── acc = (0:1:0). ──
     ('Fsub', 0, 0, 0),
     ('SET1', 1, 0, 0),
     ('Fsub', 2, 2, 2),
@@ -271,8 +269,8 @@ if __name__ == '__main__':
           file=sys.stderr)
 
     # V1 slot lifetime
-    v1_init = {5:'Qx', 6:'Qy', 7:'e', 8:'cP', 9:'cN',
-               10:'cR2n', 11:'Gx', 12:'Gy', 13:'r', 14:'s'}
+    v1_init = {3:'Qx', 4:'Qy', 5:'r', 6:'s', 7:'e', 8:'cP', 9:'cN',
+               10:'cR2n', 11:'Gx', 12:'Gy'}
     v1_survive = {8:'cP', 9:'cN'}
     errs, out = simulate('v1', V1, v1_init, v1_survive)
     if errs:
