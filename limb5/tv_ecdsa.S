@@ -238,8 +238,7 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 
 fe_mul5:
 	push	rbx
-	push	r12
-	mov	r12, rdx
+	push	rdx                 /* b → [rbp+24]. r12 (=.Ljt) stays untouched. */
 	push	rdi
 	push	rcx
 	enter	ACC_QW*8, 0
@@ -253,16 +252,17 @@ fe_mul5:
 	lea	r8, [rsi + K*8]
 
 	/* CIOS: schoolbook row + reduce row per iteration. r10 = &acc[i]
-	 * (survives .Lin). r9 indexes a[] (stride 8); ·2 gives acc stride. */
+	 * (survives .Lin). rbx indexes a[] (stride 8) — non-REX counter.
+	 * r9 is the .Lin multiplicand (a[i] then q). */
 	push	-K*8
-	pop	r9
-.Lcios:	mov	rbx, [r8 + r9]              /* a[i] */
-	lea	r10, [rbp + r9*2 - K*16]    /* &acc[i] — disp8 (-80) */
-	mov	rsi, r12                    /* b */
+	pop	rbx
+.Lcios:	mov	r9, [r8 + rbx]              /* a[i] */
+	lea	r10, [rbp + rbx*2 - K*16]   /* &acc[i] — disp8 (-80) */
+	mov	rsi, [rbp + 24]             /* b — stack-stored, r12 stays = .Ljt */
 	call	.Lcnt                       /* .Lcnt sets rdi = r10 itself */
-	mov	rbx, [r10]                  /* acc[i].lo */
-	imul	rbx, r11
-	and	rbx, r13                    /* q */
+	mov	r9, [r10]                   /* acc[i].lo */
+	imul	r9, r11
+	and	r9, r13                     /* q */
 	mov	rsi, [rbp + 8]              /* m */
 	call	.Lcnt
 	mov	rax, [r10]                  /* acc[i] ≡ 0 mod 2^W now */
@@ -271,17 +271,16 @@ fe_mul5:
 	sar	rdx, W
 	add	[r10 + 16], rax
 	adc	[r10 + 24], rdx
-	add	r9, 8
+	add	rbx, 8              /* 64-bit — ebx would zero-extend, wreck negative index */
 	jnz	.Lcios
 
 	/* Carry-prop: acc[K..2K-1] (128-bit) → dst[0..K-1]. r10 ended at
 	 * &acc[K-1]; source = r10+16. Running carry in rdx:rbx; lodsq ×2
-	 * advances rsi by 16 (rax is scratch per iter). Top limb ≤ 2^42
-	 * (range proof) so dropping hi in the tail is correct. */
+	 * advances rsi by 16 (rax scratch). rbx = 0 from loop exit above —
+	 * no xor needed. Top limb ≤ 2^42 so dropping hi in tail is correct. */
 	lea	rsi, [r10 + 16]
 	mov	rdi, [rbp + 16]
 	xor	edx, edx
-	xor	ebx, ebx
 	mov	cl, K-1
 .Lcp5:	lodsq
 	add	rdx, rax
@@ -300,15 +299,15 @@ fe_mul5:
 
 	leave
 	pop	rcx
-	pop	rax
-	pop	r12
+	pop	rax                 /* discard rdi */
+	pop	rax                 /* discard rdx */
 	pop	rbx
 	ret
 
 .Lcnt:	mov	rdi, r10    /* both CIOS call sites need rdi = &acc[i] */
 	mov	cl, K       /* rcx high bytes zero — from rep stosq / prior .Lin */
 .Lin:	lodsq
-	imul	rbx
+	imul	r9
 	add	[rdi], rax
 	adc	[rdi+8], rdx
 	lea	rdi, [rdi+16]
