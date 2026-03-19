@@ -220,8 +220,12 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	pop	rdi
 	ret
 
+.Lnsp:	/* 2 B stub: rdi ← rsi. Both .Linv call sites want dst=s1;
+	 * factoring it here saves 3 B of stack-dance there. */
+	push	rsi
+	pop	rdi
 .Lnmul: /* MontMul mod n. fe_mul5 preserves rcx so INV's 384 calls
- * all inherit &cN. rel8 over .Linv + .Lfmul (54 B). */
+ * all inherit &cN. rel8 over .Linv + .Lfmul (53 B). */
 	movabs	r11, 0x11c8aaee00bc4f
 	jmp	fe_mul5
 
@@ -236,20 +240,15 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	mov	bl, 254             /* bit 255 implicit (seed = s_mont) */
 .Le:	pop	rsi
 	push	rsi
-	push	rsi
-	push	rsi
-	pop	rdi
-	pop	rdx
-	call	.Lnmul              /* dst = dst² */
+	mov	rdx, rsi
+	call	.Lnsp               /* rdi←rsi; dst = dst² */
 	bt	dword ptr [rip + cN], ebx   /* cN stored as n−2 */
 	jnc	.Lnx
-.Lmul:	pop	rdi
+.Lmul:	pop	rsi
 	pop	rdx
 	push	rdx
-	push	rdi
-	push	rdi
-	pop	rsi
-	call	.Lnmul
+	push	rsi
+	call	.Lnsp               /* rdi←rsi; dst = dst·s_mont */
 .Lnx:	dec	ebx
 	jns	.Le
 	pop	rax

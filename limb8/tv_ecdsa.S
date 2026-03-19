@@ -655,10 +655,19 @@ fe_mul_m:
 	 * trick needs top DWORD = -1, top qword isn't).  REX on every
 	 * op grows the body but 16 iterations vs 64 wins net.
 	 *
-	 * COUNTDOWN r11 = i·W: drops disp8 from both SIB loads AND
-	 * lands rdi at rsp+32 on exit (last iter: lea rdi=[rsp+0],
-	 * mul8 advances +32).  Addition commutes; iter order free.
-	 * sub rdi,N (4 B) gone, +32's gone (−2 B).  −6 B. */
+	 * COUNTDOWN r11 = i·W: no disp8 on either SIB (−2 B) AND rdi
+	 * lands at rsp+32 on exit, dropping sub rdi (−4 B).
+	 *
+	 * CARRY FIXUP: upcounting, mul8's final `add [t[i+8]],ebp`
+	 * never carries (t[i+8] is a fresh zero).  Downcounting, it's
+	 * already populated by iter i+1 — carry possible.  One
+	 * `adc [t[i+9]],ecx` (ecx=0 from mul8 dec-to-0, 3 B) suffices:
+	 * t[i+9]'s value at this point is bounded by two contributors —
+	 * iter i+1's final-add (<2^32) plus ONE prior adc-fixup (≤1).
+	 * So t[i+9] ≤ 2^32, meaning the adc produces at most one
+	 * deferred carry, which the NEXT-lower iteration's adc absorbs
+	 * (into its own t[i+9], which is this iteration's t[i+8] —
+	 * where mul8's 8-step loop DOES capture carries).  Net −3 B. */
 #ifdef SMALL_MUL8
 	push	28
 	pop	r11
@@ -666,13 +675,15 @@ fe_mul_m:
 	lea	rdi, [rsp+r11]      /* &t[i] — no disp */
 	mov	rsi, r9             /* b */
 	mul8	add                 /* t[i..i+8] += a[i]·b; rdi +=32 */
+	adc	[rdi+4], ecx        /* propagate final carry; ecx=0 here */
 	sub	r11, 4
 	jns	.Lm
+	/* rdi = rsp+32 = &t[8] (last iter: lea=rsp, mul8 +32). */
 #else
-	push	24
+	push	-32
 	pop	r11
-.Lm:	mov	rbx, [r10+r11]      /* a[i], qword — no disp */
-	lea	rdi, [rsp+r11]      /* &t[i] — no disp */
+.Lm:	mov	rbx, [r10+r11+32]   /* a[i], qword (same 5 B — REX.W|XB) */
+	lea	rdi, [rsp+r11+32]   /* &t[i] */
 	mov	rsi, r9             /* b */
 	mov	cl, 4
 	xor	ebp, ebp            /* 32-bit op zero-extends rbp */
@@ -687,11 +698,11 @@ fe_mul_m:
 	dec	ecx
 	jnz	7b
 	add	[rdi], rbp
-	sub	r11, 8
-	jns	.Lm
+	add	r11, 8
+	jnz	.Lm
+	/* default: last iter lea=rsp+24, 4×lea+8 = +32 → rsp+56. */
+	sub	rdi, 24
 #endif
-	/* rdi = rsp+32 = &t[8] from last iter (lea [rsp+0] + mul8 +32).
-	 * rcx = 0 from mul8 dec-to-0.  r11 = −W, dead. */
 .Lr:	mov	ebx, [rdi+32]       /* q = t[j+8] — NOT cleared */
 	test	ebx, ebx
 	jz	4f
