@@ -3,3 +3,4 @@ commit,bytes,cycles,note
 de151cc,1125,3040902,Phase 1: 607/607. 7-byte decoder (-13) + inc-byte cP (-3). Already < limb5x54 1141.
 fc89ce3,1113,3047684,r15=&cP disp8 + FIXED packed counter ((ebx+1)&63==0 not cmp bl W) + merged Fadd/Fsub + imul-cond-neg + rbx LE ctr (-12)
 72c7de0,1094,3057000,shr-bitmask BE loop (ebx=0b10101: CF=chain/pop ZF=exit one insn) + lodsq/dec/lodsd decoder (W=56=7B limb 32b top) + esi-offset .Lcadd + rbx=rcx=0 mov bl/cl (-19)
+PENDING,1084,3069000,xlatb backport from limb11x24: bcptr rbx->rsi (lodsw) jt r12->rbx (xlatb) r12 unused -> drop push/pop/lea (-11) bcrun +2 fe_from_be mov cl (-1). Net -10. FRAME 968->960 (4 pushes)

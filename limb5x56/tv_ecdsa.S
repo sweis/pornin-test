@@ -14,7 +14,8 @@
  *   n's m0inv = 0xd1c8aaee00bc4f (movabs, doesn't fit imm32).
  *   MASK = 2^56−1 = 0xffffffffffffff: movabs → r13, preserved everywhere.
  *
- * Slots: 40 B each (5 qwords). 24 slots. Frame 968 B (960 + 8 align).
+ * Slots: 40 B each (5 qwords). 24 slots. Frame 960 B (24·40 exactly;
+ * 4 callee-save pushes → no alignment pad needed).
  * Slots 0,1,2,3 reach disp8 from r14 (40*3 = 120 < 128).
  *
  * Constants stored as 32 LE bytes — `bt [cN], ebx` works directly in
@@ -33,7 +34,7 @@
 	.equ	K,      5
 	.equ	SLOT,   K*8        /* 40 B */
 	.equ	NSLOTS, 24
-	.equ	FRAME,  NSLOTS*SLOT + 8   /* 968 — +8 for 16-align with 5 pushes */
+	.equ	FRAME,  NSLOTS*SLOT       /* 960 — 4 pushes, no align pad */
 
 /* Slot map (same indices as limb11 — bytecode is slot-indexed):
  *   0-2   acc (X:Y:Z)
@@ -94,8 +95,8 @@ cGY:	.quad	0x57ce95560a8571ff, 0xe434a7e55cddf253
 /* ── Handlers ──
  * bc_run preloads rdi=dst, rsi=s1, rdx=s2 (slot pointers), rcx=&cN.
  * All handlers may clobber rax, rcx, rdx, rsi, rdi, r8-r11.
- * Must preserve rbx (bc ptr), r12 (jt), rbp (fail bits), r13 (MASK),
- * r14 (slot base), r15 (unused here — pt_mul's counter).
+ * Must preserve rbx (&.Ljt — for xlatb), rbp (fail bits), r13 (MASK),
+ * r14 (slot base), r15 (&cP). r12 wholly unused.
  *
  * Layout: .Lnmul → .Linv → .Lfmul → fe_mul5. .Lfmul falls through
  * (−2 B, no jmp). Handler shrinks from prior commits made room:
@@ -272,7 +273,7 @@ cGY:	.quad	0x57ce95560a8571ff, 0xe434a7e55cddf253
 
 fe_mul5:
 	push	rbx
-	push	rdx                 /* b → [rbp+24]. r12 (=.Ljt) stays untouched. */
+	push	rdx                 /* b → [rbp+24]. Stack-stored; no extra callee-saved reg. */
 	push	rdi
 	push	rcx
 	enter	ACC_QW*8, 0
@@ -292,7 +293,7 @@ fe_mul5:
 	pop	rbx
 .Lcios:	mov	r9, [r8 + rbx]              /* a[i] */
 	lea	r10, [rbp + rbx*2 - K*16]   /* &acc[i] — disp8 (-80) */
-	mov	rsi, [rbp + 24]             /* b — stack-stored, r12 stays = .Ljt */
+	mov	rsi, [rbp + 24]             /* b */
 	call	.Lcnt                       /* .Lcnt sets rdi = r10 itself */
 	mov	r9, [r10]                   /* acc[i].lo */
 	imul	r9, r11
@@ -362,8 +363,7 @@ fe_mul5:
 
 fe_from_be:
 	lea	rdx, [rdi + 40]
-	push	32
-	pop	rcx
+	mov	cl, 32              /* rcx ∈ {65, 0} at entry — pub_len arg or fe_from_le exit; high bytes clean */
 1:	lodsb
 	dec	rdx
 	mov	[rdx], al
@@ -440,16 +440,22 @@ pt_mul:
 
 bcrun_off:
 	push	rbp
-	push	rbx                 /* save first; lea goes straight to rbx */
-	lea	rbx, [rip + bc_rcb]
-	add	rbx, rcx            /* offset in rcx — .Lcadd has rcx=0 from rep movsq */
+	push	rbx                 /* pt_mul's packed counter — survives every dispatch */
+	/* bcptr in rsi (lodsw), jt in rbx (xlatb). r12 wholly unused → verify
+	 * drops push/pop/lea r12 (−11). Here: +7 (lea rbx) +2 (push/pop rsi)
+	 * −4 (lodsw vs mov+add) −3 (xlatb vs REX mov) = +2. Net −9.
+	 * Handlers already preserve rbx (fe_mul5, .Linv push/pop; rest don't
+	 * touch). bcptr save/restore around call — handlers clobber rsi via
+	 * lodsq for fe-limb reads. */
+	lea	rbx, [rip + .Ljt]
+	lea	rsi, [rip + bc_rcb]
+	add	rsi, rcx            /* offset in rcx — .Lcadd has rcx=0 from rep movsq */
 	xor	ebp, ebp
-	/* r12 = &.Ljt inherited from verify; fe_mul5 preserves it. */
 .Lbc:
-	mov	eax, [rbx]          /* over-read 2 B — and eax,0xF later clears */
-	add	rbx, 2
-	test	al, al
+	lodsw                       /* ax ← op; rsi += 2. High eax garbage — */
+	test	al, al              /*   and eax,0xF below clears. */
 	jz	.Lbce
+	push	rsi                 /* bcptr — clobbered by slot-ptr compute + lodsq */
 
 	movzx	edi, ah
 	mov	esi, edi
@@ -467,10 +473,11 @@ bcrun_off:
 	add	rdx, r14
 
 	and	eax, 0xF
-	mov	al, [r12 + rax]     /* high bytes zero from the `and` above */
-	add	rax, r12
+	xlatb                       /* AL ← [RBX+AL]. 1 B. rax high bytes stay 0 from and. */
+	add	rax, rbx
 	lea	rcx, [r15 + SLOT]   /* &cN = &cP + SLOT (r15 disp8, −3 B vs r14+disp32) */
 	call	rax
+	pop	rsi
 	jmp	.Lbc
 
 .Lbce:	neg	ebp
@@ -486,13 +493,12 @@ bcrun_off:
 tv_ecdsa_p256_verify_asm:
 	/* rdi=sig, rsi=sig_len, rdx=pub, rcx=pub_len, r8=hv, r9=hv_len */
 	push	rbx
-	push	r12
 	push	r13
 	push	r14
 	push	r15
 
-	/* Alignment: caller's rsp ≡ 0 (mod 16) at call → −8 (ret) − 40
-	 * (5 pushes) − 8 (enter's rbp) − 968 = −1024 ≡ 0 (mod 16). */
+	/* Alignment: caller's rsp ≡ 0 (mod 16) at call → −8 (ret) − 32
+	 * (4 pushes) − 8 (enter's rbp) − 960 = −1008 ≡ 0 (mod 16). */
 	enter	FRAME, 0
 
 	xor	eax, eax
@@ -510,7 +516,6 @@ tv_ecdsa_p256_verify_asm:
 	pop	r15
 	pop	r14
 	pop	r13
-	pop	r12
 	pop	rbx
 	ret
 
@@ -533,7 +538,6 @@ tv_ecdsa_p256_verify_asm:
 	push	-1
 	pop	r13
 	shr	r13, 64-W           /* MASK = 2^56−1; movabs is 10 B, this is 8 */
-	lea	r12, [rip + .Ljt]   /* jump table — preserved by handlers + fe_mul5 */
 
 	/* BE chain at slot 3 (3*SLOT = 120: disp8). Qx,Qy,r,s,e → 3..7.
 	 * rdi ends at slot 8, ready for LE constants. The bc_v1 layout
