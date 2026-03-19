@@ -26,4 +26,6 @@ fec3c0d,1201,0,Full-chain decodes (zero lea's post-Qx); Gx² shared b-derive→G
 3fee5eb,1129,12090000,Hoist sign-test into .Lcprop tail — 3 callers branch on returned flags (−8).
 4728422,1127,12090000,bcrun_off: lea directly into rbx after push (drops push rdi;pop rbx). Ported from limb8.
 8629b61,1120,12090000,SF from Lcp_shared's add (−4, no test needed); COPYHI dst=15 disp8 (−3). Ported from limb5.
-HEAD,1119,12090000,Lasmod: imul rax,rdx (4B) for ±1 conditional negate beats xor+sub (6B). Laddm +1B for push 1. Net −1.
+cd37a0f,1119,12090000,Lasmod: imul rax,rdx (4B) for ±1 conditional negate beats xor+sub (6B). Laddm +1B for push 1. Net −1.
+caef18f,1116,12090000,Loop 3 fe_from_le calls (cR2N/Gx/Gy). 12 B vs 15 B direct.
+HEAD,1114,12090000,Nmul jt → fe_mul11 direct; bc_run presets r11d=0xBC4F every dispatch. .Lnmul (8B) gone.
