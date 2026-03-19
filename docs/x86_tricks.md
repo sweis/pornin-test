@@ -773,7 +773,7 @@ Ranked by probable net savings × likelihood of a fit.
 | `cdq` for sign→{0,−1} mask | −4 B | medium | limb11 `.Lnorm` |
 | `not` vs `xor r,-1` | −1 B + flag clean | high | any future complement |
 | `lahf`/`sahf` flag transport | −3 B per use | low | future carry-save refactors |
-| `cwde` after `lodsw` for top-limb | −1 B | **high** | limb11 `fe_from_le` |
+| `cwde` after `lodsw` for top-limb | −1 B | ~~high~~ **BROKEN** | limb11 `fe_from_le` — cN top16=0xFFFF, cGX=0x905F, both bit15 set → cwde sign-extends wrong. Off by 2^256. |
 | `rep lodsq` as rsi+=rcx*8 | −3 B | low | no current site |
 | `push [mem]; pop [mem]` 1-qw copy | −2 B vs mov;mov | low | non-rsi/rdi mem→mem |
 | `cmovcc` vs branch-around | −1 B/site | low | cold conditional moves |
