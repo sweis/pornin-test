@@ -109,13 +109,11 @@ cGY:	.quad	0x94d5f3a55582a15c, 0xae390d2a7917377c
 	ret
 
 .Lset1:
-	push	1
-	pop	rax
-	stosq
 	xor	eax, eax
-	push	K-1
+	push	K
 	pop	rcx
 	rep	stosq
+	inc	qword ptr [rdi - K*8]
 	ret
 
 .Lfadd:
