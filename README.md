@@ -1,152 +1,72 @@
 # ECDSA/P-256 verify — minimum bytes
 
-Size-optimised ECDSA/P-256 signature verification for boot-ROM-class
-targets. FIPS 186-5 compliant. Signature is raw 64 bytes (r‖s
-big-endian), public key is 65 bytes uncompressed (0x04‖X‖Y), hash is
-32–64 bytes (truncated to 32 per FIPS 186-5 §6.4).
+Size-golfed ECDSA/P-256 signature verification for boot-ROM targets.
+FIPS 186-5 §6.4.2. Signature is raw 64 bytes (r‖s big-endian), pubkey
+is 65 bytes uncompressed (0x04‖X‖Y), hash is 32–64 bytes (truncated
+to 32). Every object has **zero undefined symbols** — no libc.
 
-All measurements are of the verification object file only. Every object
-has **zero undefined symbols**: no memcpy/memmove/memset/libc.
+Thomas Pornin posed the challenge and is competing in parallel. His
+v7 is 928 B / 4.48M cycles (5×54 signed limbs). We currently hold the
+size floor at 890 B.
 
-## Build
+## Results
 
-```
-make size-tiny test-tiny wp-tiny     # the current smallest
-make size-fast test-fast wp-fast     # the predecessor (BMI2+MOVBE)
-make size      test      wp          # portable C reference
-```
-
-## Current results
-
-| Implementation | text+rodata | Cycles | Requires | Notes |
+| Track | Floor | Cycles | Arch | Notes |
 |---|---:|---:|---|---|
-| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8` | **933 B** | ~4.7M | MOVBE | 32-bit schoolbook, `scasd` advance |
-| **`tv_ecdsa_tiny.S`** `-DSMALL_MUL8 -DFAST_ADVANCE` | **939 B** | ~4.3M | MOVBE | 32-bit, `lea` advance (+6 B, −10%) |
-| **`tv_ecdsa_tiny.S`** (default) | **947 B** | **~3.6M** | MOVBE | 64-bit schoolbook |
-| **`tv_ecdsa_tiny.S`** `-DSOLINAS_P -DSOLINAS_LOOP` | **999 B** | ~3.1M | MOVBE | Solinas fold (looped adc) |
-| **`tv_ecdsa_tiny.S`** `-DSOLINAS_P` | **1005 B** | **~3.0M** | MOVBE | Solinas fold (unrolled) |
-| **`tv_ecdsa_speed.S`** | 1482 B | ~1.31M | MOVBE | One-shot Solinas, register-hoisted |
-| | 1718 B | ~1.19M | MOVBE | + unrolled Fadd/Fsub (u16 jump table) |
-| | 2647 B | **~1.09M** | MOVBE | + direct RCB (no bytecode dispatch) |
-| **`tv_ecdsa_fast2.S`** | **3265 B** | **~570K** | BMI2+ADX | mulx + **lazy-carry** Solinas — **beats fast.S** |
-| `tv_ecdsa_fast.S` | 1397 B | ~0.65M | BMI2+MOVBE | Montgomery+mulx, predecessor |
-| `tv_ecdsa_bc.S` | 1712 B | ~1.85M | — | first bytecode version |
-| `tv_ecdsa.c` (Cortex-M4) | 2082 B | — | — | realistic boot-ROM target |
-| `tv_ecdsa.c` (x86-64, gcc `-Os`) | 3076 B | — | — | portable C reference |
+| `limb8` `-DSMALL_MUL8` | **890 B** | ~5.2M | 8×32 q=t[top] | size floor — 38 B under Thomas |
+| `limb8` default | 908 B | ~4.0M | 8×32 q=t[top] | dominates Thomas on both axes |
+| `limb8` `-DSOLINAS_P` | 966 B | ~2.9M | 8×32 Solinas | no mul in reduce |
+| `limb5x56` | 1084 B | ~3.1M | 5×56 Montgomery | byte-aligned decode |
+| `limb5x54` | 1097 B | ~2.8M | 5×54 Montgomery | Thomas's arch, fastest Montgomery |
+| `limb11x24` | 1068 B | ~12M | 11×24 Montgomery | 1077 B / 4.1M with `-DFAST` |
+| `speed/fast2.S` | 3265 B | ~570K | BMI2+ADX | cycles corner, lazy-carry Solinas |
 
-**One source, multiple Pareto builds.** The default (947 B) uses
-64-bit schoolbook for the 512-bit product; `-DSMALL_MUL8` swaps in a
-32-bit schoolbook (−14 B) that uses `scasd` in the hot loop —
-microcoded, ~950K iterations/verify, ~1M extra cycles. Same reduce
-step either way.
+Full history in `docs/progress.csv`; chart at `docs/progress.png`.
 
-**vs Thomas** (external competing implementation): v6 at 955 B / ~4.33M
-cycles. Our default (947 B / ~3.6M) dominates it on both axes —
-Thomas is off the Pareto frontier. Full chart at
-[`docs/progress.png`](docs/progress.png).
+## Architecture — the four big ideas
 
-## Correctness
+**Bytecode interpreter.** Field-op call sites are ~15 B each (lea
+rdi/rsi/rdx + call); ~60 of them. Replaced with 2-byte ops over 22
+stack slots — `(s1|op, dst|s2)` nibbles, u8 jump table. RCB's 43 ops
+cost 87 bytes; the dispatch is ~50 B once.
 
-All implementations pass the same gate:
+**RCB complete addition** (Renes-Costello-Batina, ePrint 2015/1060).
+One 43-op formula for P+Q, 2P, P+(−P)=∞, ∞+Q=Q — no branches, no
+special cases. Homogeneous projective (x=X/Z). A 3-way branch tree
+(~70 B) becomes one bytecode call.
 
-- **33 hand-picked vectors**: RFC 6979 reference, signature
-  malleability (`s' = n − s`), hash numerically > n (must NOT be
-  reduced mod n), 48/64-byte hashes, `r=0`/`s=0`/`r≥n`/`s≥n`, pubkey
-  coords `≥p`, point-not-on-curve, wrong format byte, constructed
-  `u1·G + u2·Q = O` → must reject.
-- **574 Wycheproof vectors** (P-256, SHA-256 + SHA-512, P1363 raw).
-- **ASAN + UBSAN** via the C harness.
+**Projective final check.** Skip mod-p inversion entirely: valid iff
+`X ≡ r·Z ∨ X ≡ (r+n)·Z (mod p)`; prime p means `d1·d2 ≡ 0` is
+equivalent. Runs in bytecode. Fermat inversion is mod-n only.
 
-## `tv_ecdsa_tiny.S` architecture
+**q=t[top] reduce (limb8 only).** Both P-256 moduli have top 32-bit
+limb `0xFFFFFFFF` and `2^256 − m < 2^224`. The reduce is
+`t −= t[top]·m` — no Montgomery, no m0i, no R² constants. This is the
+only limb width where it works for both p and n; all other tracks are
+Montgomery (and use R-factor cancellation to drop cR² constants).
 
-What changed from fast.S to drop ~290 bytes:
+## Build & test
 
-- **No Montgomery form.** Plain modular arithmetic throughout. Both
-  P-256 moduli have top dword `0xFFFFFFFF` and `2^256 − m < 2^224`,
-  so the reduce step is just `t[j..j+8] −= t[j+8]·m` at 32-bit
-  granularity — `q = t[top_dword]` is exact to within one bit. No m0i,
-  no R², no conversion ops, no Montgomery-domain constants.
+```
+make test         # 607/607 (33 hand-picked + 574 Wycheproof) × 4 tracks
+make size         # all four floors side by side
+make bench        # 20-run median cycles, all tracks
+make chart        # regenerate docs/progress.png
+```
 
-- **Projective final check.** Valid iff `X ≡ r·Z ∨ X ≡ (r+n)·Z
-  (mod p)` — homogeneous projective, so `x = X/Z` not Jacobian
-  `X/Z²`. Entirely in bytecode; `n·Z` via a MULCN handler. Mod-p
-  inversion is gone.
+Per-track: `make -C limb8 size-all` for all variants; `bench20` for
+cycles; `test` for the full gate. ASAN/UBSAN via the C harness.
 
-- **Fermat inversion reads `cN` in .text directly.** `n` and `n−2`
-  differ only in bits 1–4 (four-bit borrow cascade, doesn't propagate
-  past byte 0). `bt [cN],i` walks the exponent; bits 0–4 special-cased.
-  No exponent buffer, no sub-2 at runtime.
+## Directory map
 
-- **B derived from G in bytecode.** `Gy² − Gx³ + 3Gx`. −32 B rodata.
-
-- **Shamir's trick inherited from fast.S.** Slot 6 = z = 1 serves both
-  G and Q; only X,Y swap.
-
-### Journey (1397 → 933)
-
-| ~Size | Key step |
-|---|---|
-| 1397 | fork from fast.S; roll muladd4 into a loop |
-| ~1320 | **drop Montgomery** — q=t[top] reduce, no m0i/R² |
-| ~1260 | fe_mul_m: countdown schoolbook, mulsub shared body |
-| ~1210 | INV as bytecode op; args on stack; drop r13/r14 frame |
-| ~1195 | **projective final check** — mod-p inversion deleted |
-| 1177 | Fadd fallthrough; fe_inv_m into handler block |
-| 1160 | merge bc_v2→bc_v1, single dispatch (−17) |
-| 1124 | cGX adjacent to cN/cP, one 16-qw block copy (−12) |
-| 1105 | **`bt` on cN directly** — no exponent buffer (−19) |
-| 1071 | op6/7 merge → fe_sub_raw inlines; .Lop8 at 255/255 |
-| 1012 | **RCB complete addition** — 3-way branch → one formula (−59) |
-| 985 | **addend slot shift** — Shamir setup → one rep movsq (−16) |
-| 979 | imul edi,esi,6 for slot12; drop r15; lodsb for 0x04 (−6) |
-| 969 | **fe_inv_m: no seed copy** — bytecode sets dst=1, bit 255 (−10) |
-| 957 | .Lfm = Nmul; layout reorders for rel8 jmps (−12) |
-| 960 | push-zero unrolled: +3 B kills 220K cyc of `loop` penalty |
-| 964 | **mul8: drop `loop`, keep `scasd`** — +4 B, −39% cycles |
-| 935 | **cP built at runtime** (r8=&cP, rbp−40) → fe_iszero inlines; bc_run inherits r14; Fadd commutes X+=Y (−29) |
-| 933 | **EFD reschedule**: hoist RCB 14,15 → 5 scratch slots → cP@slot8 → .Lcadd disp8 (−2) |
-
-## Earlier implementations
-
-### `tv_ecdsa_fast.S` — 1397 B, Montgomery + mulx + Shamir
-
-The predecessor. CIOS Montgomery with advancing-pointer (no memmove),
-`mulx` unrolled muladd4 (flag-preservation threads CF across limbs),
-Shamir's trick for the scalar walk. BMI2+MOVBE required.
-
-### `tv_ecdsa_bc.S` — 1712 B, first bytecode version
-
-Where the bytecode interpreter came from. 2-byte ops, nibble-encoded
-`(dst|s1, s2|op)`, 16 contiguous slots. Replaced ~60 field-op call
-sites (~15 B each) with 2 B of bytecode.
-
-### Portable C — 3076 B x86-64 / 2082 B Cortex-M4
-
-32-bit limbs, no 128-bit intrinsics, `-ffreestanding`. One generic
-Montgomery multiplier and one generic Fermat inverter, both
-parameterised by modulus. Thumb-2's 16-bit encoding is very dense for
-pointer-passing code: pt_dbl/pt_add/verify are 40–46% smaller on
-Cortex-M4 than on x86-64.
-
----
-
-## `sign_zmm.c` — constant-time signer (AVX-512 IFMA)
-
-The opposite problem from the verifier. Not size-optimised; instead,
-secrets (d, k, every ladder intermediate) never touch memory in a
-data-dependent way. Zero conditional branches in the hot path.
-~1.8M cycles/sign.
-
-- **5×52 limbs**, one field element per ZMM. `vpmadd52luq`/`huq`
-  give the schoolbook product directly.
-- **Barrett K=512**: μ = ⌊2^512/m⌋ fits exactly 5 limbs for both p
-  and n. Three schoolbooks per reduce, one `cond_sub`.
-- **Montgomery ladder** + XOR-mask cswap. Same 43-op RCB complete
-  addition as `tv_ecdsa_tiny.S` — doubling is self-add, no ∞ cases.
-- **pt_add spills** (~200 stack writes) to fixed `%rbp` offsets —
-  same cache pattern every call. Not a leak; the addresses don't
-  vary with the secret.
-
-`make test-sign` — 6 layers × 783 vectors, including RFC 6979 A.2.5.
-Cross-verified against `tv_ecdsa_tiny.S`. Reference model in
-`sign_zmm_model.py`; design notes in `tv_ecdsa_sign_zmm.S`.
+```
+limb8/      8×32 q=t[top]. The only non-Montgomery track. 890 B floor.
+limb11x24/  11×24 Montgomery. Trick-catalogue source; most ports start here.
+limb5x54/   5×54 Montgomery. Thomas's architecture. Fastest of the Montgomery tracks.
+limb5x56/   5×56 Montgomery. Byte-aligned limbs — 7-byte decoder.
+speed/      fast/fast2/speed.S. Cycles, not bytes. BMI2+ADX.
+signer/     AVX-512 constant-time signer. Separate problem.
+common/     Shared: test harnesses, bench.c, track.mk, gen_bytecode.py, range_proof.py.
+archive/    Superseded: C refs, early asm, Rust port.
+docs/       progress.csv, chart, tinyp256.tex, trick catalogues.
+```
