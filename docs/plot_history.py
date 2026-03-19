@@ -211,7 +211,7 @@ on_chart = [(b, c) for b, c, _ in TRAIL_SHOWN if b <= XMAX]
 tx = [p[0] for p in on_chart]
 ty = [p[1] for p in on_chart]
 ax.plot(tx, ty, ':', color='#b0b0b0', linewidth=0.7, zorder=2,
-        label='optimization trail')
+        label='tiny.S → limb8 (8×32, non-Mont)')
 ax.scatter(tx, ty, c='#4a6fa5', s=22, edgecolors='#2a4670',
            linewidths=0.5, zorder=3, alpha=0.7)
 # Tip annotation (limb8's current size).
