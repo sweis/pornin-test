@@ -532,11 +532,17 @@ Fadd:	push	rsi
 	pop	rsi
 	/* FALLTHROUGH — rdi=rdx=&dst, rsi=s1 */
 /* fe_sub_raw inlined here — sole remaining caller.  The old op6/7
- * merge freed the handler-block headroom for this. */
+ * merge freed the handler-block headroom for this.
+ *
+ * CF=0 PRECONDITION (for sbb chain): bc_run's `add rax,r12` is the
+ * last CF-setter on the dispatch path (sum < 2^48 → CF=0); Fadd's
+ * fallthrough sees CF=0 from the first .Lop3's P−s2 (never borrows);
+ * fe_mul_m's `add rsp,72` sets CF=0.  push/pop preserve CF, so the
+ * old `xor ecx,ecx`'s CF-clear was redundant.  push;pop = 3 B. */
 .Lop3:	push	rcx
 	push	rdi
-	xor	ecx, ecx
-	mov	cl, 4
+	push	4
+	pop	rcx
 3:	lodsq
 	sbb	rax, [rdx]
 	stosq
