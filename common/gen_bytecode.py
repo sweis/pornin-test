@@ -175,10 +175,9 @@ V1 = [
     ('COPY',  7, 15,  0),
 
     # ── Shamir backup ──
-    ('COPYHI', 0,  2, 0),  # 2,3 → 16,17 (Gx², Gx·Gy)
-    ('COPYHI', 2,  4, 0),  # 4,5 → 18,19 (Gx_mont=Z_G, Qx)
-    ('COPYHI', 4,  6, 0),  # 6,7 → 20,21 (Qy, 1=Z_Q)
-    ('COPYHI', 6,  0, 0),  # 0,1 → 22,23 (u1, u2)
+    # Slots 0-7 now hold [u1,u2,Gx²,Gx·Gy,Gx_mont,Qx,Qy,1] in order.
+    # Single 8-slot COPYHI → 16-23. pt_mul uses oU1=16, oBAK=18.
+    ('COPYHI', 0,  0, 0),  # 0-7 → 16-23
 
     # ── acc = (0:1:0). Fsub(x,x)=0 — ZERO handler not needed. Both
     # slots hold valid values here (0=u1, 2=Gx²) so self-subtract is safe. ──

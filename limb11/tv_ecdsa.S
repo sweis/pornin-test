@@ -42,17 +42,16 @@
  *   11-13 RCB scratch
  *   14    r_mont (bc_v1 writes, bc_v3 reads — survives 256 RCBs)
  *   15    cR2_p → n_mont (bc_v1 converts in place as LAST MULR2)
- *   16-21 Shamir backups (G @ 16-18, Q @ 19-21)
- *   22,23 u1, u2 scalars (normalized [0,n) for bit-read)
+ *   16,17 u1, u2 scalars (normalized [0,n) for bit-read)
+ *   18-23 Shamir backups (G @ 18-20, Q @ 21-23)
  *
  * (Names can't be sP/sN — Intel-syntax regs are case-insensitive.) */
 	.equ	oADD,   5*SLOT
 	.equ	oCP,    8*SLOT
 	.equ	oCN,    9*SLOT
 	.equ	oR2,    15*SLOT
-	.equ	oBAK,   16*SLOT
-	.equ	oU1,    22*SLOT
-	.equ	oU2,    23*SLOT
+	.equ	oU1,    16*SLOT     /* 8-slot COPYHI: 0-7 → 16-23 */
+	.equ	oBAK,   18*SLOT     /*   [u1,u2,Gbak(3),Qbak(3)] */
 
 /* ======================================================================
  * RODATA — before .text so bytecode stream offsets fit push-imm8
@@ -108,10 +107,10 @@ cGY:	.quad	0xf25357ce95560a85, 0x4ab8e43519e45cdd
 	mov	r11d, 0xBC4F
 1:	jmp	fe_mul11            /* shared rel32 — one 5-B jmp, not two */
 
-.Lcopyhi: /* 2 slots from s1 → slot(dst+16). Shamir sources pair:
- * (2,3)→(16,17), (4,5)→(18,19), (6,7)→(20,21), (0,1)→(22,23). */
+.Lcopyhi: /* 8 slots from s1 → slot(dst+16). bc_v1 stages 0-7 then
+ * single COPYHI(0,0,0) → 16-23. 8*K = 88 fits push imm8. */
 	add	rdi, 16*SLOT
-	push	2*K
+	push	8*K
 	jmp	.Lcopy_n
 .Lcopy:
 	push	K
