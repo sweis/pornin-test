@@ -1,9 +1,9 @@
 /* ======================================================================
  * ECDSA/P-256 verify — x86-64, bytecode-interpreted, SIZE-OPTIMIZED.
  *
- * 917 B default build; 903 B with -DSMALL_MUL8.  The SMALL_MUL8 knob
- * trades −14 B for ~+30% cycles — `scasd` stays (the real size win),
- * `loop` is gone.  cP built at runtime (r8 = &cP, slot22 = rbp−40).
+ * 916 B default build; 898 B with -DSMALL_MUL8.  The SMALL_MUL8 knob
+ * trades −18 B for ~+50% cycles — `scasd` + `loop` in .Lop3 (both
+ * microcoded).  cP built at runtime (r8 = &cP, slot22 = rbp−40).
  * Requires MOVBE only (no BMI2 — plain `mul`, not `mulx`).
  *
  * THE FOUR BIG IDEAS
@@ -548,8 +548,14 @@ Fadd:	push	rsi
 	sbb	rax, [rdx]
 	stosq
 	lea	rdx, [rdx+8]
+#ifdef SMALL_MUL8
 	loop	3b                  /* preserves CF (sbb chain).  ~70K iters/verify
-	                             * vs mul8's ~10M; `loop` cost here is ~9%. */
+	                             * vs mul8's ~10M; `loop` cost ~9% on size-floor. */
+#else
+	dec	ecx                 /* dec preserves CF; +2 B for ~350K cyc win on
+	                             * default build — loop is microcoded (~7 cyc). */
+	jnz	3b
+#endif
 	pop	rdi
 	pop	rdx
 	jnc	1f
@@ -561,11 +567,16 @@ Fadd:	push	rsi
 	adc	rax, [rdx]
 	stosq
 	lea	rdx, [rdx+8]
+#ifdef SMALL_MUL8
 	loop	2b
+#else
+	dec	ecx
+	jnz	2b
+#endif
 1:	ret
 
 /* .Lop8 = fe_inv_m.  Placed here so its offset from .Ljt fits u8
- * (currently 252/255).  Called only from bc_v1 (op 7; the label
+ * (currently 222/255 default, 218 SMALL_MUL8).  Called only from bc_v1 (op 7; the label
  * name is historical).  Mod-n only — mod-p inversion was
  * eliminated by the projective final check. */
 .Lop8:
