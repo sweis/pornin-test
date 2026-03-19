@@ -514,6 +514,21 @@ tv_ecdsa_p256_verify_asm:
 	pop	r12
 	pop	rbx
 	ret
+
+/* Dispatch tail — lives here so both `jmp .Lfail` (up, −32) and the
+ * final `jmp .Ltail` (up, from .Lok end) fit rel8. Inlined at the end
+ * of .Lok it blows the .Lfail jmp past −128. */
+.Ltail:
+	push	obc_v1
+	pop	rdi
+	call	bcrun_off
+	push	rax
+	call	pt_mul
+	pop	rdx
+	or	eax, edx
+	inc	eax
+	jmp	.Lfail
+
 .Lok:
 	mov	r14, rsp
 	push	-1
@@ -539,32 +554,26 @@ tv_ecdsa_p256_verify_asm:
 	/* cP → slot 8, SIGNED limb form: (−1, 2^42, 0, 2^30, 2^40−256).
 	 * p = 2^256 − 2^224 + 2^192 + 2^96 − 1 — five ±power-of-2 terms.
 	 * Zero-fill then 4 patches. fe_mul5/NORM arithmetic is already
-	 * signed (imul, 128-bit acc); CHKLT changed to Fsub-based. */
+	 * signed (imul, 128-bit acc); CHKLT changed to Fsub-based.
+	 * rep stosd: 2 B (no REX.W), 10 dwords = 5 qwords. */
 	xor	eax, eax
-	push	K
+	push	K*2
 	pop	rcx
-	rep	stosq                       /* all zero; rdi → slot 9 */
+	rep	stosd                       /* all zero; rdi → slot 9 */
 	dec	qword ptr [rdi - 40]        /* limb 0 = −1 */
 	mov	byte ptr [rdi - 27], 0x04   /* limb 1 byte 5: 2^42 */
 	mov	byte ptr [rdi - 13], 0x40   /* limb 3 byte 3: 2^30 */
 	dec	dword ptr [rdi - 7]         /* limb 4 bytes 1-4: 2^40−256 = 0x00FFFFFFFF00 */
 
-	/* Constants (LE). cN,cR2N,cGX,cGY → 9,10,11,12. */
+	/* Constants (LE). cN,cR2N,cGX,cGY → 9,10,11,12. Stack-slot counter:
+	 * fe_from_le doesn't push (no call, no frame), so [rsp] stays put. */
 	lea	rdx, [rip + cN]
 	push	4
-	pop	r15
 1:	call	fe_from_le
-	dec	r15
+	dec	byte ptr [rsp]
 	jnz	1b
+	pop	rcx                         /* discard */
 
-	push	obc_v1
-	pop	rdi
-	call	bcrun_off
-	push	rax
-	call	pt_mul
-	pop	rdx
-	or	eax, edx
-	inc	eax
-	jmp	.Lfail
+	jmp	.Ltail
 
 	.section .note.GNU-stack,"",@progbits
