@@ -162,6 +162,7 @@ LIMB11_TRACK = read_unified('limb11x24')
 LIMB5X54_TRACK = read_unified('limb5x54')
 LIMB5X56_TRACK = read_unified('limb5x56')
 LIMB8_TRACK  = read_unified('limb8')
+STUPID_TRACK = read_unified('stupid')
 
 # Join TRAIL + limb8 (limb8 IS the tiny.S continuation). Filter to self-
 # Pareto: keep a point only if NO other point in the same sequence (past
@@ -193,7 +194,7 @@ def pareto(pts):
     return front
 
 ALL_XY = ([(b, c) for b, c, _ in TRAIL_SHOWN] + THOMAS_TRACK
-          + LIMB11_TRACK + LIMB5X54_TRACK + LIMB5X56_TRACK)
+          + LIMB11_TRACK + LIMB5X54_TRACK + LIMB5X56_TRACK + STUPID_TRACK)
 FRONT = pareto(ALL_XY)
 
 # ======================================================================
@@ -289,20 +290,33 @@ if LIMB5X56_TRACK:
                 bbox=dict(boxstyle='round,pad=0.3', fc='#c0e8e8',
                 ec='#006666', lw=0.8))
 
+# stupid track — orange. 766B reference, ~224M cycles.
+if STUPID_TRACK:
+    stx = [p[0] for p in STUPID_TRACK]
+    sty = [p[1] for p in STUPID_TRACK]
+    ax.scatter(stx, sty, c='#e07020', s=80, marker='*',
+               edgecolors='#a04010', linewidths=0.8, zorder=6,
+               label='stupid.S (reference)')
+    for bx, cy in STUPID_TRACK:
+        ax.annotate(f'stupid.S\n{bx}B / {cy//1000:.0f}M cyc',
+                    (bx, cy),
+                    textcoords="offset points", xytext=(14, -16), fontsize=9,
+                    color='#a04010',
+                    bbox=dict(boxstyle='round,pad=0.3', fc='#fde8d0',
+                    ec='#e07020', lw=0.8))
+
 ax.set_xlabel('Size (bytes)', fontsize=12)
-ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
+ax.set_ylabel('Cycles (thousands)', fontsize=12)
 ax.set_title('ECDSA/P-256 verify — size vs speed (lower-left is better)',
              fontsize=13)
 ax.legend(loc='upper right', framealpha=0.95, fontsize=9)
 ax.grid(True, alpha=0.2, which='both')
 ax.set_axisbelow(True)
-# Log-y: cycles span 629K → 8470K (~13:1).  Log compresses the tiny.S
-# speed-for-size grind (6.2M → 8.5M) into a visible band instead of
-# a wall at the top, and separates the fast.S cluster (650K-1000K)
-# from the bc.S baseline (1850K).  Size stays linear — only 2:1 range.
+# Log-y: spans 629K (fast2.S) → 224M (stupid.S), 2.5 decades.
+# Linear x: 700–2000 B (stupid at 766 needs left margin).
 ax.set_yscale('log')
-ax.set_xlim(880, 2000)    # cut off fast2.S/speed.S tail for detail
-ax.set_ylim(500, 15000)   # limb11 at ~12000K (loop-heavy)
+ax.set_xlim(700, 2000)
+ax.set_ylim(500, 300000)
 # Clean up the log axis: major ticks at nice values, no scientific notation.
 from matplotlib.ticker import ScalarFormatter, LogLocator
 ax.yaxis.set_major_locator(LogLocator(base=10, subs=[1, 2, 5]))

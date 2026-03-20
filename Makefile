@@ -4,12 +4,13 @@
 #   limb11x24/ — 11×24 Montgomery. 1068 B. Trick-catalogue source.
 #   limb5x54/  — 5×54 Montgomery. 1097 B. Thomas's architecture.
 #   limb5x56/  — 5×56 Montgomery. 1084 B. Byte-aligned decode.
+#   stupid/    — 766 B reference. Bytecode VM, no Shamir, no proj. check.
 #   speed/   — fast/fast2/speed.S. Cycles, not bytes. BMI2+ADX, MOVBE.
 #   signer/  — AVX-512 ZMM signer. Separate concern.
 #   common/  — shared: test harnesses, bench, range_proof, gen_bytecode.
 #   archive/ — superseded (C refs, old asm, Rust port).
 
-TRACKS = limb8 limb11x24 limb5x54 limb5x56
+TRACKS = limb8 limb11x24 limb5x54 limb5x56 stupid
 
 .PHONY: all test size bench clean chart $(TRACKS) speed signer
 

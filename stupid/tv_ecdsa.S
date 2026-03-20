@@ -1024,8 +1024,11 @@ Ltv_ecdsa_p256_verify__err:
 	ret
 
 	.global	tv_ecdsa_p256_verify
+	.global	tv_ecdsa_p256_verify_asm
 	.type	tv_ecdsa_p256_verify, %function
+	.type	tv_ecdsa_p256_verify_asm, %function
 tv_ecdsa_p256_verify:
+tv_ecdsa_p256_verify_asm:
 	# Check input sizes.
 	subq	$64, %rsi
 	jnz	Ltv_ecdsa_p256_verify__err

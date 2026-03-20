@@ -1,0 +1,2 @@
+commit,bytes,cycles,note
+ca21765,766,224000000,stupid.S baseline — bytecode VM, no Shamir, no projective check, mod-p Fermat inversion via bytecode
