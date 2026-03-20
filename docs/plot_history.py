@@ -2,7 +2,10 @@
 """
 Size-vs-speed progress chart (docs/progress.png).
 
-kcyc_nominal = measured * 1850 / bc_baseline — ratios transfer across µarches.
+TRAIL points are manually curated kcyc values (some normalized to the bc.S
+baseline at 1850K so ratios transfer across µarches). Track data (limb8, etc.)
+comes from per-track progress.csv files via read_unified() and contains raw
+kcyc measurements from this machine.
 """
 
 import matplotlib.pyplot as plt
