@@ -1,5 +1,9 @@
 # Readability Review: tinyp256.tex
 
+**Scope: this file is tinyp256.tex-specific.** Not part of the size-
+golf docs; it's review notes for the paper writeup. Safe to ignore
+when grinding bytes.
+
 **Target reader:** knows programming, does NOT know elliptic curves or x86 assembly optimization.
 **Abstract's promise:** "No prior exposure to elliptic curves is assumed."
 

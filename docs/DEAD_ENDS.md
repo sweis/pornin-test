@@ -1,24 +1,66 @@
 # Dead Ends — Do Not Retry
 
-Master index. Each entry: WHY it's dead (absolute vs conditional) + cross-ref.
-Detail lives elsewhere; this file stays ≤5 lines/entry.
+Master index. Each entry: WHY it's dead (**absolute** = math won't
+change / **conditional** = may unlock after shrinks / **attack-specific**
+= goal not dead, just this attack on it). Cite measurement.
+
+Grep-able index in `docs/TRICKS_LEDGER.md`.
 
 ---
 
 ## Architectural
 
-### Shamir-free via Hamburg signed-binary ladder
-+277 B measured, structural floor ~+110 B. Three missed cost centers:
-conditional init (bytecode can't branch, ~50 B), two-call verify tail
-(+117 B — arg setup ×2 + 3-way combine for tcId 204), Jacobian/homogeneous
-mismatch (+33 B). RCB completeness costs only 7 B at bytecode level; the
-infrastructure to avoid it costs 100+ B. → `docs/hamburg_assessment.md`
+### Shamir-free via Hamburg signed-binary ladder — ABSOLUTE
 
-### WW-AMM single-iteration s=256
-`−p⁻¹ mod 2^256 ≠ 1` — the "free q" conflated per-limb m0inv (=1 at
-W≤96) with full-width. And CIOS already IS the factored form: `.Lcnt`
-called 2×/row; commits 6de9a83/6ff298a eliminated the separate loops
-WW-AMM reintroduces. +110 B best case. → `docs/ww_amm_sketch.md`
+**+277 B measured** (prototype 1168 B vs limb8 891). Structural floor
+~+110 B. The survey's −30 to +20 B band counted bytecode ops, missed
+three asm cost centers:
+
+| Component | limb8 | hamburg | Δ |
+|---|--:|--:|--:|
+| pt_mul / scalar_mult | 74 | 141 | **+67** — conditional init |
+| verify tail | 158 | 335 | **+177** — two-call structure |
+| Fadd..fe_inv_m | 99 | 114 | +15 — mod-p inv parameterization |
+
+**Conditional init (~50 B):** test scalar bit 0; odd-path copies
+u→slot3 + selects Py_pos; even-path does 4× `not qword ptr`. Bytecode
+can't branch — irreducibly native. RCB's init is 12 B flat because
+completeness handles ∞+Q=Q in-formula.
+
+**Two-call verify tail (floor ~+117 B):** 2× call setup with arg
+marshalling, R2 stash, inter-call cN restore, u1==0 check, 3-way
+combine (tcId 204 mandates: Z=0∧X=0→double; Z=0∧X≠0→reject; Z≠0→done).
+14 pieces at 8–18 B each.
+
+**Coordinate mismatch (+33 B):** CMO98 is Jacobian, RCB homogeneous.
+Combine needs mod-p inversion → fe_inv_m parameterized for both moduli.
+
+**Deep finding:** bc_rcb (87 B complete) vs bc_dbl+bc_add (80 B
+incomplete) — RCB's completeness costs only **7 B at bytecode level**.
+Infrastructure to avoid it costs 100+ B. Rescue attempts (keep bc_rcb
+for combine only, full-Jacobian CMO98, skip tcId 204) all net-negative
+or FIPS violations. Correctness concern (Hamburg invariant for
+u∈[1,n−1]) was unfounded — u=1 works fine; only u1=0 special.
+
+### WW-AMM single-iteration s=256 — ABSOLUTE
+
+**+110 B best case.** Two independent killers.
+
+**Premise is false:** the "m0i=1 kills call #2" conflated per-LIMB
+m0inv (=1 for W≤96, because p's low 96 bits are all-ones) with
+full-width:
+```
+−p⁻¹ mod 2^256 = 0xffffffff00000002_..._00000001_..._00000001  ≠ 1
+```
+Direct test on 5 random inputs: `(T + T_lo·p) mod 2^256` nonzero every
+time — low 96 bits clear, bits 96–255 don't. For n: m0inv unstructured
+at every width.
+
+**CIOS already IS the factored form:** `.Lcnt` (15 B: mov cl,K; lodsq;
+imul rbx; add [rdi],rax; scasq; loop; ret) is called 2×/row. Commits
+6de9a83 (limb11 −7) and 6ff298a (limb5 −18) are "CIOS merge" —
+eliminated the separate loops WW-AMM reintroduces. Not applicable to
+limb8 (no Montgomery — q=t[top] direct).
 
 ### GLV / endomorphism scalar splitting
 P-256 j-invariant ∉ {0,1728} → no CM endo. Fake-GLV needs SNARK hints.
@@ -35,16 +77,16 @@ Nothing post-2015 (EFD enumerated, max year 2015). Fay 2014 has FOUR
 exception cases. Size wins must come from implementing RCB differently,
 not a different formula. → `docs/literature_survey.md`, `memory/reference_efd.md`
 
-### Bytecode gadgets in constants / instruction encodings
+### Bytecode gadgets in constants / instruction encodings — ABSOLUTE
 62–68% valid-op density — random bytes look valid by chance. Zero ≥4-B
 matches. Only clean frameshift gadget (limb8 byte 71) contains spurious
-INV. cN zero-zone walled by 8 bytes of `0xff`. → `docs/gadget_hunt.md`
+INV. cN zero-zone walled by 8 bytes of `0xff`. → `docs/GADGETS.md`
 
-### Native x86 tail-sharing / ROP
+### Native x86 tail-sharing / ROP — mostly ABSOLUTE
 One win (`stosq;ret` tail merge, −1 B, **applied** commit 7c4ad0e).
-INV/fe_mul11 4-B merge conditional on handler reorder (rel8 ripple risk,
-not taken). Too few ret-blocks for birthday collisions; code too dense
-with 1–2 B ops for offset-decode. → `docs/native_gadgets.md`
+INV/fe_mul11 4-B merge CONDITIONAL on handler reorder (rel8 ripple
+risk, not taken). Too few ret-blocks for birthday collisions; code too
+dense with 1–2 B ops for offset-decode. → `docs/GADGETS.md`
 
 ---
 
@@ -135,8 +177,38 @@ slot 0/1 reach disp8.
 
 ---
 
+## stupid/ track dead ends
+
+See `TRICKS_LEDGER.md` for tagged list. Key ABSOLUTE entries:
+- **4-bit operand encoding** — 30 distinct slots, need 5 bits
+- **RCB reschedule** — acc-VM: slot count free, only LD/ST count
+  matters, already minimal
+- **decode_int qword variant** — REX on lodsq/bswap/stosq = 18 B vs
+  13 B byte-loop
+- **Gx/Gy compression** — no zeros, no RLE; 64 raw bytes irreducible
+
+**ATTACK-SPECIFIC** (reframed and won — instructive, keep):
+- `call docopy` "+1 B, can't return" — S6 reframed: set up CALL stack
+  first, tail-jump, docopy's ret IS the return (−2 B)
+- slot-1-as-modulus "break-even: saved_rsp reloc + ONE disp32" — S3
+  different exit mechanism (`leaq 1088(%rbp)`) + slots 30/31 (−4 B)
+
+---
+
 ## Protocol
 
-Add entries WITH THE WHY. Absolute (WW-AMM's m0inv math) vs conditional
-(fall-through needed handler shrink first) matters — tells future
-sessions whether to retry after unrelated changes. Cite the measurement.
+**Record GOAL separately from ATTACK.** "share docopy: call rel32 is
++1, tail-jump requires no-continue" — not "share docopy: dead."
+
+**Three categories:**
+- **Absolute** — math won't change (WW-AMM m0inv, 4-bit encoding).
+  Don't retry.
+- **Conditional** — blocked by byte-accounting (rel8 doesn't fit by N).
+  Retry after N bytes accumulated elsewhere.
+- **Attack-specific** — this mechanism failed, goal may have others.
+  The tell: justification contains an assumed constraint ("because X
+  continues after," "while keeping Y"). Check if that constraint is
+  actually required.
+
+Cite the measurement. Write the FULL blocking condition, not just the
+net delta.

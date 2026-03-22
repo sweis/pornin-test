@@ -6,29 +6,41 @@ is 65 bytes uncompressed (0x04‖X‖Y), hash is 32–64 bytes (truncated
 to 32). Every object has **zero undefined symbols** — no libc.
 
 Thomas Pornin posed the challenge and is competing in parallel. His
-v7 is 928 B / 4.48M cycles (5×54 signed limbs). We currently hold the
-size floor at 890 B.
+stupid-VM baseline was 766 B; we're at **620 B** (−146). His non-stupid
+v7 is 928 B / 4.48M cycles.
+
+**New session? Read `docs/SESSION_GUIDE.md` first.**
 
 ## Results
 
 | Track | Floor | Cycles | Arch | Notes |
 |---|---:|---:|---|---|
-| `limb8` `-DSMALL_MUL8` | **890 B** | ~5.2M | 8×32 q=t[top] | size floor — 38 B under Thomas |
-| `limb8` default | 908 B | ~4.0M | 8×32 q=t[top] | dominates Thomas on both axes |
+| `stupid` (SMC) | **620 B** | ~2.4G | 1-B acc-VM, MUL=bytecode | **size floor** — boot-ROM without W^X only |
+| `stupid` `-DNO_SMC` | 633 B | ~239M | same, no self-mod | practical point |
+| `limb8` `-DSMALL_MUL8` | 890 B | ~5.2M | 8×32 q=t[top] | prev floor, native mul |
+| `limb8` default | 908 B | ~4.0M | 8×32 q=t[top] | dominates Thomas v7 both axes |
 | `limb8` `-DSOLINAS_P` | 966 B | ~2.9M | 8×32 Solinas | no mul in reduce |
+| `limb11x24` | 1068 B | ~12M | 11×24 Montgomery | 1077 B / 4.1M with `-DFAST` |
 | `limb5x56` | 1084 B | ~3.1M | 5×56 Montgomery | byte-aligned decode |
 | `limb5x54` | 1097 B | ~2.8M | 5×54 Montgomery | Thomas's arch, fastest Montgomery |
-| `limb11x24` | 1068 B | ~12M | 11×24 Montgomery | 1077 B / 4.1M with `-DFAST` |
 | `speed/fast2.S` | 3265 B | ~570K | BMI2+ADX | cycles corner, lazy-carry Solinas |
 
 Full history in `docs/progress.csv`; chart at `docs/progress.png`.
 
-## Architecture — the four big ideas
+## Architecture — the five big ideas
+
+**Multiplication as bytecode (stupid/ only).** Russian-peasant
+double-and-add: 8 B of bytecode replaces 80–150 B of native mul.
+Structurally identical to scalar×point — one FOR/NEXT/SKIPBITZ triple
+serves field mul, pt_mul, and inversion. ~100× slower (~140M cyc
+base) but a boot-ROM tolerates 90 ms once at boot. See
+`docs/stupid_analysis.md` for why we missed this for so long.
 
 **Bytecode interpreter.** Field-op call sites are ~15 B each (lea
-rdi/rsi/rdx + call); ~60 of them. Replaced with 2-byte ops over 22
-stack slots — `(s1|op, dst|s2)` nibbles, u8 jump table. RCB's 43 ops
-cost 87 bytes; the dispatch is ~50 B once.
+rdi/rsi/rdx + call); ~60 of them. limb* tracks: 2-byte 3-address ops,
+u8 jump table. stupid/: 1-byte accumulator ISA (3-bit op + 5-bit idx)
+with real CALL/RET stack. RCB's 43 ops cost 83–87 bytes; dispatch
+~50 B once.
 
 **RCB complete addition** (Renes-Costello-Batina, ePrint 2015/1060).
 One 43-op formula for P+Q, 2P, P+(−P)=∞, ∞+Q=Q — no branches, no
@@ -60,13 +72,14 @@ cycles; `test` for the full gate. ASAN/UBSAN via the C harness.
 ## Directory map
 
 ```
-limb8/      8×32 q=t[top]. The only non-Montgomery track. 890 B floor.
+stupid/     1-byte acc-VM, MUL=bytecode. 620 B floor. See docs/stupid_analysis.md.
+limb8/      8×32 q=t[top]. Only non-Montgomery native-mul track. 890 B.
 limb11x24/  11×24 Montgomery. Trick-catalogue source; most ports start here.
-limb5x54/   5×54 Montgomery. Thomas's architecture. Fastest of the Montgomery tracks.
+limb5x54/   5×54 Montgomery. Thomas's architecture. Fastest Montgomery.
 limb5x56/   5×56 Montgomery. Byte-aligned limbs — 7-byte decoder.
 speed/      fast/fast2/speed.S. Cycles, not bytes. BMI2+ADX.
 signer/     AVX-512 constant-time signer. Separate problem.
 common/     Shared: test harnesses, bench.c, track.mk, gen_bytecode.py, range_proof.py.
 archive/    Superseded: C refs, early asm, Rust port.
-docs/       progress.csv, chart, tinyp256.tex, trick catalogues.
+docs/       SESSION_GUIDE.md, TRICKS_LEDGER.md, DEAD_ENDS.md, progress.csv, chart, tinyp256.tex.
 ```

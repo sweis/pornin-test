@@ -53,17 +53,25 @@ int tv_ecdsa_p256_verify(const void *sig, size_t sig_len,
 
 # Implementation notes
 
-**Current:** `limb8/tv_ecdsa.S` — one source, three Pareto builds:
-- **890 B** `-DSMALL_MUL8` (~5.2M cyc) — 32-bit schoolbook, size floor
-- **908 B** default (~4.0M cyc) — 64-bit schoolbook product
-- **966 B** `-DSOLINAS_P` (~2.9M cyc) — P-256 fold, no multiplies in reduce
+**Entry point for new sessions: `docs/SESSION_GUIDE.md`** — current
+state, workflow, meta-lessons on local-minimum avoidance, agent-prompt
+patterns. Read it first.
 
-MOVBE only. Thomas v7: **928 B / ~4.48M cyc** (5×54). Our SMALL_MUL8
-floor is 38 B under; default dominates Thomas on both axes.
+**Current floor:** `stupid/tv_ecdsa.S` — bytecode VM, MUL=double-and-add:
+- **620 B** SMC default (~2.4G cyc) — self-modifying z256, boot-ROM only
+- **622 B** `-DFAST_Z256` (~1.8G cyc) — dec;jnz in z256 loop
+- **633 B** `-DNO_SMC` (~239M cyc) — practical point, no pipeline stalls
+
+**Previous floor:** `limb8/tv_ecdsa.S` — native mul, three Pareto builds:
+- **890 B** `-DSMALL_MUL8` (~5.2M cyc) — 32-bit schoolbook
+- **908 B** default (~4.0M cyc) — 64-bit schoolbook product
+- **966 B** `-DSOLINAS_P` (~2.9M cyc) — P-256 fold
+
+Thomas: 766 B stupid baseline (we're −146 under); v7 non-stupid at
+928 B / ~4.48M, expecting ~893 after b-derive port.
 
 Other tracks: `limb11x24` 1068 B, `limb5x56` 1084 B, `limb5x54` 1097 B.
-All Montgomery; all share the bytecode interpreter + RCB + projective
-check. Full history in `docs/progress.csv`; chart at `docs/progress.png`.
+Full history in `docs/progress.csv`; chart at `docs/progress.png`.
 
 ## Workflow
 
@@ -98,5 +106,37 @@ any commit. ASAN/UBSAN via the C harness.
 - **CF=0 into .Lop3.** bc_run's `add rax,r12` is the last flag-setting
   op before dispatch; sbb/adc chains depend on it.
 
+## Invariants (stupid/) — audit on reorder
+
+- **decode_int is EXACTLY 13 B** (was 15; shrunk in session 6).
+  curve_constants follows immediately. `leaq 13(%rbx)` in
+  INTERPRETER_BEGIN hardcodes this — gas would emit disp32 for a
+  label-diff expression. Adjust if decode_int changes.
+- **Constants block: Gx+Gy (64 B) + n_bottom (16 B) = 80 B.** Bytecode
+  follows immediately. n_top+p built at runtime via shr/sbb loop.
+  Values MUST NOT be separated or reordered.
+- **rcx[8..63]=0 precondition for decode_int.** Callers rely on
+  `mov cl,$32` + `loop` working; high bytes must be zero. Production
+  gets it from `subq $65,%rcx;jnz` at entry.
+- **decode_int preserves r8–r10.** verify() relies on this across
+  all 5 decode calls. Source is in rdx (not rsi) so rsi=bytecode ptr
+  survives.
+- **SMC build: PATCH_OFF = Lz256_patch − translation_table** (= 21).
+  op_sub xors with 0x08 (adc 0x11 ↔ sbb 0x19). **Invariant: PATCH =
+  0x11 on entry to op_add/op_sub.** Both paths reset before ret.
+  `.selfmod` section with awx flags.
+- **z256 layout:** translation_table (8 B) + microcode_mul (8 B) =
+  z256_addsub at offset 16. `Z256_OFF = 16` hardcoded in op_add.
+- **Extended table is 5 entries** (was 8; FAILCC subsumed SKIPCS/CC/
+  FAIL). `movzbl -5(%rax,%rcx)` in op_extended hardcodes the size.
+- **Fall-throughs (reorder breaks these):** op_skipbitz→doskip,
+  op_sub→op_add, op_ld/op_st→docopy shared tail, op_for→Lswap_ret,
+  op_failcc→Lop_reset.
+- **Handler dispatch invariant: CF=0 on entry.** Several handlers
+  assume it (op_add's jnc+xchg picks primary/secondary).
+- **Slot layout:** 32 slots × 32 B. Slot 1 = modulus VALUE (not ptr).
+  Slots 30/31 = modN/modP. Slot 27 = ONE (inline `pushq $1`). Slots
+  28/29 = Gx/Gy. Exit via `leaq 1088(%rbp)` — no saved_rsp.
+
 x86-64 encoding catalogue in `docs/x86_tricks.md`. Dead-end log in
-`docs/DEAD_ENDS.md`.
+`docs/DEAD_ENDS.md`. Complete trick ledger in `docs/TRICKS_LEDGER.md`.
