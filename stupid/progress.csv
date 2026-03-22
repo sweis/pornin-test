@@ -22,3 +22,4 @@ d6a3cf4,692,0,build p at runtime via stosl; 17 B replaces 32 B data
 dee374c,673,0,dec r9d/jns in op_next instead of sub/jnc
 2981dce,672,240199924,incl instead of movb $1 for ONE init
 HEAD,676,147230522,FAST_Z256 build: dec;jnz in z256_add/sub (+4 B, −39% cyc)
+2026-03-22,671,T8 elim: inline 3*t2 as 3 subs + refactor t0'=3*(t0-t2)

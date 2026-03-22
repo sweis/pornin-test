@@ -501,11 +501,9 @@ point_add_to_W:
 	_ST _T7 ; _ADD _T1 ; _ST _T5
 	_LD _T1 ; _SUB _T7 ; _ST _T7
 
-	# t8 <- 3*t2
-	_LD _T2 ; _ADD 0 ; _ADD _T2 ; _ST _T8
-
-	# t6 <- 3*(b*t6 - t0 - t8)
-	_LD _T6 ; _MUL _B ; _SUB _T0 ; _SUB _T8 ; _ST _T6
+	# t6 <- 3*(b*t6 - t0 - 3*t2)
+	# (t8=3*t2 inlined: -4 B delete, +2 here, +1 at t0' = net -1 B)
+	_LD _T6 ; _MUL _B ; _SUB _T0 ; _SUB _T2 ; _SUB _T2 ; _SUB _T2 ; _ST _T6
 	_ADD 0 ; _ADD _T6 ; _ST _T6
 
 	# t4 <- (Y1 + Z1)*(Y2 + Z2) - t1 - t2
@@ -516,8 +514,8 @@ point_add_to_W:
 	_MUL _T6 ; _ST _Wx
 	_LD _T3 ; _MUL _T5 ; _SUB _Wx ; _ST _Wx
 
-	# t0 <- 3*t0 - t8
-	_LD _T0 ; _ADD 0 ; _ADD _T0 ; _SUB _T8 ; _ST _T0
+	# t0 <- 3*t0 - 3*t2 = 3*(t0 - t2)
+	_LD _T0 ; _SUB _T2 ; _ST _T0 ; _ADD 0 ; _ADD _T0 ; _ST _T0
 	# t0 is still in acc
 	# Y1 <- t0*t6 + t5*t7
 	_MUL _T6 ; _ST _Wy ; _LD _T5 ; _MUL _T7 ; _ADD _Wy ; _ST _Wy
