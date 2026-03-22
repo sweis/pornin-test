@@ -340,6 +340,11 @@ curve_constants:
 # constants: it must immediately follow the modulus p in the curve constants
 # block.
 
+	# Initialize modulus slot. In production, slot 1 holds the modulus
+	# VALUE (not a pointer) so _M accesses work without cmp+cmove in
+	# the main loop. SMOD copies the value. The init code no longer
+	# pushes a modulus pointer; first instruction does it.
+	_MODN
 	# Check that r and s are both non-zero and below n
 	_LD _Kr ; _CALL check_scalar
 	_LD _Ks ; _CALL check_scalar
@@ -708,7 +713,11 @@ Lop_add__cont1:
 	jnc	Lop_add__cont2
 	# Subtract modulus until a borrow is obtained (to counteract the carry).
 Lop_add__loop:
-	movq	32(%rbp), %rsi   # modulus
+#ifdef TV_ECDSA_P256_TEST
+	movq	32(%rbp), %rsi   # modulus (via pointer)
+#else
+	leaq	32(%rbp), %rsi   # modulus value is at slot 1
+#endif
 	callq	*%rdi      # call secondary function
 	jnc	Lop_add__loop
 Lop_add__cont2:
@@ -718,9 +727,19 @@ Lop_add__cont2:
 op_smod:
 	# &mod_N == rbp+1024
 	# &mod_P == rbp+1056 == &mod_N + 32
+	# rdx = rbp + 32*y (y=30 or 31), so rdx+64 = &mod_N or &mod_P
+#ifdef TV_ECDSA_P256_TEST
+	# Test build keeps pointer semantics (gf_op sets it directly)
 	addq	$64, %rdx
 	movq	%rdx, 32(%rbp)
 	ret
+#else
+	# Production: copy modulus VALUE into slot 1 so main loop can
+	# drop the cmp+cmove special case (-7 B there, +1 here).
+	leaq	64(%rdx), %rsi
+	leaq	32(%rbp), %rdi
+	jmp	docopy
+#endif
 
 # MUL x   multiply accumulator with x
 op_mul:
@@ -896,12 +915,13 @@ op_fail:
 	ret
 #else
 # Production build: direct stack-unwind and ret. cl&1 gives 1 for OK,
-# 0 for FAIL. Saved rsp is at 40(%rbp) (pushed by INTERPRETER_BEGIN).
+# 0 for FAIL. saved_rsp = rbp + 1088 (context is fixed-size: 32 slots
+# + 2 moduli = 1088 B; enter frame's saved rbp sits right above).
 op_ok:
 op_fail:
 	andl	$1, %ecx
 	xchgl	%eax, %ecx
-	movq	40(%rbp), %rsp
+	leaq	1088(%rbp), %rsp
 	popq	%rbp
 	popq	%r12
 	popq	%rbx
@@ -971,9 +991,9 @@ op_fail:
 	loop	2b
 	incl	-8(%rdi)
 
-	# Clear space for values 29 to 2, and the flags, except the slots
-	# for the saved stack pointer and the current modulus. edx is
-	# 0 from the build loop (24 bits shifted out).
+	# Clear space for values 29 down through slot 1. edx is 0 from
+	# the build loop (24 bits shifted out).
+#ifdef TV_ECDSA_P256_TEST
 	movb	$114, %cl    # 114 = 29*4 - 2
 1:
 	pushq	%rdx
@@ -983,6 +1003,15 @@ op_fail:
 	# Push pointer to current modulus (initially mod_N).
 	subq	$64, %rbp
 	pushq	%rbp
+#else
+	# Production: slot 1 holds modulus VALUE (set by _MODN at bytecode
+	# start). No saved_rsp storage — exit computes it via leaq.
+	movb	$116, %cl    # clear slots 29..1 fully
+1:
+	pushq	%rdx
+	loop	1b
+	subq	$64, %rbp    # rbp → mod_N, so ONE at disp8 -128
+#endif
 	# Value 28 is ONE (slot is zero from push loop; incl 0 -> 1).
 	incl	-128(%rbp)
 	# Allocate space for the accumulator (uninitialized).
@@ -1023,12 +1052,12 @@ op_fail:
 	xlatb
 	leaq	(%rbp,%rcx,4), %rdx   # rdx <- rbp + 32*x
 	shrl	$3, %ecx      # cl <- x
-	# If x = 1, target value is the modulus (pointer to the current
-	# modulus is at the start of the flag area, which is pointed to
-	# by rdx in that case). cmov always reads [rdx], which is safe
-	# since rdx always points into our stack frame.
+#ifdef TV_ECDSA_P256_TEST
+	# Test build: slot 1 holds modulus POINTER, deref when x=1.
 	cmp	$1, %cl
 	cmoveq	(%rdx), %rdx
+#endif
+	# Production: slot 1 holds modulus VALUE, no special case (-7 B).
 	addq	%rbx, %rax    # rax <- translated address (also clears CF)
 
 	# Call the opcode routine
