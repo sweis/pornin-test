@@ -642,25 +642,25 @@ Lz256_sub__loop:
 # nested instruction pointers for the calls.
 
 # LD x    copy value x into accumulator
+# ST x    copy accumulator into value x
+# Both push two pointers in opposite orders, then fall through to shared
+# pop-into-rdi/rsi and copy.
 op_ld:
 	pushq	%rdx
-	popq	%rsi
 	pushq	%rbp
+	jmp	Lop_ldst
+op_st:
+	pushq	%rbp
+	pushq	%rdx
+Lop_ldst:
 	popq	%rdi
-# docopy is a shareable routine that copies 40 bytes from rsi to rdi
+	popq	%rsi
+# docopy is a shareable routine that copies 32 bytes from rsi to rdi
 # (assumption: bits 8..63 of rcx are zero).
 docopy:
 	movb	$32, %cl
 	rep movsb
 	ret
-
-# ST x    copy accumulator into value x
-op_st:
-	pushq	%rdx
-	popq	%rdi
-	pushq	%rbp
-	popq	%rsi
-	jmp	docopy
 
 # SUB x   subtract value x from accumulator
 op_sub:
