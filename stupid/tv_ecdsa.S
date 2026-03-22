@@ -104,9 +104,6 @@ curve_constants:
 	# Gy
 	.quad	0xCBB6406837BF51F5, 0x2BCE33576B315ECE
 	.quad	0x8EE7EB4A7C0F9E16, 0x4FE342E2FE1A7F9B
-	# b
-	.quad	0x3BCE3C3E27D2604B, 0x651D06B0CC53B0F6
-	.quad	0xB3EBBD55769886BC, 0x5AC635D8AA3A93E7
 mod_N:
 	.quad	0xF3B9CAC2FC632551, 0xBCE6FAADA7179E84
 	.quad	0xFFFFFFFFFFFFFFFF, 0xFFFFFFFF00000000
@@ -236,9 +233,9 @@ mod_P:
 	.equ	_F1,    2    # reserved for MUL
 	.equ	_ZERO, 27    # constant zero
 	.equ	_ONE,  28    # constant one
-	.equ	_Gx,   29    # constant Gx (x coordinate of generator)
-	.equ	_Gy,   30    # constant Gy (y coordinate of generator)
-	.equ	_B,    31    # constant b (curve parameter)
+	.equ	_B,    14    # curve parameter b (computed at runtime)
+	.equ	_Gx,   30    # constant Gx (x coordinate of generator)
+	.equ	_Gy,   31    # constant Gy (y coordinate of generator)
 	.equ	_T0,   16    # temporary 0
 	.equ	_T1,   17    # temporary 1
 	.equ	_T2,   18    # temporary 2
@@ -356,6 +353,12 @@ mod_P:
 
 	# We have u and v; we now switch to modulus p for curve computations.
 	_MODP
+
+	# Compute curve parameter b = Gy^2 - Gx^3 + 3*Gx mod p.
+	# This saves 32 bytes of constant data at the cost of 11 bytecode bytes.
+	_LD _Gx ; _MUL _Gx ; _MUL _Gx
+	_SUB _Gx ; _SUB _Gx ; _SUB _Gx ; _ST _B   # _B = Gx^3 - 3*Gx
+	_LD _Gy ; _MUL _Gy ; _SUB _B ; _ST _B     # _B = Gy^2 - (Gx^3-3*Gx) = b
 
 	# Check that the point in (Qx,Qy) is a valid curve point.
 	_CALL check_point
@@ -918,14 +921,14 @@ op_fail:
 	# (slot 1 is "virtual" and contains the flag), and an extra 64 byts
 	# for mod_N and mod_P (each of size 32 bytes).
 
-	# Reserve space for Gx, Gy, Bm, mod_N and mod_P.
+	# Reserve space for Gx, Gy, mod_N and mod_P.
 	# The 'enter' opcode here is equivalent to:
 	#   pushq  %rbp
 	#   movq   %rsp, %rbp
-	#   subq   $160, %rsp
-	enter	$160, $0
+	#   subq   $128, %rsp
+	enter	$128, $0
 
-	# Copy constants to stack slots (Gx, Gy, b) followed by
+	# Copy constants to stack slots (Gx, Gy) followed by
 	# mod_N and mod_P.
 	pushq	%rsp
 	popq	%rdi
@@ -934,15 +937,15 @@ op_fail:
 #endif
 	# In production, rcx is already 0 here (from `subq $65,%rcx; jnz`
 	# in tv_ecdsa_p256_verify entry).
-	movb	$160, %cl
+	movb	$128, %cl
 	rep movsb
 
 	# Now rsi points to the bytecode entry point (it immediately
 	# follows the constants block).
-	# Clear space for values 28 to 2, and the flags, except the slots
+	# Clear space for values 29 to 2, and the flags, except the slots
 	# for the saved stack pointer and the current modulus.
 	xorl	%eax, %eax
-	movb	$110, %cl    # 111 = 28*4 - 2
+	movb	$114, %cl    # 114 = 29*4 - 2
 1:
 	pushq	%rax
 	loop	1b
