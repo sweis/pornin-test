@@ -169,25 +169,11 @@ LIMB5X56_TRACK = read_unified('limb5x56')
 LIMB8_TRACK  = read_unified('limb8')
 STUPID_TRACK = read_unified('stupid')
 
-# Join TRAIL + limb8 (limb8 IS the tiny.S continuation). Filter to self-
-# Pareto: keep a point only if NO other point in the same sequence (past
-# or future) dominates it. Drops the #ifdef back-and-forth and the
-# superseded limb8 intermediates, keeps only enduring milestones.
-# Chronological order preserved.
+# Join TRAIL + limb8 (limb8 IS the tiny.S continuation). Show ALL points
+# including superseded intermediates — the full grind history.
 FULL_CHRON = [(b, c, lbl) for b, c, lbl in TRAIL] + \
              [(b, c, None) for b, c in LIMB8_TRACK]
-
-def self_pareto_ordered(seq):
-    pts = [(b, c) for b, c, _ in seq]
-    shown = []
-    for i, (b, c, lbl) in enumerate(seq):
-        # Labeled points are architectural milestones — always shown.
-        if lbl or not any(b2 <= b and c2 <= c and (b2 < b or c2 < c)
-                          for j, (b2, c2) in enumerate(pts) if j != i):
-            shown.append((b, c, lbl))
-    return shown
-
-TRAIL_SHOWN = self_pareto_ordered(FULL_CHRON)
+TRAIL_SHOWN = FULL_CHRON
 
 def pareto(pts):
     front = []
@@ -296,16 +282,18 @@ if LIMB5X56_TRACK:
                 bbox=dict(boxstyle='round,pad=0.3', fc='#c0e8e8',
                 ec='#006666', lw=0.8))
 
-# stupid (bytecode-VM, MUL-as-bytecode) — orange. Our iterations on top
-# of Thomas's baseline.
+# stupid (bytecode-VM, MUL-as-bytecode) — orange. Small dots for the trail,
+# diamond only on the size-floor endpoint.
 if STUPID_TRACK:
     sx = [p[0] for p in STUPID_TRACK]
     sy = [p[1] for p in STUPID_TRACK]
-    ax.plot(sx, sy, '-', color='#ff8c00', linewidth=1.4, zorder=4,
+    ax.plot(sx, sy, '-', color='#ff8c00', linewidth=1.2, zorder=4,
             label='stupid (bytecode-VM)')
-    ax.scatter(sx, sy, c='#ff8c00', s=50, marker='D',
-               edgecolors='#cc5500', linewidths=0.7, zorder=5)
+    ax.scatter(sx, sy, c='#ff8c00', s=18, marker='o',
+               edgecolors='#cc5500', linewidths=0.4, zorder=5, alpha=0.8)
     tip = min(STUPID_TRACK, key=lambda p: p[0])
+    ax.scatter([tip[0]], [tip[1]], c='#ff8c00', s=80, marker='D',
+               edgecolors='#cc5500', linewidths=1.0, zorder=6)
     ax.annotate(f'stupid — {tip[0]}B', tip,
                 textcoords="offset points", xytext=(10, -14), fontsize=9,
                 bbox=dict(boxstyle='round,pad=0.3', fc='#ffe4b5',
