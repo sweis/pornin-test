@@ -321,7 +321,7 @@ ax.annotate(f'Thomas Stupid — {THOMAS_STUPID[0]}B', THOMAS_STUPID,
             ec='#2e8b57', lw=1))
 
 ax.set_xlabel('Size (bytes)', fontsize=12)
-ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
+ax.set_ylabel('Cycles (log scale)', fontsize=12)
 ax.set_title('ECDSA/P-256 verify — size vs speed (lower-left is better)',
              fontsize=13)
 ax.legend(loc='upper right', framealpha=0.95, fontsize=9)
@@ -334,10 +334,21 @@ ax.set_axisbelow(True)
 ax.set_yscale('log')
 ax.set_xlim(600, 2000)    # left edge tracks stupid size floor
 ax.set_ylim(500, 4000000) # stupid SMC at ~2.6G cyc (pipeline stalls)
-# Clean up the log axis: major ticks at nice values, no scientific notation.
-from matplotlib.ticker import ScalarFormatter, LogLocator
+# Human-readable cycle labels. Internal y-values are thousands-of-cycles
+# (csv cycles // 1000), so y=500 → 500K, y=1000 → 1M, y=1000000 → 1G.
+from matplotlib.ticker import FuncFormatter, LogLocator
+def fmt_cycles(y, pos):
+    c = y * 1000  # back to actual cycles
+    if c >= 1e9:
+        v = c / 1e9
+        return f'{v:g}G'
+    if c >= 1e6:
+        v = c / 1e6
+        return f'{v:g}M'
+    v = c / 1e3
+    return f'{v:g}K'
 ax.yaxis.set_major_locator(LogLocator(base=10, subs=[1, 2, 5]))
-ax.yaxis.set_major_formatter(ScalarFormatter())
+ax.yaxis.set_major_formatter(FuncFormatter(fmt_cycles))
 ax.yaxis.set_minor_formatter(lambda x, pos: '')
 
 plt.tight_layout()
