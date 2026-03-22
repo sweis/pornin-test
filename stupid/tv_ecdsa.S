@@ -914,9 +914,11 @@ Lop_next__cont1:
 # FOR    start the iterator
 # Sets r11/r12 to new loop state (count=255, start=rsi), then swaps
 # with r9/r10 via shared Lswap_ret. Old r9/r10 end up saved in r11/r12.
-# movl (not movb) ensures r11d[8:31]=0 so r9d is clean after xchg.
+# FOR is ext index 1, so cl=1 on entry with ecx[8:31]=0 from decode.
+# negb cl → cl=0xFF → ecx=255. movl zero-extends into r11d.
 op_for:
-	movl	$255, %r11d
+	negb	%cl
+	movl	%ecx, %r11d
 	movq	%rsi, %r12
 	jmp	Lswap_ret
 
