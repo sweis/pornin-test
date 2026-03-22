@@ -42,3 +42,10 @@ db56723,636,0,negb cl gives 255 from FOR ext-index=1
 495ea5a,630,0,merge acc alloc into push loop 108->112 qwords
 80f10bd,629,2648834248,Wy init = acc=p-1 from check_point; RCB infinity is any (0:Y:0) Y!=0
 HEAD,642,237523020,NO_SMC build at 629-B base — 11× faster than SMC floor
+580d673,628,0,op_mul: skip docall pop/push; saved IP already = caller addr
+f278149,627,0,decode_int: byte-index loop replaces push/pop dword reversal
+1fb6521,625,0,op_mul: stack-setup then tail-jump docopy; shares mov cl/rep movsb
+a584a39,624,0,_ONE to slot 27: inline pushq $1 replaces disp32 incl
+cec945f,623,0,op_failcc falls into Lop_reset; loop-exit r8b!=0 makes test no-op
+241901c,621,0,decode_int source via rdx: rsi=bytecode survives 5 calls sans push/pop
+1e9eb73,620,0,decode_int: scale-2 index fuses rdx+=32 into loop via inc
