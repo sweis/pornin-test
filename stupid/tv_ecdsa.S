@@ -687,7 +687,7 @@ op_add:
 	pushq	%rdx
 	popq	%rsi
 	callq	*%rdi      # primary
-	setc	%r8b       # update emulated carry
+	sbbl	%r8d, %r8d # emulated carry: r8d = -CF (0 or -1); CF preserved
 	jnc	Lop_reset
 	xorb	$0x08, PATCH_OFF(%rbx)   # flip to secondary (adc↔sbb)
 Lop_add__loop:
