@@ -107,9 +107,8 @@ curve_constants:
 mod_N:
 	.quad	0xF3B9CAC2FC632551, 0xBCE6FAADA7179E84
 	.quad	0xFFFFFFFFFFFFFFFF, 0xFFFFFFFF00000000
-mod_P:
-	.quad	0xFFFFFFFFFFFFFFFF, 0x00000000FFFFFFFF
-	.quad	0x0000000000000000, 0xFFFFFFFF00000001
+# mod_P is built at runtime in INTERPRETER_BEGIN (p has only 3 distinct
+# dword values: -1, 0, 1). Test code has a private copy under the #ifdef.
 
 # -------------------------------------------------------------------------
 # BEGIN BYTECODE
@@ -937,11 +936,26 @@ op_fail:
 #endif
 	# In production, rcx is already 0 here (from `subq $65,%rcx; jnz`
 	# in tv_ecdsa_p256_verify entry).
-	movb	$128, %cl
+	movb	$96, %cl
 	rep movsb
 
 	# Now rsi points to the bytecode entry point (it immediately
-	# follows the constants block).
+	# follows the constants block). rdi points at the mod_P slot.
+	# Build p = [-1,-1,-1,0,0,0,1,-1] (dwords low to high). 17 B of
+	# code replaces 32 B of data.
+	orl	$-1, %eax
+	stosl
+	stosl
+	stosl
+	xorl	%eax, %eax
+	stosl
+	stosl
+	stosl
+	incl	%eax
+	stosl
+	negl	%eax
+	stosl
+
 	# Clear space for values 29 to 2, and the flags, except the slots
 	# for the saved stack pointer and the current modulus.
 	xorl	%eax, %eax
@@ -1116,6 +1130,11 @@ tv_ecdsa_p256_verify_asm:
 # ========================================================================
 # ========================================================================
 # ========================================================================
+
+# Test-only copy of mod_P (production builds it at runtime).
+mod_P:
+	.quad	0xFFFFFFFFFFFFFFFF, 0x00000000FFFFFFFF
+	.quad	0x0000000000000000, 0xFFFFFFFF00000001
 
 # This code has no notion of "unreduced formats", so we return 0.
 	.global	tv_gf_has_unreduced
