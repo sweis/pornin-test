@@ -737,6 +737,11 @@ Lop_add__loop:
 #endif
 	callq	*%rdi             # secondary
 	jnc	Lop_add__loop
+	# Loop exits with r8b=-1 (nonzero); op_failcc's test is a no-op
+	# on this path, letting it share Lop_reset's ret.
+op_failcc:
+	testb	%r8b, %r8b
+	jz	op_fail
 Lop_reset:
 	ret
 #else
@@ -763,11 +768,11 @@ Lop_add__loop:
 #endif
 	callq	*%rdi      # secondary
 	jnc	Lop_add__loop
-Lop_reset:
-	movb	$0x11, PATCH_OFF(%rbx)   # restore invariant
-	ret
-#endif
-
+	# Loop exits only when carry set (jnc not taken); r8d was set to
+	# -1 by sbbl after the primary call (which had carry → we entered
+	# the loop). So r8b is always nonzero here, and op_failcc's
+	# testb/jz is a harmless no-op on this path. This lets op_failcc
+	# share Lop_reset's ret (−1 B).
 # FAILCC   fail if emulated carry clear (primary opcode 4, operand 0)
 # Replaces all SKIPCS;FAIL (4×) and the one SKIPCC;FAIL (rewritten in
 # check_scalar to use 0-x subtraction). Operand always 0 → cl=0, so
@@ -775,7 +780,11 @@ Lop_reset:
 op_failcc:
 	testb	%r8b, %r8b
 	jz	op_fail
+	# FALL THROUGH to Lop_reset (movb is idempotent; ret shared)
+Lop_reset:
+	movb	$0x11, PATCH_OFF(%rbx)   # restore invariant
 	ret
+#endif
 
 # MUL x   multiply accumulator with x
 op_mul:
