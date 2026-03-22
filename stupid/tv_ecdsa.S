@@ -675,23 +675,20 @@ docopy:
 
 # SUB x   subtract value x from accumulator
 # ADD x   add value x to accumulator
-# Self-modifying: patch the adc/sbb byte inside z256_addsub. Primary
-# opcode is written at entry (0x11=adc for ADD, 0x19=sbb for SUB); on
-# overflow, xor with 8 flips to the secondary opcode for modulus
-# correction. rdi holds &z256_addsub across both phases (z256_addsub
-# doesn't touch rdi).
+# Self-modifying: patch the adc/sbb byte inside z256_addsub.
+# Invariant: PATCH = 0x11 (adcl) on entry. op_sub xors to 0x19 and
+# falls through. Both paths reset PATCH to 0x11 before ret. On
+# overflow, xor with 8 flips to secondary for modulus correction.
+# rdi holds &z256_addsub across both phases.
 op_sub:
-	movb	$0x19, PATCH_OFF(%rbx)   # primary = sbbl
-	jmp	Lop_addsub
+	xorb	$0x08, PATCH_OFF(%rbx)   # 0x11 → 0x19 (sbbl)
 op_add:
-	movb	$0x11, PATCH_OFF(%rbx)   # primary = adcl
-Lop_addsub:
 	leaq	Z256_OFF(%rbx), %rdi
 	pushq	%rdx
 	popq	%rsi
 	callq	*%rdi      # primary
 	setc	%r8b       # update emulated carry
-	jnc	Lop_add__cont2
+	jnc	Lop_reset
 	xorb	$0x08, PATCH_OFF(%rbx)   # flip to secondary (adc↔sbb)
 Lop_add__loop:
 #ifdef TV_ECDSA_P256_TEST
@@ -701,15 +698,17 @@ Lop_add__loop:
 #endif
 	callq	*%rdi      # secondary
 	jnc	Lop_add__loop
+Lop_reset:
+	movb	$0x11, PATCH_OFF(%rbx)   # restore invariant
+	ret
+
 # FAILCC   fail if emulated carry clear (primary opcode 4, operand 0)
 # Replaces all SKIPCS;FAIL (4×) and the one SKIPCC;FAIL (rewritten in
 # check_scalar to use 0-x subtraction). Operand always 0 → cl=0, so
 # op_fail's andl $1,%ecx yields 0 = correct fail status.
-# Placed here so its trailing ret shares Lop_add__cont2's ret.
 op_failcc:
 	testb	%r8b, %r8b
 	jz	op_fail
-Lop_add__cont2:
 	ret
 
 # MUL x   multiply accumulator with x
