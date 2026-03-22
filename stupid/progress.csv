@@ -34,3 +34,10 @@ eb7ff33,643,0,FAILCC primary op: subsumes SKIPCS/CC+FAIL; ext table 8→5
 d0ee867,641,0,op_next tail jumps to Ldoskip__cont via movq r10 rsi
 d89946d,640,2039164950,op_sub xor fallthrough + reset-on-exit invariant. SMC stalls: 8.5× slowdown.
 HEAD,642,1874610964,FAST_Z256 build post-SMC. SMC dominates; dec;jnz barely helps.
+91d229f,639,0,sbbl r8d r8d instead of setc r8b. CF preserved through sbb.
+bacf08e,639,0,add #ifdef NO_SMC build variant (652 B, no SMC stalls)
+2c2fa37,637,0,op_for/op_next share xchg swap via Lswap_ret
+db56723,636,0,negb cl gives 255 from FOR ext-index=1
+9c822d2,634,0,op_for falls through to Lswap_ret; op_next js forward
+495ea5a,630,0,merge acc alloc into push loop 108->112 qwords
+HEAD,643,0,NO_SMC build at 630-B base (was 652 at 639-B base)
