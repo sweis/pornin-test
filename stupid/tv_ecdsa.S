@@ -270,17 +270,18 @@ curve_constants:
 	.equ	OP_ST,        0x01
 	.equ	OP_ADD,       0x02
 	.equ	OP_SUB,       0x03
-	.equ	OP_SMOD,      0x04
+	.equ	OP_FAILCC,    0x04
 	.equ	OP_MUL,       0x05
 	.equ	OP_SKIPBITZ,  0x06
-	.equ	OP_SKIPCS,    0x07
-	.equ	OP_SKIPCC,    0x0F
-	.equ	OP_RET,       0x17
-	.equ	OP_FOR,       0x1F
-	.equ	OP_NEXT,      0x27
-	.equ	OP_OK,        0x2F
-	.equ	OP_FAIL,      0x37
-	.equ	OP_CALL,      0x3F
+	.equ	OP_RET,       0x07
+	.equ	OP_FOR,       0x0F
+	.equ	OP_NEXT,      0x17
+	.equ	OP_OK,        0x1F
+	.equ	OP_CALL,      0x27
+	# FAILCC (primary slot 4, operand 0) replaces SKIPCS/SKIPCC+FAIL.
+	# All FAIL sites were SKIPCS;FAIL or SKIPCC;FAIL; the one SKIPCC
+	# case (check_scalar zero-check) is rewritten to use FAILCC via
+	# 0-acc subtraction. Ext table shrinks 8→5.
 
 # Macros to help write bytecode.
 .macro	_LD x
@@ -295,20 +296,14 @@ curve_constants:
 .macro	_SUB x
 	.byte	(\x) * 8 + OP_SUB
 .endm
-.macro	_SMOD y
-	.byte	(\y) * 8 + OP_SMOD
-.endm
 .macro	_MUL x
 	.byte	(\x) * 8 + OP_MUL
 .endm
 .macro	_SKIPBITZ x
 	.byte	(\x) * 8 + OP_SKIPBITZ
 .endm
-.macro	_SKIPCS
-	.byte	OP_SKIPCS
-.endm
-.macro	_SKIPCC
-	.byte	OP_SKIPCC
+.macro	_FAILCC
+	.byte	OP_FAILCC
 .endm
 .macro	_RET
 	.byte	OP_RET
@@ -321,9 +316,6 @@ curve_constants:
 .endm
 .macro	_OK
 	.byte	OP_OK
-.endm
-.macro	_FAIL
-	.byte	OP_FAIL
 .endm
 .macro	_CALL  label
 	.byte	OP_CALL
@@ -436,10 +428,11 @@ curve_constants:
 # Output:
 #    acc   x
 check_scalar:
-	# Check that x < m: subtracting the modulus should overflow.
-	_SUB _M ; _SKIPCS ; _FAIL
-	# Check that x != 0; subtracting 1 should not overflow.
-	_SUB _ONE ; _SKIPCC ; _FAIL ; _ADD _ONE ; _RET
+	# Save input; check x < m (SUB m must borrow). FAILCC = fail if
+	# carry clear (no borrow → x >= m).
+	_ST _T0 ; _SUB _M ; _FAILCC
+	# Check x != 0: 0 - x must borrow. FAILCC fails on no-borrow (x==0).
+	_LD _ZERO ; _SUB _T0 ; _FAILCC ; _LD _T0 ; _RET
 
 # BYTECODE: Modular inversion. The current modulus is used.
 # Input:
@@ -476,12 +469,12 @@ invert_mod:
 check_point:
 	# Check that Qx is lower than p. It was just decoded, and thus
 	# we can simply subtract the modulus and check the carry.
-	_LD _Qx ; _SUB _M ; _SKIPCS ; _FAIL
+	_LD _Qx ; _SUB _M ; _FAILCC
 	# While it's loaded in the accumulator, compute X^3 and store
 	# it into _T0.
 	_MUL _Qx ; _MUL _Qx ; _ST _T0
 	# Check that Qy is lower than p (same treatment as Qx).
-	_LD _Qy ; _SUB _M ; _SKIPCS ; _FAIL
+	_LD _Qy ; _SUB _M ; _FAILCC
 	# We must check the curve equation:
 	#    y^2 = x^3 - 3*x + b
 	# The accumulator still contains y.
@@ -492,7 +485,7 @@ check_point:
 # BYTECODE: Check that acc == 0 mod m (normalize then compare to zero).
 # Triggers FAIL if nonzero; otherwise returns.
 check_zero_mod_m:
-	_SUB _M ; _SUB _ONE ; _SKIPCS ; _FAIL
+	_SUB _M ; _SUB _ONE ; _FAILCC
 	_RET
 
 # BYTECODE: Add a curve point to point W. Point W is in projective
@@ -589,7 +582,7 @@ translation_table:
 	.byte	op_st - translation_table
 	.byte	op_add - translation_table
 	.byte	op_sub - translation_table
-	.byte	op_smod - translation_table
+	.byte	op_failcc - translation_table
 	.byte	op_mul - translation_table
 	.byte	op_skipbitz - translation_table
 	.byte	op_extended - translation_table
@@ -709,20 +702,16 @@ Lop_add__loop:
 	callq	*%rdi      # secondary
 	jnc	Lop_add__loop
 Lop_add__cont2:
-#ifndef TV_ECDSA_P256_TEST
-op_smod:	# production: SMOD unused, table entry → this ret
-#endif
 	ret
 
-#ifdef TV_ECDSA_P256_TEST
-# SMOD y    switch current modulus (y = 30 for mod_N, y = 31 for mod_P)
-# Test build: store pointer to slot 1 (gf_op also sets it directly).
-op_smod:
-	movq	%rdx, 32(%rbp)
+# FAILCC   fail if emulated carry clear (primary opcode 4, operand 0)
+# Replaces all SKIPCS;FAIL (4×) and the one SKIPCC;FAIL (rewritten in
+# check_scalar to use 0-x subtraction). Operand always 0 → cl=0, so
+# op_fail's andl $1,%ecx yields 0 = correct fail status.
+op_failcc:
+	testb	%r8b, %r8b
+	jz	op_fail
 	ret
-#endif
-# Production: SMOD eliminated; _MODN/_MODP expand to _LD/_ST bytecode.
-# Table entry for opcode 4 points at the ret in Lop_add__cont2 (next label).
 
 # MUL x   multiply accumulator with x
 op_mul:
@@ -770,42 +759,25 @@ Lret1:
 # a value operand. This table contains routine offsets relative to
 # op_extended.
 extended_translation_table:
-	# WARNING: if table size is changed, the movb instruction
-	# in op_extended MUST be altered accordingly.
-	.byte	op_skipcs - op_extended
-	.byte	op_skipcc - op_extended
+	# 5-entry table: SKIPCS/SKIPCC/FAIL removed (FAILCC subsumes them).
+	# WARNING: if table size is changed, the movzbl offset in
+	# op_extended MUST be altered accordingly.
 	.byte	op_ret - op_extended
 	.byte	op_for - op_extended
 	.byte	op_next - op_extended
 	.byte	op_ok - op_extended
-	.byte	op_fail - op_extended
 	.byte	op_call - op_extended
 
 # Pseudo-instruction invoked for extended opcodes.
 op_extended:
-	# %cl contains the opcode index (0..7); preserve it for handlers.
-	# Use the secondary translation table. rax currently contains
-	# the address of op_extended, and the table size is 8 bytes.
-	# WARNING: if the table size is modified, the offset in the
-	# movzbl instruction below MUST be modified. The offset is
-	# hardcoded so that it uses only one byte in the generated
-	# instruction (if using a symbol related expression, the assembler
-	# generates a 32-bit offset).
-	movzbl	-8(%rax,%rcx), %edi
+	# %cl contains the opcode index (0..4); preserve it for handlers.
+	# rax = &op_extended; table is 5 bytes immediately before.
+	movzbl	-5(%rax,%rcx), %edi
 	addq	%rdi, %rax
 	jmpq	*%rax
 
-# In extended opcodes, cl contains the opcode index (0..7); bits 8..63
+# In extended opcodes, cl contains the opcode index (0..4); bits 8..63
 # of rcx are zero.
-
-# SKIPCS   skip next instruction if emulated carry is set   (cl=0)
-# SKIPCC   skip next instruction if emulated carry is clear (cl=1)
-# r8b is 0 or 1; skip when r8b != cl.
-op_skipcs:
-op_skipcc:
-	cmpb	%r8b, %cl
-	jne	doskip
-	ret
 
 # RET     return from subroutine
 op_ret:
