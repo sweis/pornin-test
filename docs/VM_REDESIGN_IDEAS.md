@@ -18,7 +18,21 @@ thing that exercises the unknown — build that first.
 
 ### TOP 3 — worth prototyping
 
-#### 1. Implicit-operand "macro-op" for point-add setup  (Δ ≈ −6 to −12, MED)
+#### 1. Implicit-operand "macro-op" for point-add setup  (MEASURED: ~+2 B, DEAD at current layout)
+
+**Finding (d2c6554):** Handler needs `leaq (_Hx*32)(%rbp),%rdi` where
+_Hx*32 = 352 > 127 → disp32 (7 B). Full handler is 21 B; even with
+`rep movsb;ret` tail-share vs docopy it's 20 B. Bytecode savings are
+−19 B (24→5), but +1 B for `_LD _Hx` at point_add_to_W entry (acc no
+longer holds Hx after rep-copy). Net +2 B. Slot reshuffle to move H
+into disp8 range blocked: slots 0–3 are acc/modulus/F1/Kr (all live
+during FOR); F1↔H overlay fails because MUL (clobbers F0/F1) runs
+while H is still live in point_add (last H read at the t4 computation,
+MULs throughout). G at 28,29 is baked into init's `enter $192;rep
+movsb` sequence — moving it needs a split push-loop (+~5 B init).
+**Would unlock at ~−3 B IF H could reach disp8.** Bookmark.
+
+**Original estimate:**
 
 The FOR body does three variants of "copy triple to H, call point_add":
 ```
@@ -49,7 +63,14 @@ verify 607/607. Then add PADD handler.
 
 ---
 
-#### 2. `call $+5; pop rbx` instead of `lea rbx,[rip+...]`  (Δ ≈ −2 to −4, HIGH)
+#### 2. `call $+5; pop rbx` instead of `lea rbx,[rip+...]`  (DONE: −2 B, commit 3f02102)
+
+Both sites replaced. verify() moved to front of .text; `call Ldecoder`
+jumps over decode_int/consts/bytecode (pushes &decode_int), `call
+Lmain` jumps over translation_table/handlers (pushes &translation_table).
+Each pop rbx retrieves exactly the base we need. 618 B.
+
+**Original estimate:**
 
 Two `lea rbx,[rip+disp32]` sites at 7 B each (confirmed in objdump:
 offsets 0x201 and 0x24a). `call rel32` to next-instruction + `pop rbx`
