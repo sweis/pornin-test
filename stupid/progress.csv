@@ -40,4 +40,5 @@ bacf08e,639,0,add #ifdef NO_SMC build variant (652 B, no SMC stalls)
 db56723,636,0,negb cl gives 255 from FOR ext-index=1
 9c822d2,634,0,op_for falls through to Lswap_ret; op_next js forward
 495ea5a,630,0,merge acc alloc into push loop 108->112 qwords
-HEAD,643,0,NO_SMC build at 630-B base (was 652 at 639-B base)
+80f10bd,629,0,Wy init = acc=p-1 from check_point; RCB infinity is any (0:Y:0) Y!=0
+HEAD,642,0,NO_SMC build at 629-B base
