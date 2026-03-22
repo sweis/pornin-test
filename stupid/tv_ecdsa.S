@@ -866,17 +866,29 @@ Lop_next__cont1:
 	pushq	%rdx
 	ret
 
-# OK     exit the interpreter with a success status
+# OK     exit the interpreter with a success status   (cl=5)
+# FAIL   exit the interpreter with a failed status    (cl=6)
+#ifdef TV_ECDSA_P256_TEST
+# Test build: flag-based exit so test harness code between MAIN and END
+# still runs (e.g. gf_op result-copy).
 op_ok:
-	# Set the success flag
 	movb	$1, 49(%rbp)
-	# FALL THROUGH
-# FAIL   exit the interpreter with a failed status
 op_fail:
-	# Set the exit flag
-	# Status is 0 by default, only OK sets it to 1.
 	movb	$1, 48(%rbp)
 	ret
+#else
+# Production build: direct stack-unwind and ret. cl&1 gives 1 for OK,
+# 0 for FAIL. Saved rsp is at 40(%rbp) (pushed by INTERPRETER_BEGIN).
+op_ok:
+op_fail:
+	andl	$1, %ecx
+	xchgl	%eax, %ecx
+	movq	40(%rbp), %rsp
+	popq	%rbp
+	popq	%r12
+	popq	%rbx
+	ret
+#endif
 
 # Interpreter is built as three macros, so that the test code may use
 # some interpreters to exercise subroutines.
@@ -984,9 +996,14 @@ op_fail:
 	pushq	%rsi
 	callq	*%rax
 	popq	%rsi
+#ifdef TV_ECDSA_P256_TEST
 	# Execute next instruction until the exit flag is set
 	cmpb	$0, 48(%rbp)
 	je	1b
+#else
+	# op_ok/op_fail unwind directly; loop forever until one fires.
+	jmp	1b
+#endif
 .endm
 
 # Wind down the interpreter. The stack, rbx and rbp are restored to the
@@ -1067,10 +1084,11 @@ tv_ecdsa_p256_verify_asm:
 	# We previously saved the bytecode address.
 	popq	%rsi
 	INTERPRETER_MAIN
-
+#ifdef TV_ECDSA_P256_TEST
 	INTERPRETER_END
-	# %eax was set according to the bytecode exit status
 	ret
+#endif
+	# In production builds, op_ok/op_fail unwind and ret directly.
 	.size	tv_ecdsa_p256_verify, . - tv_ecdsa_p256_verify
 
 #ifdef TV_ECDSA_P256_TEST
