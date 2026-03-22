@@ -1027,7 +1027,10 @@ op_fail:
 #else
 	# Production: slot 1 holds modulus VALUE (set by _MODN at bytecode
 	# start). No saved_rsp storage — exit computes it via leaq.
-	movb	$108, %cl    # clear slots 27..1 fully
+	# Push 112 qwords = slots 27..0 (acc included). Acc init value
+	# doesn't matter (first bytecode op _MODN overwrites it). This
+	# merges the previous subq $32,%rsp into the push loop (−4 B).
+	movb	$112, %cl    # clear slots 27..0 fully
 1:
 	pushq	%rdx
 	loop	1b
@@ -1038,9 +1041,9 @@ op_fail:
 #ifdef TV_ECDSA_P256_TEST
 	# _ONE slot is zero from push loop; incl 0 -> 1.
 	incl	-128(%rbp)
-#endif
 	# Allocate space for the accumulator (uninitialized).
 	subq	$32, %rsp
+#endif
 	pushq	%rsp
 	popq	%rbp
 .endm
