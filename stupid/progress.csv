@@ -25,3 +25,4 @@ HEAD,676,147230522,FAST_Z256 build: dec;jnz in z256_add/sub (+4 B, −39% cyc)
 2026-03-22,671,T8 elim: inline 3*t2 as 3 subs + refactor t0'=3*(t0-t2)
 2026-03-22,670,point_add acc=Hx entry: reorder caller copies, drop _LD _Wx
 2026-03-22,666,slot 1 = modulus VALUE: drop cmp+cmove, SMOD copies, exit via leaq 1088
+2026-03-22,664,modN/modP at slots 30/31: SMOD rdx points directly, drop +64

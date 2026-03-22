@@ -228,13 +228,16 @@ curve_constants:
 # WARNING: code relies on Kr, Ks, Ke, Qx and Qy to be consecutive.
 
 	# Symbolic identifiers for various slots.
+	# Layout: modN/modP at slots 30/31 so SMOD's rdx points directly
+	# at the modulus (no +64 needed). Gx/Gy shift to 28/29; ONE/ZERO/F0
+	# shift down by 2 into the freed T8/T9 slots.
 	.equ	_M,     1    # current modulus
 	.equ	_F1,    2    # reserved for MUL
-	.equ	_ZERO, 27    # constant zero
-	.equ	_ONE,  28    # constant one
+	.equ	_ZERO, 25    # constant zero
+	.equ	_ONE,  26    # constant one
 	.equ	_B,    14    # curve parameter b (computed at runtime)
-	.equ	_Gx,   30    # constant Gx (x coordinate of generator)
-	.equ	_Gy,   31    # constant Gy (y coordinate of generator)
+	.equ	_Gx,   28    # constant Gx (x coordinate of generator)
+	.equ	_Gy,   29    # constant Gy (y coordinate of generator)
 	.equ	_T0,   16    # temporary 0
 	.equ	_T1,   17    # temporary 1
 	.equ	_T2,   18    # temporary 2
@@ -243,9 +246,7 @@ curve_constants:
 	.equ	_T5,   21    # temporary 5
 	.equ	_T6,   22    # temporary 6
 	.equ	_T7,   23    # temporary 7
-	.equ	_T8,   24    # temporary 8
-	.equ	_T9,   25    # temporary 9
-	.equ	_F0,   26    # reserved for MUL
+	.equ	_F0,   24    # reserved for MUL
 
 	.equ	_Kr,    3    # r (first signature half)
 	.equ	_Ks,    4    # s (second signature half)
@@ -725,18 +726,15 @@ Lop_add__cont2:
 
 # SMOD y    switch current modulus (y = 30 for mod_N, y = 31 for mod_P)
 op_smod:
-	# &mod_N == rbp+1024
-	# &mod_P == rbp+1056 == &mod_N + 32
-	# rdx = rbp + 32*y (y=30 or 31), so rdx+64 = &mod_N or &mod_P
+	# mod_N at slot 30, mod_P at slot 31, so rdx already = &modulus.
 #ifdef TV_ECDSA_P256_TEST
 	# Test build keeps pointer semantics (gf_op sets it directly)
-	addq	$64, %rdx
 	movq	%rdx, 32(%rbp)
 	ret
 #else
-	# Production: copy modulus VALUE into slot 1 so main loop can
-	# drop the cmp+cmove special case (-7 B there, +1 here).
-	leaq	64(%rdx), %rsi
+	# Production: copy modulus VALUE into slot 1.
+	pushq	%rdx
+	popq	%rsi
 	leaq	32(%rbp), %rdi
 	jmp	docopy
 #endif
@@ -958,12 +956,13 @@ op_fail:
 	# (slot 1 is "virtual" and contains the flag), and an extra 64 byts
 	# for mod_N and mod_P (each of size 32 bytes).
 
-	# Reserve space for Gx, Gy, mod_N and mod_P.
+	# Reserve space: 64 B unused top, then Gx, Gy (slots 28-29),
+	# mod_N, mod_P (slots 30-31). enter $192 puts rsp at slot 28 start.
 	# The 'enter' opcode here is equivalent to:
 	#   pushq  %rbp
 	#   movq   %rsp, %rbp
-	#   subq   $128, %rsp
-	enter	$128, $0
+	#   subq   $192, %rsp
+	enter	$192, $0
 
 	# Copy constants to stack slots (Gx, Gy) followed by
 	# mod_N and mod_P.
@@ -991,28 +990,30 @@ op_fail:
 	loop	2b
 	incl	-8(%rdi)
 
-	# Clear space for values 29 down through slot 1. edx is 0 from
-	# the build loop (24 bits shifted out).
+	# Clear slots 27 down through slot 1 (slot 28+ hold constants).
+	# edx is 0 from the build loop (24 bits shifted out).
 #ifdef TV_ECDSA_P256_TEST
-	movb	$114, %cl    # 114 = 29*4 - 2
+	# Test build: slot 1 holds flags (modulus ptr + saved_rsp).
+	movb	$106, %cl    # 106 = 27*4 - 2
 1:
 	pushq	%rdx
 	loop	1b
 	# Push saved stack pointer.
 	pushq	%rbp
-	# Push pointer to current modulus (initially mod_N).
-	subq	$64, %rbp
+	# Push pointer to current modulus (initially mod_N at slot 30).
+	addq	$-128, %rbp
 	pushq	%rbp
 #else
 	# Production: slot 1 holds modulus VALUE (set by _MODN at bytecode
 	# start). No saved_rsp storage — exit computes it via leaq.
-	movb	$116, %cl    # clear slots 29..1 fully
+	movb	$108, %cl    # clear slots 27..1 fully
 1:
 	pushq	%rdx
 	loop	1b
-	subq	$64, %rbp    # rbp → mod_N, so ONE at disp8 -128
+	addq	$-128, %rbp  # rbp → slot 30 area, ONE at disp8 -128
 #endif
-	# Value 28 is ONE (slot is zero from push loop; incl 0 -> 1).
+	# _ONE slot is zero from push loop; incl 0 -> 1.
+	# From rbp=enter_frame-128, ONE at slot 26 is at -128 disp8.
 	incl	-128(%rbp)
 	# Allocate space for the accumulator (uninitialized).
 	subq	$32, %rsp
