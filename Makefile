@@ -9,7 +9,7 @@
 #   common/  — shared: test harnesses, bench, range_proof, gen_bytecode.
 #   archive/ — superseded (C refs, old asm, Rust port).
 
-TRACKS = limb8 limb11x24 limb5x54 limb5x56
+TRACKS = limb8 limb11x24 limb5x54 limb5x56 stupid
 
 .PHONY: all test size bench clean chart $(TRACKS) speed signer
 

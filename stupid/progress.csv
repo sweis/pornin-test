@@ -1,0 +1,5 @@
+commit,bytes,cycles,note
+# Bytecode-VM track. MUL = bytecode double-and-add (256 iters/multiply).
+# Native interpreter is tiny; all EC logic is in 1-byte VM opcodes.
+# Baseline is Thomas's ecdsa-p256-verify_stupid.S as received.
+HEAD,766,141523892,Thomas Stupid baseline. MUL=bytecode double-and-add. ~27× slower than limb8 890B. 124 B smaller.

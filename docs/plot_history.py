@@ -143,6 +143,11 @@ THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
 THOMAS    = (928, 4482)     # v7 — ON the frontier
 CLAUDE    = (933, 4674)     # 20-run median; WAS size corner
 
+# Thomas Stupid: bytecode-VM where even MUL is a bytecode subroutine
+# (double-and-add, 256 iters/multiply). Native code is just the interpreter
+# + 32-byte add/sub/copy. ~27× slower than limb8 but 124 B smaller.
+THOMAS_STUPID = (766, 141524)
+
 # All tracks — read from unified docs/progress.csv.
 def read_unified(track_name):
     import csv
@@ -162,6 +167,7 @@ LIMB11_TRACK = read_unified('limb11x24')
 LIMB5X54_TRACK = read_unified('limb5x54')
 LIMB5X56_TRACK = read_unified('limb5x56')
 LIMB8_TRACK  = read_unified('limb8')
+STUPID_TRACK = read_unified('stupid')
 
 # Join TRAIL + limb8 (limb8 IS the tiny.S continuation). Filter to self-
 # Pareto: keep a point only if NO other point in the same sequence (past
@@ -193,7 +199,8 @@ def pareto(pts):
     return front
 
 ALL_XY = ([(b, c) for b, c, _ in TRAIL_SHOWN] + THOMAS_TRACK
-          + LIMB11_TRACK + LIMB5X54_TRACK + LIMB5X56_TRACK)
+          + LIMB11_TRACK + LIMB5X54_TRACK + LIMB5X56_TRACK
+          + STUPID_TRACK + [THOMAS_STUPID])
 FRONT = pareto(ALL_XY)
 
 # ======================================================================
@@ -289,6 +296,30 @@ if LIMB5X56_TRACK:
                 bbox=dict(boxstyle='round,pad=0.3', fc='#c0e8e8',
                 ec='#006666', lw=0.8))
 
+# stupid (bytecode-VM, MUL-as-bytecode) — orange. Our iterations on top
+# of Thomas's baseline.
+if STUPID_TRACK:
+    sx = [p[0] for p in STUPID_TRACK]
+    sy = [p[1] for p in STUPID_TRACK]
+    ax.plot(sx, sy, '-', color='#ff8c00', linewidth=1.4, zorder=4,
+            label='stupid (bytecode-VM)')
+    ax.scatter(sx, sy, c='#ff8c00', s=50, marker='D',
+               edgecolors='#cc5500', linewidths=0.7, zorder=5)
+    tip = min(STUPID_TRACK, key=lambda p: p[0])
+    ax.annotate(f'stupid — {tip[0]}B', tip,
+                textcoords="offset points", xytext=(10, -14), fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', fc='#ffe4b5',
+                ec='#ff8c00', lw=0.8))
+
+# Thomas Stupid baseline — labeled star. The new size corner.
+ax.scatter([THOMAS_STUPID[0]], [THOMAS_STUPID[1]], c='#2e8b57', s=120,
+           marker='*', edgecolors='#1a5235', linewidths=1.0, zorder=6)
+ax.annotate(f'Thomas Stupid — {THOMAS_STUPID[0]}B', THOMAS_STUPID,
+            textcoords="offset points", xytext=(12, 6), fontsize=10,
+            fontweight='bold',
+            bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',
+            ec='#2e8b57', lw=1))
+
 ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (thousands, normalized to bc.S ≈ 1850K)', fontsize=12)
 ax.set_title('ECDSA/P-256 verify — size vs speed (lower-left is better)',
@@ -301,8 +332,8 @@ ax.set_axisbelow(True)
 # a wall at the top, and separates the fast.S cluster (650K-1000K)
 # from the bc.S baseline (1850K).  Size stays linear — only 2:1 range.
 ax.set_yscale('log')
-ax.set_xlim(880, 2000)    # cut off fast2.S/speed.S tail for detail
-ax.set_ylim(500, 15000)   # limb11 at ~12000K (loop-heavy)
+ax.set_xlim(740, 2000)    # left edge tracks stupid 766 B size floor
+ax.set_ylim(500, 200000)  # stupid track at ~141M cyc (bytecode MUL)
 # Clean up the log axis: major ticks at nice values, no scientific notation.
 from matplotlib.ticker import ScalarFormatter, LogLocator
 ax.yaxis.set_major_locator(LogLocator(base=10, subs=[1, 2, 5]))
