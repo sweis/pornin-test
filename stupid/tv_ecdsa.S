@@ -596,12 +596,17 @@ Lz256_add__loop:
 	lodsl
 	adcl	%eax, (%rbp,%rdx,4)
 	incb	%dl
+#ifdef FAST_Z256
+	decb	%cl
+	jnz	Lz256_add__loop
+#else
 	loop	Lz256_add__loop
+#endif
 	ret
 	.size	z256_add, . - z256_add
 
-# WARNING: this routine MUST immediately follow z256_add (at offset 30
-# from translation_table; see op_add).
+# WARNING: this routine MUST immediately follow z256_add. See op_add for
+# the hardcoded offset (30 for default build, 32 for FAST_Z256).
 # z256_sub:
 # [rbp] <- [rbp] - [rsi] (32 bytes), CF out
 # Clobbers: rax, rcx, rdx, rsi
@@ -613,7 +618,12 @@ Lz256_sub__loop:
 	lodsl
 	sbbl	%eax, (%rbp,%rdx,4)
 	incb	%dl
+#ifdef FAST_Z256
+	decb	%cl
+	jnz	Lz256_sub__loop
+#else
 	loop	Lz256_sub__loop
+#endif
 	ret
 	.size	z256_sub, . - z256_sub
 
@@ -678,7 +688,11 @@ op_add:
 	# Moreover, these two functions are located relatively from the
 	# translation table, with small offsets.
 	leaq	16(%rbx), %rdi   # z256_add (primary)
+#ifdef FAST_Z256
+	leaq	32(%rbx), %rax   # z256_sub (secondary)
+#else
 	leaq	30(%rbx), %rax   # z256_sub (secondary)
+#endif
 	jnc	Lop_add__cont1
 	# For SUB, CF is set, so we exchange z256_add and z256_sub
 	xchgq	%rdi, %rax

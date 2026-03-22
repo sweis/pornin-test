@@ -113,3 +113,4 @@ stupid,4da6f37,678,0,loop-decode 2-bit table for n_top+p build
 stupid,51a80ab,674,0,1-bit shr/sbb loop for n_top+p; patch d10
 stupid,dee374c,673,0,dec r9d/jns in op_next instead of sub/jnc
 stupid,2981dce,672,240199924,incl instead of movb $1 for ONE init
+stupid,HEAD,676,147230522,FAST_Z256 build: dec;jnz in z256_add/sub (+4 B
