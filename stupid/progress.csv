@@ -32,4 +32,5 @@ d7808bb,649,0,self-mod z256_addsub: patch adc/sbb byte; merge add+sub into one 1
 eb7ff33,643,0,FAILCC primary op: subsumes SKIPCS/CC+FAIL; ext table 8→5
 3fae4ad,642,0,op_failcc ret shares Lop_add__cont2 ret
 d0ee867,641,0,op_next tail jumps to Ldoskip__cont via movq r10 rsi
-d89946d,640,0,op_sub xor fallthrough + reset-on-exit invariant
+d89946d,640,2039164950,op_sub xor fallthrough + reset-on-exit invariant. SMC stalls: 8.5× slowdown.
+HEAD,642,1874610964,FAST_Z256 build post-SMC. SMC dominates; dec;jnz barely helps.

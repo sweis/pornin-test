@@ -332,8 +332,8 @@ ax.set_axisbelow(True)
 # a wall at the top, and separates the fast.S cluster (650K-1000K)
 # from the bc.S baseline (1850K).  Size stays linear — only 2:1 range.
 ax.set_yscale('log')
-ax.set_xlim(640, 2000)    # left edge tracks stupid size floor
-ax.set_ylim(500, 300000)  # stupid track at ~241M cyc (bytecode MUL + loop)
+ax.set_xlim(620, 2000)    # left edge tracks stupid size floor
+ax.set_ylim(500, 3000000) # stupid SMC at ~2G cyc (pipeline stalls)
 # Clean up the log axis: major ticks at nice values, no scientific notation.
 from matplotlib.ticker import ScalarFormatter, LogLocator
 ax.yaxis.set_major_locator(LogLocator(base=10, subs=[1, 2, 5]))

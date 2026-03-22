@@ -3,8 +3,13 @@
 # 32-byte add/sub/copy + bit-test.
 #
 # Two builds:
-#   default:     size floor (~672 B / ~240M cyc) — `loop` in z256_add/sub
-#   -DFAST_Z256: +4 B, −40% cycles  (~676 B / ~148M cyc) — dec;jnz
+#   default:     size floor (640 B / ~2G cyc) — `loop` + SMC patch in z256
+#   -DFAST_Z256: +2 B — dec;jnz (minor; SMC stalls dominate either way)
+#
+# SELF-MODIFYING CODE: z256_addsub patches its own adc/sbb byte per call.
+# Code lives in .selfmod (awx) section. Boot-ROM target has no W^X, but
+# modern CPUs pipeline-flush on SMC → ~8.5× slower than pre-SMC 660 B build
+# (commit 2b83a10, ~237M cyc). The 660 B point stays on the Pareto frontier.
 COMMON = ../common
 include $(COMMON)/track.mk
 

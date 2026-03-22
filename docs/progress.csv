@@ -120,3 +120,9 @@ stupid,c48d838,666,0,slot 1 = modulus VALUE: drop cmp+cmove; SMOD copies; exit v
 stupid,be9767a,664,0,modN/modP at slots 30/31: SMOD rdx points directly; drop +64
 stupid,81e1f70,661,0,eliminate op_smod handler: _MODN/_MODP expand to LD/ST bytecode
 stupid,2b83a10,660,237164512,incl -256 disp32 directly: drop addq that was only for disp8 reach
+stupid,d7808bb,649,0,self-mod z256_addsub: patch adc/sbb byte; merge add+sub into one 14B fn
+stupid,eb7ff33,643,0,FAILCC primary op: subsumes SKIPCS/CC+FAIL; ext table 8→5
+stupid,3fae4ad,642,0,op_failcc ret shares Lop_add__cont2 ret
+stupid,d0ee867,641,0,op_next tail jumps to Ldoskip__cont via movq r10 rsi
+stupid,d89946d,640,2039164950,op_sub xor fallthrough + reset-on-exit invariant. SMC stalls: 8.5× slowdown.
+stupid,HEAD,642,1874610964,FAST_Z256 build post-SMC. SMC dominates; dec;jnz barely helps.
