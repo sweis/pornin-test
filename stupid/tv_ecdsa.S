@@ -932,7 +932,8 @@ op_fail:
 
 	# Copy constants to stack slots (Gx, Gy, b) followed by
 	# mod_N and mod_P.
-	movq	%rsp, %rdi
+	pushq	%rsp
+	popq	%rdi
 #ifdef TV_ECDSA_P256_TEST
 	xorl	%ecx, %ecx
 #endif
@@ -959,7 +960,8 @@ op_fail:
 	movb	$1, -128(%rbp)
 	# Allocate space for the accumulator (uninitialized).
 	subq	$32, %rsp
-	movq	%rsp, %rbp
+	pushq	%rsp
+	popq	%rbp
 .endm
 
 # Main interpreter loop.
