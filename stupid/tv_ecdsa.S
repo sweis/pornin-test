@@ -974,7 +974,11 @@ op_fail:
 .macro	INTERPRETER_MAIN
 	# Set rbx to point to the translation table.
 	leaq	translation_table(%rip), %rbx
+#ifdef TV_ECDSA_P256_TEST
 	xorl	%r9d, %r9d
+#endif
+	# In production, r9d[8:31] is already 0 (r9 held hv_len-32 <= 32
+	# from the entry check, never overwritten with a pointer).
 1:
 	# Load next instruction.
 	xorl	%eax, %eax
@@ -1062,12 +1066,13 @@ tv_ecdsa_p256_verify_asm:
 	jne	Ltv_ecdsa_p256_verify__err
 
 	# We need to allocate the interpreter context; this will not
-	# clobber r8, r9 or r10.
-	movq	%rdi, %r9
-	movq	%rsi, %r10
+	# clobber r8..r11. Leave r9 untouched (it holds hv_len-32, a
+	# small value with r9d[8:31]==0), so MAIN can skip clearing it.
+	movq	%rdi, %r10
+	movq	%rsi, %r11
 	# r8   hv
-	# r9   sig
-	# r10  pub+1
+	# r10  sig
+	# r11  pub+1
 
 	INTERPRETER_BEGIN
 
@@ -1078,12 +1083,12 @@ tv_ecdsa_p256_verify_asm:
 	# This uses the fact that the slots are consecutive.
 	# rbx contains the address of decode_int() (set by INTERPRETER_BEGIN).
 	leaq	(32*_Kr)(%rbp), %rdi
-	movq	%r9, %rsi
+	movq	%r10, %rsi
 	callq	*%rbx        # r
 	callq	*%rbx        # s
 	movq	%r8, %rsi
 	callq	*%rbx        # e
-	movq	%r10, %rsi
+	movq	%r11, %rsi
 	callq	*%rbx        # Qx
 	callq	*%rbx        # Qy
 
