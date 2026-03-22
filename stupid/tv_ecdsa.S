@@ -985,11 +985,10 @@ op_fail:
 	shrl	$3, %ecx      # cl <- x
 	# If x = 1, target value is the modulus (pointer to the current
 	# modulus is at the start of the flag area, which is pointed to
-	# by rdx in that case).
+	# by rdx in that case). cmov always reads [rdx], which is safe
+	# since rdx always points into our stack frame.
 	cmp	$1, %cl
-	jne	2f
-	movq	(%rdx), %rdx
-2:
+	cmoveq	(%rdx), %rdx
 	addq	%rbx, %rax    # rax <- translated address (also clears CF)
 
 	# Call the opcode routine
