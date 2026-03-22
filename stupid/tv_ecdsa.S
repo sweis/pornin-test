@@ -854,22 +854,19 @@ Lret2:
 # is decremented, and execution jumps to right after the FOR instruction
 # that started the iterator.
 op_next:
-	# If bit offset is 0, loop is finished.
-	cmpb	$0, %r9b
-	jne	Lop_next__cont1
-	# Loop is finished (iterator is 0), remove it.
+	# Decrement counter; if it was 0 (borrow), loop is finished.
+	subb	$1, %r9b
+	jnc	Lop_next__cont1
+	# Loop finished (counter underflowed), restore outer loop state.
 	movb	%r11b, %r9b
 	movq	%r12, %r10
 	ret
 Lop_next__cont1:
-	# Decrement counter.
-	decb	%r9b
 	# Reset saved instruction pointer.
 	popq	%rdx
 	popq	%rsi
 	pushq	%r10
 	pushq	%rdx
-Lop_next__cont2:
 	ret
 
 # OK     exit the interpreter with a success status
