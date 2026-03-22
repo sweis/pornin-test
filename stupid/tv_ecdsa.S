@@ -941,36 +941,25 @@ op_fail:
 
 	# Now rsi points to the bytecode entry point (it immediately
 	# follows the constants block). rdi points at n's top half.
-	# Build n_top = [-1,-1,0,-1] then p = [-1,-1,-1,0,0,0,1,-1]
-	# (dwords low to high). Split around the push loop so the second
-	# 0-run's inc doubles as the push-loop zero.
-	orl	$-1, %eax
+	# Build n_top+p = [-1,-1,0,-1,-1,-1,-1,0,0,0,1,-1] (dwords).
+	# 2-bit-per-dword table (11=-1, 00=0, 01=1) decoded via shl/sar.
+	movl	$0xD03FCF, %edx
+	movb	$12, %cl
+2:
+	movl	%edx, %eax
+	shll	$30, %eax
+	sarl	$30, %eax
 	stosl
-	stosl
-	incl	%eax
-	stosl
-	decl	%eax
-	stosl
-	stosl
-	stosl
-	stosl
-	incl	%eax
-	stosl
-	stosl
-	stosl
+	shrl	$2, %edx
+	loop	2b
 
 	# Clear space for values 29 to 2, and the flags, except the slots
-	# for the saved stack pointer and the current modulus. eax is
-	# already 0 from the p-build above.
+	# for the saved stack pointer and the current modulus. edx is
+	# 0 from the build loop (24 bits shifted out).
 	movb	$114, %cl    # 114 = 29*4 - 2
 1:
-	pushq	%rax
+	pushq	%rdx
 	loop	1b
-	# Finish building p (rdi/eax untouched by push loop).
-	incl	%eax
-	stosl
-	negl	%eax
-	stosl
 	# Push saved stack pointer.
 	pushq	%rbp
 	# Push pointer to current modulus (initially mod_N).
