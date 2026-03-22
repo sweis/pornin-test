@@ -790,18 +790,20 @@ op_failcc:
 # MUL x   multiply accumulator with x
 op_mul:
 	# The MUL routine expects the second operand to be in F1.
-	pushq	%rsi    # save current instruction pointer
+	# For MUL, the saved IP on the stack (pushed by main loop) is
+	# exactly the caller address docall would push — so we skip the
+	# pop-rcx/push-rsi pair in docall and save the push/pop rsi here.
 	pushq	%rdx
 	popq	%rsi
 	leaq	(_F1*32)(%rbp), %rdi  # F1 is value 2 -> offset 32*_F1 is small
 	movb	$32, %cl
 	rep movsb
-	popq	%rsi    # restore current instruction pointer
 	# Pretend that this is CALL to microcode_mul.
 	# microcode_mul is located immediately after the translation_table,
 	# which has size 8.
 	leaq	8(%rbx), %rax
-	jmp	docall
+	popq	%rdx           # native return address
+	jmp	docall_pushax  # skip docall's pop-rcx/push-rsi (net no-op for MUL)
 
 # SKIPBITZ x   skip next instruction if current bit is set in x
 # The "current bit" relates to the iterator; this instruction makes sense
@@ -887,6 +889,7 @@ docall:
 	popq	%rdx    # remove native return address
 	popq	%rcx    # remove old saved instruction pointer
 	pushq	%rsi    # push caller address (right after the CALL opcode)
+docall_pushax:
 	pushq	%rax    # push callee address
 	pushq	%rdx    # put back native return address
 	ret
