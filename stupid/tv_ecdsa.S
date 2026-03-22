@@ -930,7 +930,11 @@ op_fail:
 	# Copy constants to stack slots (Gx, Gy, b) followed by
 	# mod_N and mod_P.
 	movq	%rsp, %rdi
+#ifdef TV_ECDSA_P256_TEST
 	xorl	%ecx, %ecx
+#endif
+	# In production, rcx is already 0 here (from `subq $65,%rcx; jnz`
+	# in tv_ecdsa_p256_verify entry).
 	movb	$160, %cl
 	rep movsb
 
