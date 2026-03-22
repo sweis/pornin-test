@@ -105,3 +105,11 @@ stupid,50b725b,737,0,bytecode check_zero_mod_m shared tail; check_point falls th
 stupid,0cf24f0,734,0,save sig/pub in r10/r11; r9 stays small; drop MAIN xorl r9d
 stupid,b2880eb,732,147811238,movq rsp REG -> pushq rsp;popq REG for low regs
 stupid,23b8e7a,728,240927162,loop in z256_add/sub; op_add offset 32->30; +63% cyc trade
+stupid,af5a902,707,0,compute b at runtime from curve equation; slot remap Gx/Gy/B
+stupid,d6a3cf4,692,0,build p at runtime via stosl; 17 B replaces 32 B data
+stupid,16e356c,690,0,split p-build around push loop to share xor
+stupid,5cf0f29,682,0,build n top half at runtime; fuse with p-build
+stupid,4da6f37,678,0,loop-decode 2-bit table for n_top+p build
+stupid,51a80ab,674,0,1-bit shr/sbb loop for n_top+p; patch d10
+stupid,dee374c,673,0,dec r9d/jns in op_next instead of sub/jnc
+stupid,2981dce,672,240199924,incl instead of movb $1 for ONE init
