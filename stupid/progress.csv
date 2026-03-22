@@ -22,9 +22,9 @@ d6a3cf4,692,0,build p at runtime via stosl; 17 B replaces 32 B data
 dee374c,673,0,dec r9d/jns in op_next instead of sub/jnc
 2981dce,672,240199924,incl instead of movb $1 for ONE init
 HEAD,676,147230522,FAST_Z256 build: dec;jnz in z256_add/sub (+4 B, −39% cyc)
-2026-03-22,671,T8 elim: inline 3*t2 as 3 subs + refactor t0'=3*(t0-t2)
-2026-03-22,670,point_add acc=Hx entry: reorder caller copies, drop _LD _Wx
-2026-03-22,666,slot 1 = modulus VALUE: drop cmp+cmove, SMOD copies, exit via leaq 1088
-2026-03-22,664,modN/modP at slots 30/31: SMOD rdx points directly, drop +64
-2026-03-22,661,eliminate op_smod handler: _MODN/_MODP expand to LD/ST bytecode
-2026-03-22,660,incl -256 disp32 directly: drop addq that was only for disp8 reach
+9587527,671,0,T8 elim: inline 3*t2 as 3 subs + refactor t0'=3*(t0-t2)
+a7bd4d2,670,0,point_add acc=Hx entry: reorder caller copies; drop _LD _Wx
+c48d838,666,0,slot 1 = modulus VALUE: drop cmp+cmove; SMOD copies; exit via leaq 1088
+be9767a,664,0,modN/modP at slots 30/31: SMOD rdx points directly; drop +64
+81e1f70,661,0,eliminate op_smod handler: _MODN/_MODP expand to LD/ST bytecode
+2b83a10,660,237164512,incl -256 disp32 directly: drop addq that was only for disp8 reach
