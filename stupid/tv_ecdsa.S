@@ -701,16 +701,15 @@ Lop_add__loop:
 #endif
 	callq	*%rdi      # secondary
 	jnc	Lop_add__loop
-Lop_add__cont2:
-	ret
-
 # FAILCC   fail if emulated carry clear (primary opcode 4, operand 0)
 # Replaces all SKIPCS;FAIL (4×) and the one SKIPCC;FAIL (rewritten in
 # check_scalar to use 0-x subtraction). Operand always 0 → cl=0, so
 # op_fail's andl $1,%ecx yields 0 = correct fail status.
+# Placed here so its trailing ret shares Lop_add__cont2's ret.
 op_failcc:
 	testb	%r8b, %r8b
 	jz	op_fail
+Lop_add__cont2:
 	ret
 
 # MUL x   multiply accumulator with x
