@@ -30,3 +30,4 @@ be9767a,664,0,modN/modP at slots 30/31: SMOD rdx points directly; drop +64
 2b83a10,660,237164512,incl -256 disp32 directly: drop addq that was only for disp8 reach
 d7808bb,649,0,self-mod z256_addsub: patch adc/sbb byte; merge add+sub into one 14B fn
 eb7ff33,643,0,FAILCC primary op: subsumes SKIPCS/CC+FAIL; ext table 8→5
+3fae4ad,642,0,op_failcc ret shares Lop_add__cont2 ret

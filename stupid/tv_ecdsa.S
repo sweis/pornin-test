@@ -850,12 +850,10 @@ op_next:
 	movq	%r12, %r10
 	ret
 Lop_next__cont1:
-	# Reset saved instruction pointer.
-	popq	%rdx
-	popq	%rsi
-	pushq	%r10
-	pushq	%rdx
-	ret
+	# Reset saved instruction pointer to loop start (r10). Reuse
+	# doskip's tail which does popq;popq;pushq rsi;pushq;ret.
+	movq	%r10, %rsi
+	jmp	Ldoskip__cont
 
 # OK     exit the interpreter with a success status   (cl=5)
 # FAIL   exit the interpreter with a failed status    (cl=6)
