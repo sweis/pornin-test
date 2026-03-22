@@ -942,16 +942,16 @@ op_fail:
 	# Now rsi points to the bytecode entry point (it immediately
 	# follows the constants block). rdi points at n's top half.
 	# Build n_top+p = [-1,-1,0,-1,-1,-1,-1,0,0,0,1,-1] (dwords).
-	# 2-bit-per-dword table (11=-1, 00=0, 01=1) decoded via shl/sar.
-	movl	$0xD03FCF, %edx
+	# All but d10 are in {-1,0}: 1-bit-per-dword table, shr into CF,
+	# sbb gives -CF. d10 patched from 0 to 1 after.
+	movl	$0x87B, %edx
 	movb	$12, %cl
 2:
-	movl	%edx, %eax
-	shll	$30, %eax
-	sarl	$30, %eax
+	shrl	$1, %edx
+	sbbl	%eax, %eax
 	stosl
-	shrl	$2, %edx
 	loop	2b
+	incl	-8(%rdi)
 
 	# Clear space for values 29 to 2, and the flags, except the slots
 	# for the saved stack pointer and the current modulus. edx is
