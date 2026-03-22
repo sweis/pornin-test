@@ -1023,11 +1023,14 @@ op_fail:
 1:
 	pushq	%rdx
 	loop	1b
-	addq	$-128, %rbp  # rbp → slot 30 area, ONE at disp8 -128
+	# _ONE at slot 26 = final_rbp+832 = enter_rbp-256. disp32 costs
+	# 6 B but saves the 4 B addq that was only there for disp8 reach.
+	incl	-256(%rbp)
 #endif
+#ifdef TV_ECDSA_P256_TEST
 	# _ONE slot is zero from push loop; incl 0 -> 1.
-	# From rbp=enter_frame-128, ONE at slot 26 is at -128 disp8.
 	incl	-128(%rbp)
+#endif
 	# Allocate space for the accumulator (uninitialized).
 	subq	$32, %rsp
 	pushq	%rsp

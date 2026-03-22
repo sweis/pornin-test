@@ -27,3 +27,4 @@ HEAD,676,147230522,FAST_Z256 build: dec;jnz in z256_add/sub (+4 B, −39% cyc)
 2026-03-22,666,slot 1 = modulus VALUE: drop cmp+cmove, SMOD copies, exit via leaq 1088
 2026-03-22,664,modN/modP at slots 30/31: SMOD rdx points directly, drop +64
 2026-03-22,661,eliminate op_smod handler: _MODN/_MODP expand to LD/ST bytecode
+2026-03-22,660,incl -256 disp32 directly: drop addq that was only for disp8 reach
