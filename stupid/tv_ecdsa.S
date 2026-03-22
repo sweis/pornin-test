@@ -8,7 +8,12 @@
 
 	.arch	generic64
 	.file	"ecdsa-p256-verify_stupid.S"
-	.text
+	# Code must be writable for the self-modifying z256_addsub patch.
+	# Boot-ROM context (the target use case) typically has no W^X.
+	# For Linux testing, we use a custom section with awx flags so the
+	# linker puts it in a RWX segment. The `size` tool counts it as
+	# text (it is marked executable).
+	.section .selfmod, "awx", @progbits
 
 # ========================================================================
 # PLATFORM COMPATIBILITY
@@ -602,51 +607,33 @@ microcode_mul:
 	_SKIPBITZ _F1 ; _ADD _F0  #    if F1[i] != 0: acc <- acc + F0
 	_NEXT ; _RET
 
-# WARNING: this routine MUST immediately follow microcode_mul
-# WARNING: if this routine is modified, check offsets in op_add.
-# z256_add:
-# [rbp] <- [rbp] + [rsi] (32 bytes), CF out
-# Clobbers: rax, rcx, rdx, rsi
-	.type	z256_add, %function
-	# Function size is 14 bytes (loop opcode costs cycles but size is
-	# the primary goal on this track; CF survives incb and loop).
-z256_add:
+# WARNING: this routine MUST immediately follow microcode_mul.
+# z256_addsub:
+# [rbp] <- [rbp] OP [rsi] (32 bytes), CF out
+# where OP is adcl or sbbl depending on what op_add/op_sub wrote at
+# Lz256_patch. Self-modifying: caller patches byte at offset 21 from
+# translation_table (= Lz256_patch) with 0x11 (adc) or 0x19 (sbb).
+# Clobbers: rax, rcx, rdx, rsi. Does NOT touch rdi.
+	.type	z256_addsub, %function
+z256_addsub:
 	xorl	%edx, %edx    # also clears CF
 	movb	$8, %cl
-Lz256_add__loop:
+Lz256_loop:
 	lodsl
-	adcl	%eax, (%rbp,%rdx,4)
+Lz256_patch:
+	adcl	%eax, (%rbp,%rdx,4)   # opcode 0x11 patched to 0x19 for sbb
 	incb	%dl
 #ifdef FAST_Z256
 	decb	%cl
-	jnz	Lz256_add__loop
+	jnz	Lz256_loop
 #else
-	loop	Lz256_add__loop
+	loop	Lz256_loop
 #endif
 	ret
-	.size	z256_add, . - z256_add
-
-# WARNING: this routine MUST immediately follow z256_add. See op_add for
-# the hardcoded offset (30 for default build, 32 for FAST_Z256).
-# z256_sub:
-# [rbp] <- [rbp] - [rsi] (32 bytes), CF out
-# Clobbers: rax, rcx, rdx, rsi
-	.type	z256_sub, %function
-z256_sub:
-	xorl	%edx, %edx    # also clears CF
-	movb	$8, %cl
-Lz256_sub__loop:
-	lodsl
-	sbbl	%eax, (%rbp,%rdx,4)
-	incb	%dl
-#ifdef FAST_Z256
-	decb	%cl
-	jnz	Lz256_sub__loop
-#else
-	loop	Lz256_sub__loop
-#endif
-	ret
-	.size	z256_sub, . - z256_sub
+	.size	z256_addsub, . - z256_addsub
+	# Hardcoded offsets (from translation_table) used by op_add/op_sub:
+	.equ	Z256_OFF,   z256_addsub - translation_table   # = 16
+	.equ	PATCH_OFF,  Lz256_patch - translation_table   # = 21
 
 # Instruction routine conventions:
 #  - each routine is invoked with 'call' and ends with a ret opcode
@@ -694,47 +681,32 @@ docopy:
 	ret
 
 # SUB x   subtract value x from accumulator
-op_sub:
-	stc
-	# FALL THROUGH
 # ADD x   add value x to accumulator
+# Self-modifying: patch the adc/sbb byte inside z256_addsub. Primary
+# opcode is written at entry (0x11=adc for ADD, 0x19=sbb for SUB); on
+# overflow, xor with 8 flips to the secondary opcode for modulus
+# correction. rdi holds &z256_addsub across both phases (z256_addsub
+# doesn't touch rdi).
+op_sub:
+	movb	$0x19, PATCH_OFF(%rbx)   # primary = sbbl
+	jmp	Lop_addsub
 op_add:
-	# The primary function is the one that performs the operation on
-	# the values (z256_add() for ADD, z256_sub() for SUB) while the
-	# secondary function is the one that applies the corrective action
-	# with the modulus (z256_sub() for ADD, z256_add() for SUB). The
-	# CPU carry flag (CF) is cleared when this routine is called for
-	# ADD, but it is set when we are executing a SUB. We use CF to
-	# set pointers to the primary and secondary functions.
-	# Moreover, these two functions are located relatively from the
-	# translation table, with small offsets.
-	leaq	16(%rbx), %rdi   # z256_add (primary)
-#ifdef FAST_Z256
-	leaq	32(%rbx), %rax   # z256_sub (secondary)
-#else
-	leaq	30(%rbx), %rax   # z256_sub (secondary)
-#endif
-	jnc	Lop_add__cont1
-	# For SUB, CF is set, so we exchange z256_add and z256_sub
-	xchgq	%rdi, %rax
-Lop_add__cont1:
-	pushq	%rax       # save pointer to secondary function
-	# Move pointer to second operand into rsi
+	movb	$0x11, PATCH_OFF(%rbx)   # primary = adcl
+Lop_addsub:
+	leaq	Z256_OFF(%rbx), %rdi
 	pushq	%rdx
 	popq	%rsi
-	callq	*%rdi      # call primary function
-	setc	%r8b       # update emulated carry (copy of CF)
-	popq	%rdi       # recover pointer to secondary function
-	# If no carry out, we're done.
+	callq	*%rdi      # primary
+	setc	%r8b       # update emulated carry
 	jnc	Lop_add__cont2
-	# Subtract modulus until a borrow is obtained (to counteract the carry).
+	xorb	$0x08, PATCH_OFF(%rbx)   # flip to secondary (adc↔sbb)
 Lop_add__loop:
 #ifdef TV_ECDSA_P256_TEST
 	movq	32(%rbp), %rsi   # modulus (via pointer)
 #else
 	leaq	32(%rbp), %rsi   # modulus value is at slot 1
 #endif
-	callq	*%rdi      # call secondary function
+	callq	*%rdi      # secondary
 	jnc	Lop_add__loop
 Lop_add__cont2:
 #ifndef TV_ECDSA_P256_TEST
