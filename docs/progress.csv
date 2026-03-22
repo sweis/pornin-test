@@ -126,3 +126,11 @@ stupid,3fae4ad,642,0,op_failcc ret shares Lop_add__cont2 ret
 stupid,d0ee867,641,0,op_next tail jumps to Ldoskip__cont via movq r10 rsi
 stupid,d89946d,640,2039164950,op_sub xor fallthrough + reset-on-exit invariant. SMC stalls: 8.5× slowdown.
 stupid,HEAD,642,1874610964,FAST_Z256 build post-SMC. SMC dominates; dec;jnz barely helps.
+stupid,91d229f,639,0,sbbl r8d r8d instead of setc r8b. CF preserved through sbb.
+stupid,bacf08e,639,0,add #ifdef NO_SMC build variant (652 B
+stupid,2c2fa37,637,0,op_for/op_next share xchg swap via Lswap_ret
+stupid,db56723,636,0,negb cl gives 255 from FOR ext-index=1
+stupid,9c822d2,634,0,op_for falls through to Lswap_ret; op_next js forward
+stupid,495ea5a,630,0,merge acc alloc into push loop 108->112 qwords
+stupid,80f10bd,629,2648834248,Wy init = acc=p-1 from check_point; RCB infinity is any (0:Y:0) Y!=0
+stupid,HEAD,642,237523020,NO_SMC build at 629-B base — 11× faster than SMC floor

@@ -14,9 +14,9 @@ COMMON = ../common
 include $(COMMON)/track.mk
 
 .PHONY: all size-all
-all: test size-all
+all: size-all
 
-size-all: tv_ecdsa.S
+size-all:
 	@echo "=== default (size floor, SMC) ==="
 	@$(CC) -c tv_ecdsa.S -o $(TMP)_def.o && size $(TMP)_def.o | tail -1
 	@echo "=== -DFAST_Z256 (dec;jnz in z256) ==="
