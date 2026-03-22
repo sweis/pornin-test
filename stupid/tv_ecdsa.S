@@ -326,15 +326,25 @@ curve_constants:
 1:
 .endm
 
-# _MODN is an alias for _SMOD 30, i.e. switching modulus to mod_N.
+#ifdef TV_ECDSA_P256_TEST
+# Test build: SMOD updates pointer in slot 1.
 .macro	_MODN
 	_SMOD 30
 .endm
-
-# _MODP is an alias for _SMOD 31, i.e. switching modulus to mod_P.
 .macro	_MODP
 	_SMOD 31
 .endm
+#else
+# Production: modN/modP are at slots 30/31, so SMOD = LD modslot; ST _M.
+# This clobbers acc; callers that need acc preserved must save/restore.
+# op_smod handler is removed entirely (-8 B handler, +5 B bytecode = -3 net).
+.macro	_MODN
+	_LD 30 ; _ST _M
+.endm
+.macro	_MODP
+	_LD 31 ; _ST _M
+.endm
+#endif
 
 # BYTECODE ENTRY POINT
 # WARNING: the code locates the entry point relatively to the
@@ -402,7 +412,12 @@ curve_constants:
 	# as r, when reduced modulo n. We switch back to computations
 	# modulo n, then compute r - x(W) mod n; signature is valid if
 	# and only if that yields a zero.
+#ifdef TV_ECDSA_P256_TEST
 	_MODN ; _SUB _Kr ; _CALL check_zero_mod_m ; _OK
+#else
+	# Production _MODN = LD/ST clobbers acc; save/restore via T0.
+	_ST _T0 ; _MODN ; _LD _T0 ; _SUB _Kr ; _CALL check_zero_mod_m ; _OK
+#endif
 
 	# If W was the point-at-infinity, then inversion of Wz yielded zero,
 	# and the rebuilt x(W) was zero. Since r != 0 (we checked it
@@ -722,22 +737,20 @@ Lop_add__loop:
 	callq	*%rdi      # call secondary function
 	jnc	Lop_add__loop
 Lop_add__cont2:
+#ifndef TV_ECDSA_P256_TEST
+op_smod:	# production: SMOD unused, table entry → this ret
+#endif
 	ret
 
-# SMOD y    switch current modulus (y = 30 for mod_N, y = 31 for mod_P)
-op_smod:
-	# mod_N at slot 30, mod_P at slot 31, so rdx already = &modulus.
 #ifdef TV_ECDSA_P256_TEST
-	# Test build keeps pointer semantics (gf_op sets it directly)
+# SMOD y    switch current modulus (y = 30 for mod_N, y = 31 for mod_P)
+# Test build: store pointer to slot 1 (gf_op also sets it directly).
+op_smod:
 	movq	%rdx, 32(%rbp)
 	ret
-#else
-	# Production: copy modulus VALUE into slot 1.
-	pushq	%rdx
-	popq	%rsi
-	leaq	32(%rbp), %rdi
-	jmp	docopy
 #endif
+# Production: SMOD eliminated; _MODN/_MODP expand to _LD/_ST bytecode.
+# Table entry for opcode 4 points at the ret in Lop_add__cont2 (next label).
 
 # MUL x   multiply accumulator with x
 op_mul:
