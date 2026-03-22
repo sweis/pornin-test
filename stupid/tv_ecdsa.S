@@ -835,10 +835,12 @@ docall:
 # unless the counter reaches -1 (which terminates the loop).
 op_for:
 	# Nested loop support: move current counter and start address
-	# to the save registers.
-	movb	%r9b, %r11b
+	# to the save registers. Full 32-bit save so dec %r9d in op_next
+	# sees clean upper bits after restore.
+	movl	%r9d, %r11d
 	movq	%r10, %r12
-	# Set counter.
+	# Set counter. r9d[8:31] is 0 here: either from entry (first FOR)
+	# or from a prior restore (movl %r11d,%r9d).
 	movb	$255, %r9b
 	# Save address of next instruction; this is where execution will
 	# loop back upon NEXT.
@@ -851,11 +853,13 @@ Lret2:
 # is decremented, and execution jumps to right after the FOR instruction
 # that started the iterator.
 op_next:
-	# Decrement counter; if it was 0 (borrow), loop is finished.
-	subb	$1, %r9b
-	jnc	Lop_next__cont1
-	# Loop finished (counter underflowed), restore outer loop state.
-	movb	%r11b, %r9b
+	# Decrement counter; if it goes negative, loop is finished.
+	# dec doesn't set CF but does set SF; r9d starts at 255 so SF=1
+	# only on the 0 -> -1 transition.
+	decl	%r9d
+	jns	Lop_next__cont1
+	# Loop finished (counter went negative), restore outer loop state.
+	movl	%r11d, %r9d
 	movq	%r12, %r10
 	ret
 Lop_next__cont1:
