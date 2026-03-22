@@ -235,7 +235,7 @@ curve_constants:
 	.equ	_M,     1    # current modulus
 	.equ	_F1,    2    # reserved for MUL
 	.equ	_ZERO, 25    # constant zero
-	.equ	_ONE,  26    # constant one
+	.equ	_ONE,  27    # constant one (slot 27: first pushed, can inline pushq $1)
 	.equ	_B,    14    # curve parameter b (computed at runtime)
 	.equ	_Gx,   28    # constant Gx (x coordinate of generator)
 	.equ	_Gy,   29    # constant Gy (y coordinate of generator)
@@ -1021,16 +1021,18 @@ op_fail:
 #else
 	# Production: slot 1 holds modulus VALUE (set by _MODN at bytecode
 	# start). No saved_rsp storage — exit computes it via leaq.
-	# Push 112 qwords = slots 27..0 (acc included). Acc init value
-	# doesn't matter (first bytecode op _MODN overwrites it). This
-	# merges the previous subq $32,%rsp into the push loop (−4 B).
-	movb	$112, %cl    # clear slots 27..0 fully
+	# _ONE is at slot 27 (first slot pushed): 3 zero qwords then
+	# pushq $1 for the low qword. Then 108 qwords for slots 26..0.
+	# This replaces the 6-B `incl -256(%rbp)` (disp32) with 5 B of
+	# explicit pushes (−1 B).
+	pushq	%rdx
+	pushq	%rdx
+	pushq	%rdx
+	pushq	$1           # slot 27 low qword = 1 → _ONE
+	movb	$108, %cl    # clear slots 26..0
 1:
 	pushq	%rdx
 	loop	1b
-	# _ONE at slot 26 = final_rbp+832 = enter_rbp-256. disp32 costs
-	# 6 B but saves the 4 B addq that was only there for disp8 reach.
-	incl	-256(%rbp)
 #endif
 #ifdef TV_ECDSA_P256_TEST
 	# _ONE slot is zero from push loop; incl 0 -> 1.
