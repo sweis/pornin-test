@@ -382,10 +382,11 @@ curve_constants:
 	_CALL check_point
 
 	# Compute W = u*G + v*Q
-	# Set work point W to the neutral (0:1:0). Values Wx and Wz were
-	# initialized at zero by the interpreter initialization, so we only
-	# need to set Wy to 1.
-	_LD _ONE ; _ST _Wy
+	# Set work point W to the neutral (0:Y:0) with Y!=0. RCB complete
+	# addition handles any nonzero Y as infinity. After check_point,
+	# acc = p-1 (from check_zero_mod_m's _SUB _M; _SUB _ONE when the
+	# curve equation = 0). Values Wx and Wz are zero from init.
+	_ST _Wy
 	# We loop over bits in u and v (high to low).
 	# Copy sequences end with X coord so acc=Hx on entry to
 	# point_add_to_W (saves one _LD there).
