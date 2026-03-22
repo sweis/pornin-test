@@ -585,7 +585,8 @@ microcode_mul:
 # [rbp] <- [rbp] + [rsi] (32 bytes), CF out
 # Clobbers: rax, rcx, rdx, rsi
 	.type	z256_add, %function
-	# Function size is 16 bytes
+	# Function size is 14 bytes (loop opcode costs cycles but size is
+	# the primary goal on this track; CF survives incb and loop).
 z256_add:
 	xorl	%edx, %edx    # also clears CF
 	movb	$8, %cl
@@ -593,16 +594,12 @@ Lz256_add__loop:
 	lodsl
 	adcl	%eax, (%rbp,%rdx,4)
 	incb	%dl
-	# We could use 'loop' here (and in z256_sub below); this would save
-	# four bytes in total, but runtime cost would significantly jump up
-	# (270Mcyc -> 432Mcyc) because 'loop' is inefficient in modern x86,
-	# so we'll abstain.
-	decb	%cl
-	jnz	Lz256_add__loop
+	loop	Lz256_add__loop
 	ret
 	.size	z256_add, . - z256_add
 
-# WARNING: this routine MUST immediately follow microcode_mul
+# WARNING: this routine MUST immediately follow z256_add (at offset 30
+# from translation_table; see op_add).
 # z256_sub:
 # [rbp] <- [rbp] - [rsi] (32 bytes), CF out
 # Clobbers: rax, rcx, rdx, rsi
@@ -614,9 +611,7 @@ Lz256_sub__loop:
 	lodsl
 	sbbl	%eax, (%rbp,%rdx,4)
 	incb	%dl
-	# See comment about 'loop' in z256_add.
-	decb	%cl
-	jnz	Lz256_sub__loop
+	loop	Lz256_sub__loop
 	ret
 	.size	z256_sub, . - z256_sub
 
@@ -681,7 +676,7 @@ op_add:
 	# Moreover, these two functions are located relatively from the
 	# translation table, with small offsets.
 	leaq	16(%rbx), %rdi   # z256_add (primary)
-	leaq	32(%rbx), %rax   # z256_sub (secondary)
+	leaq	30(%rbx), %rax   # z256_sub (secondary)
 	jnc	Lop_add__cont1
 	# For SUB, CF is set, so we exchange z256_add and z256_sub
 	xchgq	%rdi, %rax
