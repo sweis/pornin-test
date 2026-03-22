@@ -969,8 +969,8 @@ op_fail:
 	# Push pointer to current modulus (initially mod_N).
 	subq	$64, %rbp
 	pushq	%rbp
-	# Value 28 is ONE.
-	movb	$1, -128(%rbp)
+	# Value 28 is ONE (slot is zero from push loop; incl 0 -> 1).
+	incl	-128(%rbp)
 	# Allocate space for the accumulator (uninitialized).
 	subq	$32, %rsp
 	pushq	%rsp

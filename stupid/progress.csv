@@ -13,3 +13,10 @@ b421a30,761,0,op_ld/op_st share pop-pop tail via push order
 0cf24f0,734,0,save sig/pub in r10/r11; r9 stays small; drop MAIN xorl r9d
 b2880eb,732,147811238,movq rsp REG -> pushq rsp;popq REG for low regs
 23b8e7a,728,240927162,loop in z256_add/sub; op_add offset 32->30; +63% cyc trade
+af5a902,707,0,compute b at runtime from curve equation; slot remap Gx/Gy/B
+d6a3cf4,692,0,build p at runtime via stosl; 17 B replaces 32 B data
+16e356c,690,0,split p-build around push loop to share xor
+5cf0f29,682,0,build n top half at runtime; fuse with p-build
+4da6f37,678,0,loop-decode 2-bit table for n_top+p build
+51a80ab,674,0,1-bit shr/sbb loop for n_top+p; patch d10
+dee374c,673,0,dec r9d/jns in op_next instead of sub/jnc
