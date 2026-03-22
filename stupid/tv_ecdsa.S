@@ -368,15 +368,17 @@ curve_constants:
 	# need to set Wy to 1.
 	_LD _ONE ; _ST _Wy
 	# We loop over bits in u and v (high to low).
+	# Copy sequences end with X coord so acc=Hx on entry to
+	# point_add_to_W (saves one _LD there).
 	_FOR
 	# Double W.
-	_LD _Wx ; _ST _Hx ; _LD _Wy ; _ST _Hy ; _LD _Wz ; _ST _Hz
+	_LD _Wy ; _ST _Hy ; _LD _Wz ; _ST _Hz ; _LD _Wx ; _ST _Hx
 	_CALL point_add_to_W
 	# Add G if bit i of u is set; u is in Ke
-	_LD _Gx ; _ST _Hx ; _LD _Gy ; _ST _Hy ; _LD _ONE ; _ST _Hz
+	_LD _Gy ; _ST _Hy ; _LD _ONE ; _ST _Hz ; _LD _Gx ; _ST _Hx
 	_SKIPBITZ _Ke ; _CALL point_add_to_W
 	# Add Q if bit i of v is set; v is in Ks; Hz still contains 1
-	_LD _Qx ; _ST _Hx ; _LD _Qy ; _ST _Hy
+	_LD _Qy ; _ST _Hy ; _LD _Qx ; _ST _Hx
 	_SKIPBITZ _Ks ; _CALL point_add_to_W
 	# Loop until all bits have been processed.
 	_NEXT
@@ -479,8 +481,8 @@ check_zero_mod_m:
 # Output is written back into (Wx:Wy:Wz).
 # Clobbers: T0 to T8
 point_add_to_W:
-	# t0 <- X1 * X2
-	_LD _Wx ; _MUL _Hx ; _ST _T0
+	# t0 <- X1 * X2 (acc = Hx on entry from caller copy sequence)
+	_MUL _Wx ; _ST _T0
 	# t1 <- Y1 * Y2
 	_LD _Wy ; _MUL _Hy ; _ST _T1
 	# t2 <- Z1 * Z2
