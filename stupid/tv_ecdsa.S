@@ -77,25 +77,15 @@
 decode_int:
 	# WARNING: callers rely on r8-r10 not being modified
 
-	# Split source words into limbs, pushed onto the stack.
-	# Least significant limb is pushed last.
-	# We can use 'loop' even though we only set cl because the caller
-	# ensured that rcx[8..63] = 0.
-	movb	$8, %cl
-Ldecode_int__loop1:
-	lodsl
-	bswapl	%eax        # source is big-endian
-	pushq	%rax
-	loop	Ldecode_int__loop1
-
-	# Pop back words and write into destination. The move through
-	# the stack ensures that the values are in the right order.
-	movb	$8, %cl
-Ldecode_int__loop2:
-	popq	%rax
-	stosl
-	loop	Ldecode_int__loop2
-
+	# Byte-reverse 32 bytes: dst[i] = src[31-i]. Index via rcx
+	# countdown; stosb advances rdi. We can use 'loop' even though
+	# we only set cl because the caller ensured rcx[8..63] = 0.
+	movb	$32, %cl
+Ldecode_int__loop:
+	movb	-1(%rsi,%rcx), %al
+	stosb
+	loop	Ldecode_int__loop
+	addq	$32, %rsi      # advance source for chained calls
 	ret
 	.size	decode_int, . - decode_int
 
@@ -969,12 +959,12 @@ op_fail:
 	pushq	%r12
 	leaq	decode_int(%rip), %rbx
 
-	# WARNING: value "15" is the size of the decode_int() function. This
+	# WARNING: value "14" is the size of the decode_int() function. This
 	# is hardcoded here because uing a proper offset expression
 	# 'curve_constants - decode_int' would lead the assembler to use
 	# a 4-byte offset in the opcode, instead of a 1-byte offset.
 	# THIS VALUE MUST BE ADJUSTED IF decode_int() IS MODIFIED.
-	leaq	15(%rbx), %rsi
+	leaq	14(%rbx), %rsi
 
 	# Allocate the interpreter context.
 	# Context consists of 32 slots of 32 bytes each, for the 32 values
