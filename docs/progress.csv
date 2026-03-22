@@ -114,3 +114,9 @@ stupid,51a80ab,674,0,1-bit shr/sbb loop for n_top+p; patch d10
 stupid,dee374c,673,0,dec r9d/jns in op_next instead of sub/jnc
 stupid,2981dce,672,240199924,incl instead of movb $1 for ONE init
 stupid,HEAD,676,147230522,FAST_Z256 build: dec;jnz in z256_add/sub (+4 B
+stupid,2026-03-22,671,T8 elim: inline 3*t2 as 3 subs + refactor t0'=3*(t0-t2)
+stupid,2026-03-22,670,point_add acc=Hx entry: reorder caller copies, drop _LD _Wx
+stupid,2026-03-22,666,slot 1 = modulus VALUE: drop cmp+cmove, SMOD copies
+stupid,2026-03-22,664,modN/modP at slots 30/31: SMOD rdx points directly, drop +64
+stupid,2026-03-22,661,eliminate op_smod handler: _MODN/_MODP expand to LD/ST bytecode
+stupid,2026-03-22,660,incl -256 disp32 directly: drop addq that was only for disp8 reach
