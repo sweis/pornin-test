@@ -392,8 +392,7 @@ mod_P:
 	# as r, when reduced modulo n. We switch back to computations
 	# modulo n, then compute r - x(W) mod n; signature is valid if
 	# and only if that yields a zero.
-	_MODN ; _SUB _Kr ; _SUB _M
-	_SUB _ONE ; _SKIPCS ; _FAIL ; _OK
+	_MODN ; _SUB _Kr ; _CALL check_zero_mod_m ; _OK
 
 	# If W was the point-at-infinity, then inversion of Wz yielded zero,
 	# and the rebuilt x(W) was zero. Since r != 0 (we checked it
@@ -458,7 +457,11 @@ check_point:
 	# The accumulator still contains y.
 	_MUL _Qy ; _SUB _T0
 	_ADD _Qx ; _ADD _Qx ; _ADD _Qx ; _SUB _B
-	# Compare with 0.
+	# FALL THROUGH to check_zero_mod_m
+
+# BYTECODE: Check that acc == 0 mod m (normalize then compare to zero).
+# Triggers FAIL if nonzero; otherwise returns.
+check_zero_mod_m:
 	_SUB _M ; _SUB _ONE ; _SKIPCS ; _FAIL
 	_RET
 
