@@ -767,31 +767,28 @@ extended_translation_table:
 
 # Pseudo-instruction invoked for extended opcodes.
 op_extended:
-	# %cl contains the opcode.
+	# %cl contains the opcode index (0..7); preserve it for handlers.
 	# Use the secondary translation table. rax currently contains
 	# the address of op_extended, and the table size is 8 bytes.
 	# WARNING: if the table size is modified, the offset in the
-	# movb instruction below MUST be modified. The offset is
+	# movzbl instruction below MUST be modified. The offset is
 	# hardcoded so that it uses only one byte in the generated
 	# instruction (if using a symbol related expression, the assembler
 	# generates a 32-bit offset).
-	movb	-8(%rax,%rcx), %cl
-	addq	%rcx, %rax
+	movzbl	-8(%rax,%rcx), %edi
+	addq	%rdi, %rax
 	jmpq	*%rax
 
-# In extended opcodes, cl no longer contains relevant data (but
-# bits 8..63 of rcx are still 0).
+# In extended opcodes, cl contains the opcode index (0..7); bits 8..63
+# of rcx are zero.
 
-# SKIPCS   skip next instruction if emulated carry is set
+# SKIPCS   skip next instruction if emulated carry is set   (cl=0)
+# SKIPCC   skip next instruction if emulated carry is clear (cl=1)
+# r8b is 0 or 1; skip when r8b != cl.
 op_skipcs:
-	testb	%r8b, %r8b
-	jnz	doskip
-	ret
-
-# SKIPCC   skip next instruction if emulated carry is cleared
 op_skipcc:
-	testb	%r8b, %r8b
-	jz	doskip
+	cmpb	%r8b, %cl
+	jne	doskip
 	ret
 
 # RET     return from subroutine
