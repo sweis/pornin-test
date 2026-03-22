@@ -890,44 +890,35 @@ docall:
 	pushq	%rdx    # put back native return address
 	ret
 
-# FOR    start the iterator
-# This sets the iterator counter to 255. Each NEXT instruction will
-# decrement the iterator and loop back to immediately after the FOR,
-# unless the counter reaches -1 (which terminates the loop).
-op_for:
-	# Nested loop support: move current counter and start address
-	# to the save registers. Full 32-bit save so dec %r9d in op_next
-	# sees clean upper bits after restore.
-	movl	%r9d, %r11d
-	movq	%r10, %r12
-	# Set counter. r9d[8:31] is 0 here: either from entry (first FOR)
-	# or from a prior restore (movl %r11d,%r9d).
-	movb	$255, %r9b
-	# Save address of next instruction; this is where execution will
-	# loop back upon NEXT.
-	movq	%rsi, %r10
-Lret2:
-	ret
-
 # NEXT   decrement iterator counter and loop
 # If the counter is at zero, then the loop exits. Otherwise, the counter
 # is decremented, and execution jumps to right after the FOR instruction
 # that started the iterator.
 op_next:
 	# Decrement counter; if it goes negative, loop is finished.
-	# dec doesn't set CF but does set SF; r9d starts at 255 so SF=1
-	# only on the 0 -> -1 transition.
 	decl	%r9d
 	jns	Lop_next__cont1
-	# Loop finished (counter went negative), restore outer loop state.
-	movl	%r11d, %r9d
-	movq	%r12, %r10
+	# Loop finished: fall through to Lswap_ret to restore outer state.
+	# xchg puts saved outer r9/r10 back; inner's -1 and loop addr go
+	# into r11/r12 (garbage, overwritten by next FOR's movl/movq).
+Lswap_ret:
+	xchgl	%r9d, %r11d
+	xchgq	%r10, %r12
 	ret
 Lop_next__cont1:
 	# Reset saved instruction pointer to loop start (r10). Reuse
 	# doskip's tail which does popq;popq;pushq rsi;pushq;ret.
 	movq	%r10, %rsi
 	jmp	Ldoskip__cont
+
+# FOR    start the iterator
+# Sets r11/r12 to new loop state (count=255, start=rsi), then swaps
+# with r9/r10 via shared Lswap_ret. Old r9/r10 end up saved in r11/r12.
+# movl (not movb) ensures r11d[8:31]=0 so r9d is clean after xchg.
+op_for:
+	movl	$255, %r11d
+	movq	%rsi, %r12
+	jmp	Lswap_ret
 
 # OK     exit the interpreter with a success status   (cl=5)
 # FAIL   exit the interpreter with a failed status    (cl=6)
