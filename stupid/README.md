@@ -1,7 +1,16 @@
 # stupid/ — Bytecode-VM track
 
-**766 B / ~141M cyc** (Thomas Stupid baseline). Previous size floor was
-limb8 at 890 B — this is **124 B smaller** at ~27× the cycle cost.
+**620 B / ~2.4G cyc** (SMC floor), or **633 B / ~239M cyc** (NO_SMC,
+practical point). Thomas's baseline was 766 B / ~142M — we're **146 B
+smaller** (19%). The limb8 native-mul floor is 890 B.
+
+Four build variants:
+| Flags | Bytes | Cycles | Notes |
+|---|---:|---:|---|
+| (default) | 620 | 2.43G | SMC floor — boot-ROM without W^X only |
+| `-DFAST_Z256` | 622 | 1.84G | dec;jnz in z256 loop |
+| `-DNO_SMC` | 633 | 239M | practical — no pipeline stalls |
+| `-DNO_SMC -DFAST_Z256` | 633 | 239M | FAST_Z256 only affects SMC path |
 
 ## The insight
 
@@ -48,13 +57,32 @@ just "subtract modulus until carry" (op_add handler, ~2 iterations max).
 | opcode handlers (16 ops)         | ~190   |
 | interpreter macros + verify()    | ~175   |
 
-## Grind targets
+## Techniques beyond Thomas's baseline (766 → 620, −146 B)
 
-- **Bytecode density** — `_ADD 0` (self-add) appears 4× in point_add_to_W
-  for ×3 sequences; `_SUB _M` reduction appears 5×. Subroutine them?
-- **Handler sharing** — op_skipcs/op_skipcc differ by one jcc sense.
-  op_ld/op_st differ by src/dst swap.
-- **Speed variant** — replace microcode_mul with native schoolbook (adds
-  ~80 B, saves ~130M cyc). `-DFAST_MUL` build for speed/size knee.
-- **Our x86 tricks catalog** — port `xchg eax,r32`, `cqo`, `mov cl` audit,
-  `inc byte ptr` from limb8/limb11.
+**Constant derivation** (−48 B):
+- b computed as Gy²−Gx³+3Gx via bytecode (−21)
+- p built via 1-bit shr/sbb loop — 11 of 12 dwords ∈ {−1,0} (−15)
+- n's top 16 B fused into p-builder (−12)
+
+**VM un-specialization** (−23 B):
+- Slot 1 = modulus VALUE, not pointer; drops dispatch-loop cmp+cmove (−4)
+- SMOD handler eliminated — `_MODN`/`_MODP` expand to LD;ST bytecode (−5)
+- FAILCC opcode subsumes SKIPCS/CC+FAIL; ext table 8→5 (−6)
+- OK/FAIL direct unwind+ret — no exit-flag machinery (−14, session 1)
+*Actually several of these overlap; net is the accumulated −23.*
+
+**Self-modifying code** (−13 B, +8.5× cycles):
+- z256 add/sub merged; patch adc/sbb byte per call
+- `.selfmod` section with awx flags; `#ifdef NO_SMC` keeps +13 B alternate
+
+**Handler tail-sharing + micro** (−62 B across ~25 tricks):
+- op_for/op_next xchg-swap; op_mul tail-jump docopy; decode_int via rdx
+  so rsi survives; scale-2 index fuses advance into loop; Wy init from
+  check_point leftover; etc. See progress.csv.
+
+## Floor assessment
+
+~615-617 B is the likely architectural minimum. Remaining disp32 sites:
+`lea rsp,[rbp+0x440]` (7 B), two `lea rbx,[rip+...]` (14 B) — resist
+simple attacks. RCB bytecode (83 B) at theoretical minimum for acc-VM.
+30 distinct slots referenced → can't shrink to 4-bit operand encoding.

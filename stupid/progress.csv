@@ -48,4 +48,6 @@ f278149,627,0,decode_int: byte-index loop replaces push/pop dword reversal
 a584a39,624,0,_ONE to slot 27: inline pushq $1 replaces disp32 incl
 cec945f,623,0,op_failcc falls into Lop_reset; loop-exit r8b!=0 makes test no-op
 241901c,621,0,decode_int source via rdx: rsi=bytecode survives 5 calls sans push/pop
-1e9eb73,620,0,decode_int: scale-2 index fuses rdx+=32 into loop via inc
+1e9eb73,620,2432607812,decode_int: scale-2 index fuses rdx+=32 into loop via inc
+HEAD,633,238934698,NO_SMC build at 620-B base
+HEAD,622,1842881496,FAST_Z256 build at 620-B base

@@ -134,3 +134,12 @@ stupid,9c822d2,634,0,op_for falls through to Lswap_ret; op_next js forward
 stupid,495ea5a,630,0,merge acc alloc into push loop 108->112 qwords
 stupid,80f10bd,629,2648834248,Wy init = acc=p-1 from check_point; RCB infinity is any (0:Y:0) Y!=0
 stupid,HEAD,642,237523020,NO_SMC build at 629-B base — 11× faster than SMC floor
+stupid,580d673,628,0,op_mul: skip docall pop/push; saved IP already = caller addr
+stupid,f278149,627,0,decode_int: byte-index loop replaces push/pop dword reversal
+stupid,1fb6521,625,0,op_mul: stack-setup then tail-jump docopy; shares mov cl/rep movsb
+stupid,a584a39,624,0,_ONE to slot 27: inline pushq $1 replaces disp32 incl
+stupid,cec945f,623,0,op_failcc falls into Lop_reset; loop-exit r8b!=0 makes test no-op
+stupid,241901c,621,0,decode_int source via rdx: rsi=bytecode survives 5 calls sans push/pop
+stupid,1e9eb73,620,2432607812,decode_int: scale-2 index fuses rdx+=32 into loop via inc
+stupid,HEAD,633,238934698,NO_SMC build at 620-B base
+stupid,HEAD,622,1842881496,FAST_Z256 build at 620-B base
