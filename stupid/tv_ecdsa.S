@@ -76,16 +76,18 @@
 	.type	decode_int, %function
 decode_int:
 	# WARNING: callers rely on r8-r10 not being modified
+	# Source is in RDX (not rsi) so verify's rsi (= bytecode ptr)
+	# survives all 5 decode calls without push/pop.
 
 	# Byte-reverse 32 bytes: dst[i] = src[31-i]. Index via rcx
 	# countdown; stosb advances rdi. We can use 'loop' even though
 	# we only set cl because the caller ensured rcx[8..63] = 0.
 	movb	$32, %cl
 Ldecode_int__loop:
-	movb	-1(%rsi,%rcx), %al
+	movb	-1(%rdx,%rcx), %al
 	stosb
 	loop	Ldecode_int__loop
-	addq	$32, %rsi      # advance source for chained calls
+	addq	$32, %rdx      # advance source for chained calls
 	ret
 	.size	decode_int, . - decode_int
 
@@ -1167,24 +1169,21 @@ tv_ecdsa_p256_verify_asm:
 
 	INTERPRETER_BEGIN
 
-	# rsi points to the bytecode; we save it for now.
-	pushq	%rsi
+	# rsi points to the bytecode. decode_int reads source from RDX
+	# (not rsi), so rsi survives the 5 calls without push/pop.
 
 	# Decode r, s, e, Qx and Qy into the appropriate slots.
 	# This uses the fact that the slots are consecutive.
 	# rbx contains the address of decode_int() (set by INTERPRETER_BEGIN).
 	leaq	(32*_Kr)(%rbp), %rdi
-	movq	%r10, %rsi
+	movq	%r10, %rdx
 	callq	*%rbx        # r
 	callq	*%rbx        # s
-	movq	%r8, %rsi
+	movq	%r8, %rdx
 	callq	*%rbx        # e
-	movq	%r11, %rsi
+	movq	%r11, %rdx
 	callq	*%rbx        # Qx
 	callq	*%rbx        # Qy
-
-	# We previously saved the bytecode address.
-	popq	%rsi
 	INTERPRETER_MAIN
 #ifdef TV_ECDSA_P256_TEST
 	INTERPRETER_END
@@ -1229,6 +1228,7 @@ tv_gf_has_unreduced:
 	.type	tv_gf_decode, %function
 tv_gf_decode:
 	xorl	%ecx, %ecx
+	movq	%rsi, %rdx   # decode_int reads source from rdx
 	call	decode_int
 	xorl	%eax, %eax
 	movb	$1, %al
@@ -1438,7 +1438,7 @@ tv_point_decode:
 	INTERPRETER_BEGIN
 
 	# Decode coordinates as integers into slots Qx and Qy
-	movq	%r14, %rsi
+	movq	%r14, %rdx   # decode_int reads source from rdx
 	leaq	(32*_Qx)(%rbp), %rdi
 	callq	*%rbx      # rbx points to decode_int()
 	callq	*%rbx
