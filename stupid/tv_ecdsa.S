@@ -104,11 +104,11 @@ curve_constants:
 	# Gy
 	.quad	0xCBB6406837BF51F5, 0x2BCE33576B315ECE
 	.quad	0x8EE7EB4A7C0F9E16, 0x4FE342E2FE1A7F9B
-mod_N:
+	# Only n's random bottom 16 bytes are stored; top half
+	# [FF,FF,00,FF] and all of mod_P [FF,FF,FF,00,00,00,01,FF] are
+	# built at runtime in INTERPRETER_BEGIN. Test code has private
+	# full copies of mod_N and mod_P under the #ifdef.
 	.quad	0xF3B9CAC2FC632551, 0xBCE6FAADA7179E84
-	.quad	0xFFFFFFFFFFFFFFFF, 0xFFFFFFFF00000000
-# mod_P is built at runtime in INTERPRETER_BEGIN (p has only 3 distinct
-# dword values: -1, 0, 1). Test code has a private copy under the #ifdef.
 
 # -------------------------------------------------------------------------
 # BEGIN BYTECODE
@@ -936,18 +936,25 @@ op_fail:
 #endif
 	# In production, rcx is already 0 here (from `subq $65,%rcx; jnz`
 	# in tv_ecdsa_p256_verify entry).
-	movb	$96, %cl
+	movb	$80, %cl
 	rep movsb
 
 	# Now rsi points to the bytecode entry point (it immediately
-	# follows the constants block). rdi points at the mod_P slot.
-	# Build p = [-1,-1,-1,0,0,0,1,-1] (dwords low to high). Split
-	# around the push loop so its xor doubles as the push-loop zero.
+	# follows the constants block). rdi points at n's top half.
+	# Build n_top = [-1,-1,0,-1] then p = [-1,-1,-1,0,0,0,1,-1]
+	# (dwords low to high). Split around the push loop so the second
+	# 0-run's inc doubles as the push-loop zero.
 	orl	$-1, %eax
 	stosl
 	stosl
+	incl	%eax
 	stosl
-	xorl	%eax, %eax
+	decl	%eax
+	stosl
+	stosl
+	stosl
+	stosl
+	incl	%eax
 	stosl
 	stosl
 	stosl
@@ -1132,7 +1139,10 @@ tv_ecdsa_p256_verify_asm:
 # ========================================================================
 # ========================================================================
 
-# Test-only copy of mod_P (production builds it at runtime).
+# Test-only copies of mod_N and mod_P (production builds them at runtime).
+mod_N:
+	.quad	0xF3B9CAC2FC632551, 0xBCE6FAADA7179E84
+	.quad	0xFFFFFFFFFFFFFFFF, 0xFFFFFFFF00000000
 mod_P:
 	.quad	0xFFFFFFFFFFFFFFFF, 0x00000000FFFFFFFF
 	.quad	0x0000000000000000, 0xFFFFFFFF00000001
