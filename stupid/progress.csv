@@ -3,3 +3,13 @@ commit,bytes,cycles,note
 # Native interpreter is tiny; all EC logic is in 1-byte VM opcodes.
 # Baseline is Thomas's ecdsa-p256-verify_stupid.S as received.
 HEAD,766,141523892,Thomas Stupid baseline. MUL=bytecode double-and-add. ~27× slower than limb8 890B. 124 B smaller.
+6e15fbc,763,0,op_next subb+jnc replaces cmpb+jne+decb
+b421a30,761,0,op_ld/op_st share pop-pop tail via push order
+4114080,756,0,merge skipcs/skipcc via cl==r8b; op_extended preserves cl
+4352caa,742,0,op_ok/op_fail direct unwind+ret via cl&1; drop END+check
+510af89,741,0,MAIN modulus deref via cmov (always-read safe in frame)
+5460b66,739,0,drop xorl ecx in BEGIN; rcx=0 from entry subq check
+50b725b,737,0,bytecode check_zero_mod_m shared tail; check_point falls through
+0cf24f0,734,0,save sig/pub in r10/r11; r9 stays small; drop MAIN xorl r9d
+b2880eb,732,147811238,movq rsp REG -> pushq rsp;popq REG for low regs
+23b8e7a,728,241095568,loop in z256_add/sub; op_add offset 32->30; +63% cyc trade
