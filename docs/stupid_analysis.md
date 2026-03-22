@@ -61,6 +61,25 @@ pt_mul. Thomas pushes it into bytecode. Cost: ~20 B of handler code.
 Saved: ~40 B of native pt_mul loop body + the ability to reuse it for
 MUL + the ability to reuse it for INV (square-and-multiply).
 
+### Derive b from the curve equation (−20 B, confirmed by Thomas)
+
+`y² = x³ − 3x + b` ⟹ `b = Gy² − Gx³ + 3·Gx mod p`. The curve
+parameter b is **algebraically determined** by the generator
+coordinates we already store. 32 B of random-looking constant data
+replaced by ~13 B of bytecode (`_LD _Gy; _MUL _Gy; ...`).
+
+We never considered this because we categorized constants as
+**"irreducible input data"** — the same blind spot as treating
+multiplication as a primitive. But b isn't input; it's a derived
+quantity that happens to be tabulated for convenience. The curve
+equation IS the compression algorithm.
+
+Generalizes: any constant that satisfies an equation involving other
+stored constants is a candidate for runtime derivation. For P-256
+specifically: b (from curve eq), and potentially Gy (from Gx via
+`Gy = sqrt(Gx³ − 3·Gx + b)` — but that needs a square root, which
+needs `p ≡ 3 mod 4` exponentiation, ~50 B of bytecode, so net loss).
+
 ---
 
 ## 2. Why we missed them — introspection
