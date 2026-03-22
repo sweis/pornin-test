@@ -779,21 +779,21 @@ op_failcc:
 
 # MUL x   multiply accumulator with x
 op_mul:
-	# The MUL routine expects the second operand to be in F1.
-	# For MUL, the saved IP on the stack (pushed by main loop) is
-	# exactly the caller address docall would push — so we skip the
-	# pop-rcx/push-rsi pair in docall and save the push/pop rsi here.
+	# Set up the CALL stack manipulation first, then tail-jump to
+	# docopy for the operand→F1 copy. For MUL, the saved IP already
+	# on the stack is the correct caller address (MUL is 1 byte, rsi
+	# didn't advance past it), so we only need to insert the callee
+	# address below the native return. rcx[8:63]=0 from main-loop
+	# decode (ecx=slot, 0-31), so docopy's `mov cl,32; rep movsb` is
+	# safe.
+	leaq	8(%rbx), %rax   # microcode_mul (right after 8-B table)
+	popq	%rdi            # native return (temp stash)
+	pushq	%rax            # callee address
+	pushq	%rdi            # native return back on top
 	pushq	%rdx
-	popq	%rsi
-	leaq	(_F1*32)(%rbp), %rdi  # F1 is value 2 -> offset 32*_F1 is small
-	movb	$32, %cl
-	rep movsb
-	# Pretend that this is CALL to microcode_mul.
-	# microcode_mul is located immediately after the translation_table,
-	# which has size 8.
-	leaq	8(%rbx), %rax
-	popq	%rdx           # native return address
-	jmp	docall_pushax  # skip docall's pop-rcx/push-rsi (net no-op for MUL)
+	popq	%rsi            # rsi = operand
+	leaq	(_F1*32)(%rbp), %rdi  # rdi = F1 slot
+	jmp	docopy          # copies 32B rsi→rdi, then ret to main loop
 
 # SKIPBITZ x   skip next instruction if current bit is set in x
 # The "current bit" relates to the iterator; this instruction makes sense
