@@ -51,4 +51,7 @@ cec945f,623,0,op_failcc falls into Lop_reset; loop-exit r8b!=0 makes test no-op
 1e9eb73,620,2432607812,decode_int: scale-2 index fuses rdx+=32 into loop via inc
 HEAD,633,238934698,NO_SMC build at 620-B base
 HEAD,622,1842881496,FAST_Z256 build at 620-B base
-HEAD,618,0,call+pop replaces 2x lea rbx[rip+disp32]; verify reorganized to front
+3f02102,618,0,call+pop replaces 2x lea rbx[rip+disp32]; verify reorganized to front
+HEAD,642,130345736,NO_SMC+FAST_Z256: qword z256 (4 iter). DOMINATES Thomas 766/142M on both axes
+HEAD,631,240961676,NO_SMC build at 618-B base
+HEAD,620,0,FAST_Z256 build at 618-B base

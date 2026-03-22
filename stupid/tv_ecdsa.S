@@ -690,8 +690,37 @@ microcode_mul:
 
 # WARNING: this routine MUST immediately follow microcode_mul.
 #ifdef NO_SMC
-# NO_SMC: two separate functions, adcl vs sbbl. op_add/op_sub select
-# via CF+xchg (pre-SMC approach). Each function is 14 B (loop variant).
+# NO_SMC: two separate functions, adc vs sbb. op_add/op_sub select
+# via CF+xchg (pre-SMC approach).
+#ifdef FAST_Z256
+# FAST_Z256: 64-bit qwords, 4 iterations, dec;jnz. Halves the carry
+# chain vs the dword variant. ~20 B/function.
+	.type	z256_add, %function
+z256_add:
+	xorl	%edx, %edx
+	movb	$4, %cl
+Lz256_add__loop:
+	lodsq
+	adcq	%rax, (%rbp,%rdx,8)
+	incb	%dl
+	decb	%cl
+	jnz	Lz256_add__loop
+	ret
+	.size	z256_add, . - z256_add
+	.type	z256_sub, %function
+z256_sub:
+	xorl	%edx, %edx
+	movb	$4, %cl
+Lz256_sub__loop:
+	lodsq
+	sbbq	%rax, (%rbp,%rdx,8)
+	incb	%dl
+	decb	%cl
+	jnz	Lz256_sub__loop
+	ret
+	.size	z256_sub, . - z256_sub
+#else
+# Dword loop variant: 8 iterations, `loop` instruction (small but slow).
 	.type	z256_add, %function
 z256_add:
 	xorl	%edx, %edx
@@ -700,12 +729,7 @@ Lz256_add__loop:
 	lodsl
 	adcl	%eax, (%rbp,%rdx,4)
 	incb	%dl
-#ifdef FAST_Z256
-	decb	%cl
-	jnz	Lz256_add__loop
-#else
 	loop	Lz256_add__loop
-#endif
 	ret
 	.size	z256_add, . - z256_add
 	.type	z256_sub, %function
@@ -716,14 +740,10 @@ Lz256_sub__loop:
 	lodsl
 	sbbl	%eax, (%rbp,%rdx,4)
 	incb	%dl
-#ifdef FAST_Z256
-	decb	%cl
-	jnz	Lz256_sub__loop
-#else
 	loop	Lz256_sub__loop
-#endif
 	ret
 	.size	z256_sub, . - z256_sub
+#endif
 	.equ	Z256ADD_OFF, z256_add - translation_table
 	.equ	Z256SUB_OFF, z256_sub - translation_table
 #else

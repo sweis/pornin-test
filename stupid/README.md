@@ -1,16 +1,19 @@
 # stupid/ — Bytecode-VM track
 
-**620 B / ~2.4G cyc** (SMC floor), or **633 B / ~239M cyc** (NO_SMC,
-practical point). Thomas's baseline was 766 B / ~142M — we're **146 B
-smaller** (19%). The limb8 native-mul floor is 890 B.
+**618 B / ~2.4G cyc** (SMC floor). Thomas's baseline was 766 B / ~142M —
+we're **148 B smaller** (19%). The limb8 native-mul floor is 890 B.
+
+**NO_SMC+FAST_Z256 at 642 B / ~130M dominates Thomas's 766/142M on both
+axes** — 124 B smaller AND 12M cyc faster. The qword z256 halves the
+carry-chain length vs Thomas's dword variant.
 
 Four build variants:
 | Flags | Bytes | Cycles | Notes |
 |---|---:|---:|---|
-| (default) | 620 | 2.43G | SMC floor — boot-ROM without W^X only |
-| `-DFAST_Z256` | 622 | 1.84G | dec;jnz in z256 loop |
-| `-DNO_SMC` | 633 | 239M | practical — no pipeline stalls |
-| `-DNO_SMC -DFAST_Z256` | 633 | 239M | FAST_Z256 only affects SMC path |
+| (default) | 618 | 2.43G | SMC floor — boot-ROM without W^X only |
+| `-DFAST_Z256` | 620 | 1.84G | dec;jnz in z256 loop |
+| `-DNO_SMC` | 631 | 241M | practical — no pipeline stalls |
+| `-DNO_SMC -DFAST_Z256` | 642 | 130M | **dominates Thomas 766/142M** |
 
 ## The insight
 
@@ -80,9 +83,14 @@ just "subtract modulus until carry" (op_add handler, ~2 iterations max).
   so rsi survives; scale-2 index fuses advance into loop; Wy init from
   check_point leftover; etc. See progress.csv.
 
+**call+pop layout** (−2 B):
+- Both `lea rbx,[rip+disp32]` (7 B each) replaced with `call label; ...;
+  label: pop rbx` (5+1 B). verify() moved to front; `call Ldecoder` jumps
+  over decode_int/consts/bytecode; `call Lmain` jumps over handlers.
+
 ## Floor assessment
 
-~615-617 B is the likely architectural minimum. Remaining disp32 sites:
-`lea rsp,[rbp+0x440]` (7 B), two `lea rbx,[rip+...]` (14 B) — resist
-simple attacks. RCB bytecode (83 B) at theoretical minimum for acc-VM.
-30 distinct slots referenced → can't shrink to 4-bit operand encoding.
+~613-615 B is the likely architectural minimum. Remaining disp32 site:
+`lea rsp,[rbp+0x440]` (7 B) in op_ok/op_fail. RCB bytecode (83 B) at
+theoretical minimum for acc-VM. 30 distinct slots referenced → can't
+shrink to 4-bit operand encoding.
