@@ -896,31 +896,31 @@ docall:
 # that started the iterator.
 op_next:
 	# Decrement counter; if it goes negative, loop is finished.
+	# js jumps forward over op_for to the shared Lswap_ret on exit.
 	decl	%r9d
-	jns	Lop_next__cont1
-	# Loop finished: fall through to Lswap_ret to restore outer state.
-	# xchg puts saved outer r9/r10 back; inner's -1 and loop addr go
-	# into r11/r12 (garbage, overwritten by next FOR's movl/movq).
-Lswap_ret:
-	xchgl	%r9d, %r11d
-	xchgq	%r10, %r12
-	ret
-Lop_next__cont1:
-	# Reset saved instruction pointer to loop start (r10). Reuse
-	# doskip's tail which does popq;popq;pushq rsi;pushq;ret.
+	js	Lswap_ret
+	# Continue: reset saved instruction pointer to loop start (r10).
+	# Reuse doskip's tail which does popq;popq;pushq rsi;pushq;ret.
 	movq	%r10, %rsi
 	jmp	Ldoskip__cont
 
 # FOR    start the iterator
-# Sets r11/r12 to new loop state (count=255, start=rsi), then swaps
-# with r9/r10 via shared Lswap_ret. Old r9/r10 end up saved in r11/r12.
+# Sets r11/r12 to new loop state (count=255, start=rsi), then falls
+# through to Lswap_ret. Old r9/r10 end up saved in r11/r12.
 # FOR is ext index 1, so cl=1 on entry with ecx[8:31]=0 from decode.
 # negb cl → cl=0xFF → ecx=255. movl zero-extends into r11d.
 op_for:
 	negb	%cl
 	movl	%ecx, %r11d
 	movq	%rsi, %r12
-	jmp	Lswap_ret
+	# FALL THROUGH to Lswap_ret
+# Shared swap: r9↔r11, r10↔r12. For FOR, installs new state and saves
+# old. For NEXT-exit, restores outer state (inner's -1/addr go into
+# r11/r12 as garbage, overwritten by next FOR's movl/movq).
+Lswap_ret:
+	xchgl	%r9d, %r11d
+	xchgq	%r10, %r12
+	ret
 
 # OK     exit the interpreter with a success status   (cl=5)
 # FAIL   exit the interpreter with a failed status    (cl=6)
