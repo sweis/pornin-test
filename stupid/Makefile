@@ -17,7 +17,11 @@ include $(COMMON)/track.mk
 all: test size-all
 
 size-all: tv_ecdsa.S
-	@echo "=== default (size floor, loop) ==="
+	@echo "=== default (size floor, SMC) ==="
 	@$(CC) -c tv_ecdsa.S -o $(TMP)_def.o && size $(TMP)_def.o | tail -1
-	@echo "=== -DFAST_Z256 (dec;jnz, −40% cyc) ==="
+	@echo "=== -DFAST_Z256 (dec;jnz in z256) ==="
 	@$(CC) -c -DFAST_Z256 tv_ecdsa.S -o $(TMP)_fz.o && size $(TMP)_fz.o | tail -1
+	@echo "=== -DNO_SMC (two z256 funcs, ~8× faster) ==="
+	@$(CC) -c -DNO_SMC tv_ecdsa.S -o $(TMP)_ns.o && size $(TMP)_ns.o | tail -1
+	@echo "=== -DNO_SMC -DFAST_Z256 ==="
+	@$(CC) -c -DNO_SMC -DFAST_Z256 tv_ecdsa.S -o $(TMP)_nsf.o && size $(TMP)_nsf.o | tail -1

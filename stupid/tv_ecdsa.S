@@ -8,12 +8,18 @@
 
 	.arch	generic64
 	.file	"ecdsa-p256-verify_stupid.S"
+#ifdef NO_SMC
+	# NO_SMC build: two separate z256_add/z256_sub functions, no
+	# self-modifying code. ~11 B larger but ~8× faster (no SMC stalls).
+	.text
+#else
 	# Code must be writable for the self-modifying z256_addsub patch.
 	# Boot-ROM context (the target use case) typically has no W^X.
 	# For Linux testing, we use a custom section with awx flags so the
 	# linker puts it in a RWX segment. The `size` tool counts it as
 	# text (it is marked executable).
 	.section .selfmod, "awx", @progbits
+#endif
 
 # ========================================================================
 # PLATFORM COMPATIBILITY
@@ -601,6 +607,44 @@ microcode_mul:
 	_NEXT ; _RET
 
 # WARNING: this routine MUST immediately follow microcode_mul.
+#ifdef NO_SMC
+# NO_SMC: two separate functions, adcl vs sbbl. op_add/op_sub select
+# via CF+xchg (pre-SMC approach). Each function is 14 B (loop variant).
+	.type	z256_add, %function
+z256_add:
+	xorl	%edx, %edx
+	movb	$8, %cl
+Lz256_add__loop:
+	lodsl
+	adcl	%eax, (%rbp,%rdx,4)
+	incb	%dl
+#ifdef FAST_Z256
+	decb	%cl
+	jnz	Lz256_add__loop
+#else
+	loop	Lz256_add__loop
+#endif
+	ret
+	.size	z256_add, . - z256_add
+	.type	z256_sub, %function
+z256_sub:
+	xorl	%edx, %edx
+	movb	$8, %cl
+Lz256_sub__loop:
+	lodsl
+	sbbl	%eax, (%rbp,%rdx,4)
+	incb	%dl
+#ifdef FAST_Z256
+	decb	%cl
+	jnz	Lz256_sub__loop
+#else
+	loop	Lz256_sub__loop
+#endif
+	ret
+	.size	z256_sub, . - z256_sub
+	.equ	Z256ADD_OFF, z256_add - translation_table
+	.equ	Z256SUB_OFF, z256_sub - translation_table
+#else
 # z256_addsub:
 # [rbp] <- [rbp] OP [rsi] (32 bytes), CF out
 # where OP is adcl or sbbl depending on what op_add/op_sub wrote at
@@ -627,6 +671,7 @@ Lz256_patch:
 	# Hardcoded offsets (from translation_table) used by op_add/op_sub:
 	.equ	Z256_OFF,   z256_addsub - translation_table   # = 16
 	.equ	PATCH_OFF,  Lz256_patch - translation_table   # = 21
+#endif
 
 # Instruction routine conventions:
 #  - each routine is invoked with 'call' and ends with a ret opcode
@@ -675,6 +720,35 @@ docopy:
 
 # SUB x   subtract value x from accumulator
 # ADD x   add value x to accumulator
+#ifdef NO_SMC
+# NO_SMC: CF-based function selection. op_sub sets CF via stc; op_add
+# entry has CF=0 (interpreter invariant). jnc+xchg picks primary/secondary.
+op_sub:
+	stc
+op_add:
+	leaq	Z256ADD_OFF(%rbx), %rdi   # primary for ADD
+	leaq	Z256SUB_OFF(%rbx), %rax   # secondary for ADD
+	jnc	Lop_add__cont1
+	xchgq	%rdi, %rax        # SUB: swap roles
+Lop_add__cont1:
+	pushq	%rax              # save secondary
+	pushq	%rdx
+	popq	%rsi
+	callq	*%rdi             # primary
+	sbbl	%r8d, %r8d        # emulated carry: r8d=-CF; CF preserved
+	popq	%rdi              # recover secondary
+	jnc	Lop_reset
+Lop_add__loop:
+#ifdef TV_ECDSA_P256_TEST
+	movq	32(%rbp), %rsi
+#else
+	leaq	32(%rbp), %rsi
+#endif
+	callq	*%rdi             # secondary
+	jnc	Lop_add__loop
+Lop_reset:
+	ret
+#else
 # Self-modifying: patch the adc/sbb byte inside z256_addsub.
 # Invariant: PATCH = 0x11 (adcl) on entry. op_sub xors to 0x19 and
 # falls through. Both paths reset PATCH to 0x11 before ret. On
@@ -701,6 +775,7 @@ Lop_add__loop:
 Lop_reset:
 	movb	$0x11, PATCH_OFF(%rbx)   # restore invariant
 	ret
+#endif
 
 # FAILCC   fail if emulated carry clear (primary opcode 4, operand 0)
 # Replaces all SKIPCS;FAIL (4×) and the one SKIPCC;FAIL (rewritten in
