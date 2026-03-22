@@ -21,6 +21,47 @@
 	.section .selfmod, "awx", @progbits
 #endif
 
+#ifndef TV_ECDSA_P256_TEST
+# ========================================================================
+# PRODUCTION LAYOUT: verify() comes first. The two `lea rbx,[rip+disp32]`
+# sites (7 B each) are replaced by `call label; ...; label: pop rbx`
+# (5+1 = 6 B each). The call pushes the address of the instruction
+# immediately after it (= the label we want rbx to hold), then jumps over
+# the intervening data/code to the pop. Net: −2 B.
+# ========================================================================
+
+Ltv_ecdsa_p256_verify__err:
+	xorl	%eax, %eax
+	ret
+
+	.global	tv_ecdsa_p256_verify
+	.global	tv_ecdsa_p256_verify_asm
+	.type	tv_ecdsa_p256_verify, %function
+tv_ecdsa_p256_verify:
+tv_ecdsa_p256_verify_asm:
+	# Check input sizes.
+	subq	$64, %rsi
+	jnz	Ltv_ecdsa_p256_verify__err
+	subq	$65, %rcx
+	jnz	Ltv_ecdsa_p256_verify__err
+	subq	$32, %r9
+	cmpq	$32, %r9
+	ja	Ltv_ecdsa_p256_verify__err
+	# Check that the public key leading byte is 0x04.
+	pushq	%rdx
+	popq	%rsi
+	lodsb
+	cmpb	$0x04, %al
+	jne	Ltv_ecdsa_p256_verify__err
+	movq	%rdi, %r10
+	movq	%rsi, %r11
+	# r8=hv, r10=sig, r11=pub+1
+	pushq	%rbx
+	pushq	%r12
+	# call+pop #1: push &decode_int, jump over it+consts+bytecode.
+	call	Ldecoder
+#endif  /* !TV_ECDSA_P256_TEST */
+
 # ========================================================================
 # PLATFORM COMPATIBILITY
 #
@@ -68,7 +109,7 @@
 # Clobbers: rax, rcx
 # ========================================================================
 
-# WARNING: decode_int() has size 15 bytes and is immediately followed by
+# WARNING: decode_int() has size 13 bytes and is immediately followed by
 # curve_constants. This is used in the INTERPRETER_BEGIN macro (later on)
 # and in particular the function size is hardcoded there (to get a more
 # size-efficient opcode encoding).
@@ -552,6 +593,52 @@ point_add_to_W:
 # END BYTECODE
 # -------------------------------------------------------------------------
 
+#ifndef TV_ECDSA_P256_TEST
+# Landing pad for call+pop #1. The `call Ldecoder` above pushed the
+# address of decode_int (the instruction right after the call).
+Ldecoder:
+	popq	%rbx             # rbx = &decode_int
+	leaq	13(%rbx), %rsi   # rsi = &curve_constants (decode_int is 13 B)
+	enter	$192, $0
+	pushq	%rsp
+	popq	%rdi
+	# rcx is already 0 here (from `subq $65,%rcx; jnz` in entry checks).
+	movb	$80, %cl
+	rep movsb
+	# rsi now = bytecode entry. rdi = &n_top. Build n_top+p.
+	movl	$0x87B, %edx
+	movb	$12, %cl
+2:
+	shrl	$1, %edx
+	sbbl	%eax, %eax
+	stosl
+	loop	2b
+	incl	-8(%rdi)
+	# Clear slots 27..0; slot 27 gets _ONE via inline pushq $1.
+	pushq	%rdx
+	pushq	%rdx
+	pushq	%rdx
+	pushq	$1
+	movb	$108, %cl
+1:
+	pushq	%rdx
+	loop	1b
+	pushq	%rsp
+	popq	%rbp
+	# Decode r, s, e, Qx, Qy into slots _Kr.._Qy.
+	leaq	(32*_Kr)(%rbp), %rdi
+	movq	%r10, %rdx
+	callq	*%rbx
+	callq	*%rbx
+	movq	%r8, %rdx
+	callq	*%rbx
+	movq	%r11, %rdx
+	callq	*%rbx
+	callq	*%rbx
+	# call+pop #2: push &translation_table, jump over handlers.
+	call	Lmain
+#endif  /* !TV_ECDSA_P256_TEST */
+
 # ========================================================================
 # VM INTERPRETER
 #
@@ -954,6 +1041,28 @@ op_fail:
 	ret
 #endif
 
+#ifndef TV_ECDSA_P256_TEST
+# Landing pad for call+pop #2. The `call Lmain` above pushed the address
+# of translation_table (the data right after the call).
+Lmain:
+	popq	%rbx             # rbx = &translation_table
+1:
+	xorl	%eax, %eax
+	lodsb
+	movl	%eax, %ecx
+	andb	$0x07, %al
+	xorb	%al, %cl
+	xlatb
+	leaq	(%rbp,%rcx,4), %rdx
+	shrl	$3, %ecx
+	addq	%rbx, %rax       # also clears CF (handler invariant)
+	pushq	%rsi
+	callq	*%rax
+	popq	%rsi
+	jmp	1b
+	.size	tv_ecdsa_p256_verify, . - tv_ecdsa_p256_verify
+#endif  /* !TV_ECDSA_P256_TEST */
+
 # Interpreter is built as three macros, so that the test code may use
 # some interpreters to exercise subroutines.
 
@@ -1134,6 +1243,9 @@ op_fail:
 #         const void *hv, size_t hv_len)
 # ========================================================================
 
+#ifdef TV_ECDSA_P256_TEST
+# Test build keeps the original layout so INTERPRETER_* macros work
+# unchanged for the other test-only interpreter instances below.
 # Small helper chunk located here so that some jumps are close.
 Ltv_ecdsa_p256_verify__err:
 	xorl	%eax, %eax
@@ -1187,12 +1299,10 @@ tv_ecdsa_p256_verify_asm:
 	callq	*%rbx        # Qx
 	callq	*%rbx        # Qy
 	INTERPRETER_MAIN
-#ifdef TV_ECDSA_P256_TEST
 	INTERPRETER_END
 	ret
-#endif
-	# In production builds, op_ok/op_fail unwind and ret directly.
 	.size	tv_ecdsa_p256_verify, . - tv_ecdsa_p256_verify
+#endif  /* TV_ECDSA_P256_TEST */
 
 #ifdef TV_ECDSA_P256_TEST
 
