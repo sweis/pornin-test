@@ -941,8 +941,8 @@ op_fail:
 
 	# Now rsi points to the bytecode entry point (it immediately
 	# follows the constants block). rdi points at the mod_P slot.
-	# Build p = [-1,-1,-1,0,0,0,1,-1] (dwords low to high). 17 B of
-	# code replaces 32 B of data.
+	# Build p = [-1,-1,-1,0,0,0,1,-1] (dwords low to high). Split
+	# around the push loop so its xor doubles as the push-loop zero.
 	orl	$-1, %eax
 	stosl
 	stosl
@@ -951,18 +951,19 @@ op_fail:
 	stosl
 	stosl
 	stosl
-	incl	%eax
-	stosl
-	negl	%eax
-	stosl
 
 	# Clear space for values 29 to 2, and the flags, except the slots
-	# for the saved stack pointer and the current modulus.
-	xorl	%eax, %eax
+	# for the saved stack pointer and the current modulus. eax is
+	# already 0 from the p-build above.
 	movb	$114, %cl    # 114 = 29*4 - 2
 1:
 	pushq	%rax
 	loop	1b
+	# Finish building p (rdi/eax untouched by push loop).
+	incl	%eax
+	stosl
+	negl	%eax
+	stosl
 	# Push saved stack pointer.
 	pushq	%rbp
 	# Push pointer to current modulus (initially mod_N).
