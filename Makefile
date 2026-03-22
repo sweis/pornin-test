@@ -43,7 +43,7 @@ w.writerow(['track','commit','bytes','cycles','note']); \
 print(f'docs/progress.csv: {len(rows)} rows')"
 
 chart: docs/progress.csv
-	python3 docs/plot_history.py
+	python3 tools/plot_history.py
 
 clean:
 	@for d in $(TRACKS) speed signer; do $(MAKE) -C $$d clean; done

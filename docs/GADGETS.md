@@ -4,8 +4,9 @@
 Everything else negative.** Scripts preserved for re-runs after major
 restructuring.
 
-Scripts: `docs/gadget_hunt{,2,3,4}.py` (bytecode), `docs/native_gadgets.py`
-(x86). Regenerate `.bin` with `objcopy -O binary -j .text` on `.o` files.
+Scripts: `tools/gadget_hunt{,2,3,4}.py` (bytecode), `tools/native_gadgets.py`
+(x86). See `tools/README.md`. Regenerate `.bin` with `objcopy -O binary
+-j .text` on `.o` files.
 
 ---
 
