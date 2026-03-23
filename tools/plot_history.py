@@ -299,14 +299,13 @@ if STUPID_TRACK:
                 bbox=dict(boxstyle='round,pad=0.3', fc='#ffe4b5',
                 ec='#ff8c00', lw=0.8))
 
-# Thomas Stupid baseline — labeled star. The new size corner.
+# Thomas Stupid baseline — labeled star. Dominated by our 642 B / 130M.
 ax.scatter([THOMAS_STUPID[0]], [THOMAS_STUPID[1]], c='#2e8b57', s=120,
            marker='*', edgecolors='#1a5235', linewidths=1.0, zorder=6)
-ax.annotate(f'Thomas Stupid — {THOMAS_STUPID[0]}B', THOMAS_STUPID,
-            textcoords="offset points", xytext=(12, 6), fontsize=10,
-            fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',
-            ec='#2e8b57', lw=1))
+ax.annotate(f'Thomas Stupid — {THOMAS_STUPID[0]}B (dominated)', THOMAS_STUPID,
+            textcoords="offset points", xytext=(12, 6), fontsize=9,
+            bbox=dict(boxstyle='round,pad=0.3', fc='#e8e8e8',
+            ec='#888888', lw=0.6))
 
 ax.set_xlabel('Size (bytes)', fontsize=12)
 ax.set_ylabel('Cycles (log scale)', fontsize=12)
@@ -320,7 +319,7 @@ ax.set_axisbelow(True)
 # a wall at the top, and separates the fast.S cluster (650K-1000K)
 # from the bc.S baseline (1850K).  Size stays linear — only 2:1 range.
 ax.set_yscale('log')
-ax.set_xlim(600, 2000)    # left edge tracks stupid size floor
+ax.set_xlim(595, 2000)    # left edge tracks stupid size floor
 ax.set_ylim(500, 4000000) # stupid SMC at ~2.6G cyc (pipeline stalls)
 # Human-readable cycle labels. Internal y-values are thousands-of-cycles
 # (csv cycles // 1000), so y=500 → 500K, y=1000 → 1M, y=1000000 → 1G.

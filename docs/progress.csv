@@ -143,3 +143,7 @@ stupid,241901c,621,0,decode_int source via rdx: rsi=bytecode survives 5 calls sa
 stupid,1e9eb73,620,2432607812,decode_int: scale-2 index fuses rdx+=32 into loop via inc
 stupid,HEAD,633,238934698,NO_SMC build at 620-B base
 stupid,HEAD,622,1842881496,FAST_Z256 build at 620-B base
+stupid,3f02102,618,1603845100,call+pop replaces 2x lea rbx[rip+disp32]; verify reorganized to front. SMC cyc noisy (1.6-2.2G)
+stupid,d2c6554,642,130345736,NO_SMC+FAST_Z256: qword z256 (4 iter). DOMINATES Thomas 766/142M on both axes
+stupid,HEAD,631,240961676,NO_SMC build at 618-B base
+stupid,HEAD,620,0,FAST_Z256 build at 618-B base
