@@ -98,34 +98,56 @@ without reorganizing. Measure −2 B. Then attempt layout shuffle.
 
 ---
 
-#### 3. Two-accumulator VM  (Δ ≈ −5 to −10, MED-LOW)
+#### 3. Two-accumulator VM  (MEASURED: +13 B, DEAD)
+
+**Finding (live-range analysis at 618 B):** `_XCHG x` primitive (swap
+acc↔slot[x], encoded as FAILCC operand≥1) collapses `_ST A; _LD B`
+→ 1 byte when B is at last-use and A's downstream reads can rewire to
+slot B. Full scan of point_add_to_W's 82 ops finds **exactly 6 sites**:
+
+| ops | ST;LD | XCHG slot | rewires |
+|---|---|---|---|
+| 22-23 | T6;Hx | 11 | op25 MUL T6→Hx |
+| 38-39 | T7;T6 | 22 | op45,47 T6→F0; op73,77 MUL T7→T6 |
+| 48-49 | T6;Wy | 9 | op58,70 MUL T6→Wy |
+| 51-52 | T4;Hy | 12 | op54 MUL T4→Hy |
+| 71-72 | Wy;T5 | 21 | op74 ADD Wy→T5 |
+| 78-79 | Wz;T3 | 19 | op81 ADD Wz→T3 |
+
+All rewires byte-neutral. No sites outside point_add. **Ceiling: −6 B.**
+
+Handler floor: `jecxz` dispatch (2 B, safe — z256_addsub leaves rcx=0
+on Lop_add__loop fall-through) + 32-byte mem↔mem swap loop. Tightest:
+```
+jecxz Lfail; movb $32,%cl
+1: movb -1(%rdx,%rcx),%al; xchgb -1(%rbp,%rcx),%al
+   movb %al,-1(%rdx,%rcx); loop 1b; ret
+```
+= **19 B**. lodsb/scasb variant hits 18 B; no further reduction — x86
+has no mem↔mem xchg and no call rel8 to reuse docopy cheaply. rbp's
+mandatory disp costs 1 B/loop-iter in code.
+
+**Net: −6 + 19 = +13 B.** The 9 other ST;LD pairs load input coords
+(Wx/Wy/Wz/Hx/Hy/Hz) that aren't at last-use, or store final outputs
+(Wx/Wy @ ops 63,75) that must land in their canonical slots. Pure
+SWAP (fixed acc2 slot) saves 0 B/site: `ST;LD` and `SWAP;SWAP` are
+both 2 B. Only the general XCHG (slot-parameterized) yields savings,
+and its handler is 3× the ceiling. **Absolute dead end** — RCB's
+dependency structure is too linear; chain boundaries mostly load
+fresh inputs, not stashed intermediates.
+
+**Original estimate:**
 
 RCB's 83 B is dominated by `LD tmp; op; ST tmp` where tmp is dead
 within 3-5 ops. A second accumulator eliminates the ST/LD pair when
 the next chain starts before the previous result is consumed.
 
-**Encoding:** steal 1 bit from the 5-bit slot field → 4-bit slot (16
-slots) + 1-bit acc-select. **Problem: 29 slots used, can't fit in 16.**
-
-**Alternative encoding:** use the currently-unused FAILCC operand bits
-(FAILCC operand is always 0, so encodings 0x0C..0xFC with low-3=100
-are free). 31 free encodings could be: `XCHG` (swap acc0↔acc1) = 1
-encoding, `ST2 x` / `LD2 x` using high-4 bits = 16 encodings each.
-Handler dispatch needs a second-level check when primary-op=4 and
-operand≠0.
-
-- Bytecode: scan RCB for `ST x; ...; LD x` where x is dead after —
-  estimate 6-10 such pairs. Replace with XCHG = −1 B/pair = **−6 to −10 B**
+- Bytecode: estimate 6-10 such pairs = **−6 to −10 B**
 - Handler: acc-select logic + XCHG handler ≈ **+8-12 B**
-- Net: **−2 to +2 B** — marginal, but the dependency-graph analysis
-  might surface other restructurings.
+- Net: **−2 to +2 B**
 
-**Risk:** the real win depends on RCB's dep-graph density. Might be
-zero. Worth a paper analysis before any code.
-
-**Smallest prototype:** annotate `point_add_to_W` bytecode with live
-ranges; count ST/LD pairs where the intervening ops don't touch the
-stored slot. That number × 1 B is the ceiling.
+Estimate was right on site count (6), wrong on handler cost by ~2×
+(the 32-byte swap is heavier than a dispatch-table entry).
 
 ---
 
