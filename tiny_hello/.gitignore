@@ -3,5 +3,6 @@ tiny_hello64
 hello45_argv
 hello5?
 hello60
-hello64_*
+hello64_86
+!*.asm
 *.nasm

@@ -67,6 +67,49 @@ after `e_phnum`.
 enters at `0x1A` and uses an `and eax,imm32` to step *over* the
 `e_phentsize` bytes; entering at `0x14` and exiting *before* them saves 3.
 
+### Source
+
+```nasm
+; hello60.asm — 60-byte i386 ELF
+BITS 32
+        org   0x05430000
+
+        db    0x7F, "ELF"       ; 00: magic
+        dd    1                 ; 04: EI_CLASS=1       / p_type=PT_LOAD
+        dd    0                 ; 08: e_ident pad      / p_offset=0
+        dd    $$                ; 0C: e_ident pad      / p_vaddr=0x05430000
+        dw    2                 ; 10: e_type=ET_EXEC   / p_paddr lo
+        dw    3                 ; 12: e_machine=EM_386 / p_paddr hi
+_start:                         ; ----- e_entry points here (0x05430014) -----
+        mov   dl, msg.len       ; 14: e_version        / p_filesz  (B2 0E)
+        mov   al, 0             ; 16:   "              /   "       (B0 00)
+        ; bytes 18-1B = e_entry/p_memsz = 14 00 43 05, executed as:
+        db    0x14, 0x00        ; 18:   adc al, 0        (e_entry[0:2])
+        db    0x43              ; 1A:   inc ebx          (e_entry[2]) → ebx=1
+        db    0x05              ; 1B:   add eax, imm32   (e_entry[3])
+        dd    4                 ; 1C: e_phoff=4/p_flags=PF_R; imm32 → eax=4
+        mov   ecx, msg          ; 20: e_shoff/p_align/e_flags
+        int   0x80              ; 25:   write(1, msg, len)
+        xchg  eax, ebx          ; 27:   eax=1
+        int   0x80              ; 28:   exit(len)
+        dw    32                ; 2A: e_phentsize=32
+        dw    1                 ; 2C: e_phnum=1
+msg:    db    'Hello, world!', 10
+.len    equ   $ - msg
+```
+
+Build and run:
+```sh
+nasm -f bin -o hello60 hello60.asm && chmod +x hello60 && ./hello60
+```
+
+Or skip the build:
+```sh
+base64 -d <<'EOF' > hello60 && chmod +x hello60 && ./hello60
+f0VMRgEAAAAAAAAAAABDBQIAAwCyDrAAFABDBQQAAAC5LgBDBc2Ak82AIAABAEhlbGxvLCB3b3JsZCEK
+EOF
+```
+
 ## x86-64: 86 bytes
 
 ELF64 headers are bigger and the layout is different — `p_flags` sits
@@ -101,6 +144,51 @@ into `p_paddr` for the two `syscall` instructions.
 ```
 
 86 bytes. Otterness overlapped 8 bytes of header; this overlaps 40.
+
+### Source
+
+```nasm
+; hello64_86.asm — 86-byte x86-64 ELF
+BITS 64
+        org   0x500000000
+
+        db    0x7F                   ; 00: magic[0]
+_start:                              ; entry @ byte 1: "ELF" = 3 REX prefixes
+        db    "ELF"                  ; 01: magic[1:4] = 45 4C 46 = REX.B,.WR,.RX
+        mov   al, 1                  ; 04: e_ident pad — first real opcode
+        mov   edi, eax               ; 06:   rdi=1 (stdout)
+        lea   rsi, [rel msg]         ; 08:   rsi=&msg (rip-relative)
+        db    0x3D                   ; 0F: cmp eax, imm32 — eats next 4 bytes:
+        dw    2                      ; 10: e_type=ET_EXEC
+        dw    0x3E                   ; 12: e_machine=EM_X86_64
+        mov   dl, msg.len            ; 14: e_version
+        jmp   tail                   ; 16:   → 0x30 (p_paddr)
+        dd    1                      ; 18: e_entry[0:4]  / p_type=PT_LOAD
+        dd    5                      ; 1C: e_entry[4:8]  / p_flags=PF_R|PF_X
+        dq    0x18                   ; 20: e_phoff       / p_offset = 0x18
+        dq    $$ + 0x18              ; 28: e_shoff       / p_vaddr
+tail:   syscall                      ; 30: e_flags…      / p_paddr — write()
+        mov   al, 60                 ; 32:
+        syscall                      ; 34:                 — exit()
+        dw    56                     ; 36: e_phentsize=56
+        dw    1                      ; 38: e_phnum=1     / p_filesz[0:2]
+        dw    0, 0, 0                ; 3A: e_sh*         / p_filesz[2:8]
+        dq    1                      ; 40:               / p_memsz=1
+msg:    db    'Hello, world!', 10    ; 48:               / p_align + tail
+.len    equ   $ - msg
+```
+
+Build and run:
+```sh
+nasm -f bin -o hello64_86 hello64_86.asm && chmod +x hello64_86 && ./hello64_86
+```
+
+Or skip the build:
+```sh
+base64 -d <<'EOF' > hello64_86 && chmod +x hello64_86 && ./hello64_86
+f0VMRrABicdIjTU5AAAAPQIAPgCyDusYAQAAAAUAAAAYAAAAAAAAABgAAAAFAAAADwWwPA8FOAABAAAAAAAAAAEAAAAAAAAASGVsbG8sIHdvcmxkIQo=
+EOF
+```
 
 ## Why not smaller?
 
