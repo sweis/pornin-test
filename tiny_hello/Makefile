@@ -1,4 +1,4 @@
-BINS = tiny_hello tiny_hello64 hello58 hello57 hello45_argv
+BINS = tiny_hello tiny_hello64 hello60 hello58 hello57 hello45_argv hello64_86
 
 all: $(BINS) test
 
@@ -8,14 +8,20 @@ tiny_hello: gen_hello.py
 tiny_hello64: gen_hello64.py
 	python3 gen_hello64.py $@
 
-hello58 hello57 hello45_argv: gen_v2.py
+hello60 hello58 hello57 hello45_argv: gen_v2.py
 	python3 gen_v2.py $@
+
+hello64_86: gen_v3_64.py
+	python3 gen_v3_64.py $@
 
 test: $(BINS)
 	@echo "=== sizes ==="
 	@wc -c $(BINS) | grep -v total
 	@echo "=== tiny_hello (76B reference) ==="
 	@./tiny_hello; echo "(exit $$?)"
+	@echo "=== hello60 (Hello, world!\\\\n) ==="
+	@./hello60; echo "(exit $$?)"
+	@test "$$(./hello60)" = "Hello, world!" && echo "  output OK"
 	@echo "=== hello58 ==="
 	@./hello58; echo "(exit $$?)"
 	@test "$$(./hello58)" = "$$(printf 'Hello World')" && echo "  output OK"
@@ -25,6 +31,9 @@ test: $(BINS)
 	@echo "=== hello45_argv (argv[0] trick) ==="
 	@out=$$(bash -c "exec -a $$'Hello World\n' ./hello45_argv" 2>/dev/null); \
 	  echo "$$out"; test "$$out" = "Hello World" && echo "  output OK"
+	@echo "=== hello64_86 (ELF64) ==="
+	@./hello64_86; echo "(exit $$?)"
+	@test "$$(./hello64_86)" = "Hello, world!" && echo "  output OK"
 	@echo "=== tiny_hello64 (117B reference) ==="
 	@./tiny_hello64; echo "(exit $$?)"
 

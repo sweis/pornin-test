@@ -137,6 +137,32 @@ confirms 45 bytes is the absolute floor for any i386 ELF (byte `0x2C` =
 `e_phnum` must exist). His page predates the kernel's `e_phentsize==32`
 check; that check IS enforced on 6.12.
 
+## ELF64 (86 bytes)
+
+Kernel 6.12 ELF64 probe results (probe64.py):
+- EI_CLASS/EI_DATA/EI_VERSION/e_ehsize/e_shnum/p_align: NOT checked.
+- e_phentsize MUST be 56.
+- p_flags MUST include PF_X (no READ_IMPLIES_EXEC for x86-64). PF_R also
+  needed in practice — `write()` reads the buffer; PF_X-only maps it
+  exec-only and the syscall returns -EFAULT.
+
+`e_phoff=0x18` is the unique minimum for ELF64. Smaller values put
+e_type/e_machine (`02 00 3E 00` @ 0x10-0x13) into `p_offset` or `p_vaddr`
+high bytes, making them ≥ 2^32. At 0x18:
+- p_type @ 0x18 = e_entry[0:4] = 1
+- p_flags @ 0x1C = e_entry[4:8] (set to 5 = PF_R|PF_X)
+- p_offset @ 0x20 = e_phoff = 0x18 (small ✓)
+- p_paddr @ 0x30-0x37 absorbs e_phentsize/e_phnum-low (don't-care)
+- p_filesz @ 0x38: low byte forced to 01 by e_phnum
+
+`e_entry & 0xFFFFFFFF = 1` forces entry at file byte 1. Bytes 1-3 = "ELF"
+= `45 4C 46` = three REX prefixes; CPU keeps the last (REX.RX), making
+byte 4 the first opcode. Tested on this CPU: works (no #UD). Byte 4 =
+`B0` (`mov al,1`) overrides REX anyway since it's a 1-byte-opcode form.
+
+String must start ≥ 0x48: p_memsz @ 0x40-0x47 has bytes 0x46-0x47 forced
+≤ small (vaddr+memsz < 2^47 task-size limit). 0x48 + 14 = 86.
+
 ## Dead ends (don't retry)
 
 - e_phoff ∈ {0-3, 5-18}: all fail p_type/p_flags/p_offset/p_memsz constraints.

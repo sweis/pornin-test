@@ -7,13 +7,16 @@ Minimal ELF binaries that print "Hello World".
 | `hello45_argv` | i386 | **45 bytes** | argv[0] | SEGV | no¹ |
 | `hello57` | i386 | **57 bytes** | `Hello World` | 11 | yes |
 | `hello58` | i386 | **58 bytes** | `Hello World\n` | 12 | yes |
+| `hello60` | i386 | **60 bytes** | `Hello, world!\n` | 14 | yes |
 | `tiny_hello` | i386 | 76 bytes | `Hello World\n` | 1 | yes (old floor) |
-| `tiny_hello64` | x86-64 | 117 bytes | `Hello World\n` | 0 | yes |
+| `hello64_86` | x86-64 | **86 bytes** | `Hello, world!\n` | 1 | yes |
+| `tiny_hello64` | x86-64 | 117 bytes | `Hello World\n` | 0 | yes (old floor) |
 
 ¹ prints first 12 bytes of argv[0]; invoke with `exec -a $'Hello World\n' ./hello45_argv`
 
 For comparison: Nathan Otterness's [Tiny ELF Files: Revisited in 2021](https://nathanotterness.com/2021/10/tiny_elf_modernized.html)
-hit ~120 bytes for x86-64; tmp.0ut #3 reports 77 bytes for x86-64.
+hit ~120 bytes for x86-64; Brian Raiter's [hello.asm](https://www.muppetlabs.com/~breadbox/software/tiny/hello.asm.txt)
+is 62 bytes for i386 (13-char string).
 
 ## Build & Test
 
@@ -87,3 +90,36 @@ The kernel zero-fills byte `0x2D` (file is 45 bytes), giving `e_phnum=1`.
 ```
 bash -c "exec -a $'Hello World\n' ./hello45_argv"
 ```
+
+## How 86 bytes works for ELF64 (down from 117)
+
+ELF64 headers are bigger (ehdr=64, phdr=56) but the same overlap idea
+applies. **`e_phoff=0x18`** is the unique minimum: it makes `p_type` read
+`e_entry[0:4]=1`, `p_offset` read `e_phoff` itself (=0x18, small), and
+`p_paddr` (don't-care) absorb the mandatory `e_phentsize=56`.
+
+Since `e_entry` low 32 bits = `p_type` = 1, entry is forced to file byte 1.
+Bytes 1-3 are "ELF" = `45 4C 46` = three REX prefixes; the CPU keeps the
+last one and byte 4 becomes the first real opcode. A `cmp eax, imm32` at
+byte 0x0F absorbs `e_type`/`e_machine` as its immediate; a short jmp at
+0x16 lands in `p_paddr` (bytes 0x30-0x35) for the two `syscall`s.
+
+```
+00  7F 45 4C 46                magic; bytes 1-3 = REX×3, entry@1
+04  B0 01 89 C7                mov al,1; mov edi,eax
+08  48 8D 35 39 00 00 00       lea rsi,[rip+0x39]  → string@0x48
+0F  3D 02 00 3E 00             cmp eax,imm32 (eats e_type/e_mach)
+14  B2 0E EB 18                mov dl,14; jmp 0x30
+18  01 00 00 00 05 00 00 00    e_entry = p_type|p_flags<<32
+20  18 00 00 00 00 00 00 00    e_phoff = p_offset = 0x18
+28  18 00 00 00 05 00 00 00    e_shoff = p_vaddr = 0x500000018
+30  0F 05 B0 3C 0F 05          p_paddr: syscall; mov al,60; syscall
+36  38 00 01 00 …              e_phentsize/e_phnum = p_paddr[6:]/p_filesz
+40  01 00 00 00 00 00 00 00    p_memsz=1 (=filesz; no BSS clear)
+48  "Hello, world!\n"          p_align[0:8] + 6 trailing
+```
+
+The string lives in `p_align` (unchecked) plus 6 bytes past the phdr.
+`p_memsz[6:8]` @ 0x46-0x47 must be 0 (else `vaddr+memsz` exceeds the
+47-bit user VA limit), so the earliest the string can start is 0x48 →
+file = 0x48 + 14 = 86. Probe results in `NOTES.md`.

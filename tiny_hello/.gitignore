@@ -2,4 +2,6 @@ tiny_hello
 tiny_hello64
 hello45_argv
 hello5?
+hello60
+hello64_*
 *.nasm

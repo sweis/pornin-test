@@ -86,6 +86,7 @@ def build_argv():
     return bytes(e)
 
 VARIANTS = {
+    'hello60': lambda: build_selfcontained(b"Hello, world!\n"),
     'hello58': lambda: build_selfcontained(b"Hello World\n"),
     'hello57': lambda: build_selfcontained(b"Hello World"),
     'hello45_argv': build_argv,
