@@ -26,18 +26,77 @@ Target: `github.com/pornin/small-ecdsa` `src/ecdsa-p256-verify_amd64.S`
 | r,s ∈ [1,n−1] | `_SKIPNZ ; _FAIL ; _SUB _M ; _NORM ; _SKIPNEG ; _FAIL`. |
 | len / 0x04 prefix | `subq/cmpq` chain at L1184-1198; hv_len ∉ [32,64] caught via unsigned wrap. |
 
-## The one asymmetry investigated
+## Deep-dive on amd64 (round 2)
 
-amd64alt L622-624 inserts `_NORM` ("Needed to contain limb growth")
-that amd64 lacks at the equivalent T5 step in `point_add_to_W`.
-Hand-checked: longest unreduced chain produces limbs ≤ ~4·2ˢ. For
-5×54 (s=54) that's 2⁵⁶ with ~2⁷ headroom to imulq overflow; for
-12×22 (s=22, 32-bit limbs) it's ~2²⁴ and the 12-term accumulation in
-add_mul_wide approaches 2⁶² — hence the NORM. The asymmetry is
-justified by the math, not a gap.
+Five parallel probes + overflow instrumentation + 50K-vector reference
+fuzz. Still no vulnerability, but the headroom is much tighter than the
+first-pass estimate.
 
-His Python range analyzer (`python/rr_ecdsa_range.py`, 266 KB)
-formally proves the 5×54 case; not independently verified here.
+### Constants — verified correct
+
+Extracted and recomputed Gx·R, Gy·R, n, n0i, p, p0i (R=2²⁷⁰). All
+match. Runtime-derived Bm = (Gy²−Gx³+3Gx)·R via Mont-mul chain
+matches b·R mod p. Script: `/tmp/verify_const.py`.
+
+### decode_int — verified correct
+
+Simulated the shldq/shrq 5-iteration split on 66 inputs incl. all
+2⁵⁴-boundary values. All reconstruct exactly. The cl==10 stale-rax
+case is harmless: only top-10 bits feed shldq, guaranteed zero from
+prior `shrq $10`. Script: `/tmp/test_decode.py`.
+
+### FOR/NEXT/SKIPBITZ iteration — verified correct
+
+Simulated r8d sequence: 256 values visiting logical bits 255..0 each
+exactly once. The `andb $0x3F` word-boundary adjust fires at exactly
+{256,192,128,64}, jumping over the 10 padding bits per limb. FNEXT
+correctly consumes bit 255 (acc pre-loaded as base; bit 255 of m−2 is
+1 for both p and n). Script: `/tmp/test_forloop.py`.
+
+### Megafuzz vs Python FIPS reference — 50000/50000 match
+
+1000 fresh valid sigs + 49000 structured-invalid (edge r/s from
+{0,1,n±1,p−n±1,p±1,2²⁵⁶−1,...}, bit-flips, wrong-key, wrong-hash,
+random prefix). Jacobian-coord Python reference with full FIPS checks.
+Zero divergence. Script: `/tmp/megafuzz.py`.
+
+### Overflow trap instrumentation — never fires
+
+Inserted `jo ud2` after every `addq` in add_mul_wide, op_add,
+op_mul shift-down, normalize_limbs. Ran 607-suite + 2161 differential.
+No trap.
+
+### Range analysis re-derived — TIGHTEST margin is 0.42 bits
+
+Independent re-derivation of limb bounds through `point_add_to_W`
+(not running his Python prover):
+
+| Value | Derivation | Limb bound | Shifted (×2⁵) | Margin to 2⁶³ |
+|---|---|---:|---:|---:|
+| T6 | 3·(b·t6ₘᵤₗ − T0 − 3T2) | (−12·2⁵⁴, 3·2⁵⁴) | 2⁶²·⁵⁹ | **0.42 bits** |
+| T7 | T1 − 3(t6−t7) | (−3·2⁵⁴, 10·2⁵⁴) | 2⁶²·³² | 0.68 bits |
+| T5 | T1 + 3(t6−t7) | (−9·2⁵⁴, 4·2⁵⁴) | 2⁶²·¹⁷ | 0.83 bits |
+| d[4] (T5·T7 accum) | 4 full-mag highs | ~2⁶²·⁵⁴ | — | 0.46 bits |
+
+The L815 `shlq $5,%rbx` on T6 is the binding constraint at 4/3×
+headroom. **Provably never crossed** — bytecode is fixed and each
+component is a strict-inequality bound from a normalized MUL output.
+
+**Empirical:** instrumented to record max|rbx| at L815 across 136
+valid sigs (~3.5M shifts). Observed max = 2⁵⁷·⁴⁹ = **93.6% of the
+proven 12·2⁵⁴ bound**. The bound is sharp; the 4/3× margin is real.
+
+This explains the amd64alt asymmetry: at 12×22 the equivalent chain
+hits ~12·2²² in 32-bit limbs, and the accumulator's 12-term sum in
+add_mul_wide loses the limb-4-is-small credit, pushing past 2³¹ —
+hence the extra `_NORM` at L623.
+
+### Stale comments (cosmetic, not flaws)
+
+- L1108 INTERPRETER_BEGIN comment "rsi points to mod_N (it follows
+  the encoded Bm)" — there is no encoded Bm (it's runtime-computed);
+  rsi actually points to bytecode_entry.
+- curve_constants header lists Bm as a stored constant; it isn't.
 
 ## Side finding — OUR code
 
