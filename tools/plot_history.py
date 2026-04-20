@@ -142,13 +142,18 @@ TRAIL = [
 # Signed Redundant Representations", 19 Apr 2026).
 #   amd64    = 5×54 signed-Montgomery, R=2^270, pre-shifted operands
 #   amd64alt = 12×22 signed-Montgomery, R=2^264 (32×32→64 imul only)
-# Cycles are HIS Coffee Lake numbers (i5-8259U) — same scale as v1–v7.
-# Local rdtsc bench (this machine, 20-run median): 875→1.97M, 848→6.74M.
-THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
-                (989, 4150), (955, 4325), (928, 4482),
-                (875, 4590), (848, 13640)]
-THOMAS_AMD64    = (875, 4590)
-THOMAS_AMD64ALT = (848, 13640)
+#
+# v1–v7 cycles are his self-reported Coffee Lake rdpmc — DIFFERENT scale
+# from everything else on this chart (paper §3.4: rdtsc undercounts ~1.5×;
+# measured ratio here ≈2.3× for 5×54). They're shown as the green dotted
+# history line but EXCLUDED from the Pareto computation. The published
+# points below were benched locally (20-run median rdtsc) so they're
+# same-scale with our tracks and DO participate in the frontier.
+THOMAS_V1_V7 = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
+                (989, 4150), (955, 4325), (928, 4482)]
+THOMAS_AMD64    = (875, 1970)    # local rdtsc; his README: 4.59M
+THOMAS_AMD64ALT = (848, 6745)    # local rdtsc; his README: 13.64M
+THOMAS_TRACK = THOMAS_V1_V7 + [THOMAS_AMD64, THOMAS_AMD64ALT]
 THOMAS    = (928, 4482)     # v7 — competition endpoint
 CLAUDE    = (933, 4674)     # 20-run median; WAS size corner
 
@@ -196,7 +201,8 @@ def pareto(pts):
     front.sort(key=lambda i: pts[i][0])
     return front
 
-ALL_XY = ([(b, c) for b, c, _ in TRAIL_SHOWN] + THOMAS_TRACK
+ALL_XY = ([(b, c) for b, c, _ in TRAIL_SHOWN]
+          + [THOMAS_AMD64, THOMAS_AMD64ALT]   # local-scale only
           + LIMB11_TRACK + LIMB5X54_TRACK + LIMB5X56_TRACK
           + STUPID_TRACK + THOMAS_STUPID_TRACK)
 FRONT = pareto(ALL_XY)
