@@ -53,6 +53,48 @@ sliding 32-bit reduce.
 The default build's +18 B over the floor buys back ~1.2M cycles — the
 whole size/speed trade in one `#ifdef`.
 
+## rdtsc vs rdpmc — cycle scale caveat
+
+Thomas's published numbers (paper §3.4, github.com/pornin/small-ecdsa)
+use `rdpmc` with TurboBoost disabled on a Coffee Lake i5-8259U. Ours
+use `rdtsc` on this box. The paper notes our rdtsc undercounts ~1.5×
+relative to his setup, which means cross-track cycle comparisons on
+the chart (his green track vs our others) are not same-scale.
+
+To get an apples-to-apples view, his published `.S` files were built
+and benched here with `common/bench.c`. All rows below are 20-run
+median local rdtsc (2026-04-20):
+
+| Implementation | Bytes | Cycles | |
+|---|---:|---:|---|
+| **Ours** | | | |
+| stupid SMC (HEAD) | 618 | ~1.59G | size floor; 1-run only |
+| stupid `-DNO_SMC` (HEAD) | 631 | 241M | |
+| stupid d2c6554 `-DNO_SMC -DFAST_Z256` | 642 | 130M | qword z256; not at HEAD |
+| limb8 `-DSMALL_MUL8` | 890 | 5.24M | |
+| limb8 default | 908 | 3.57M | |
+| limb8 `-DSOLINAS_P` | 966 | 3.12M | |
+| limb11x24 | 1068 | 12.08M | |
+| limb11x24 `-DFAST` | 1074 | 4.25M | |
+| limb5x56 | 1084 | 3.07M | |
+| limb5x54 | 1097 | 2.77M | |
+| **Thomas (benched here)** | | | |
+| stupid (codegolf-ecdsa f4cad7e) | 732 | 163M | |
+| stupid (a998d12) | 745 | 161M | |
+| stupid (f6ce9e3) | 766 | 141M | |
+| amd64alt (12×22) | 848 | 6.74M | |
+| amd64 (5×54) | 875 | 1.97M | |
+
+**Same-scale outcomes:** Thomas amd64 (875/1.97M) dominates every one
+of our native-mul builds (890/5.24M, 908/3.57M, 1097/2.77M, etc.) on
+both axes. Our 642/130M (at d2c6554) dominates his stupid 732/163M.
+Our 618 B holds the absolute size floor.
+
+**HEAD caveat:** the qword-z256 642/130M point is commit d2c6554
+specifically; at HEAD `-DNO_SMC -DFAST_Z256` builds to 631/241M
+(FAST_Z256 is a no-op under NO_SMC there). 631/241M does not
+dominate 732/163M — smaller but slower.
+
 ## Notable measured trades along the way
 
 | Change | Bytes | Cycles | Kept? |
