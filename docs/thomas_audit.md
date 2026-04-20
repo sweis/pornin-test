@@ -86,6 +86,23 @@ component is a strict-inequality bound from a normalized MUL output.
 valid sigs (~3.5M shifts). Observed max = 2⁵⁷·⁴⁹ = **93.6% of the
 proven 12·2⁵⁴ bound**. The bound is sharp; the 4/3× margin is real.
 
+**His Python prover (`python/rr_ecdsa_range.py`) — confirms hand-
+derivation exactly.** `range_analysis(5, 54, 64, slf=True)` → OK.
+Per-slot limb ranges extracted via `inspect_point_add_to_W` hook:
+
+| Slot | His prover | Hand-derivation | |
+|---|---|---|---|
+| T6 | [−12, +3]·2⁵⁴ | (−12·2⁵⁴, 3·2⁵⁴) | exact |
+| T7 | [−3, +10]·2⁵⁴ | (−3·2⁵⁴, 10·2⁵⁴) | exact |
+| T5 | [−9, +4]·2⁵⁴ | (−9·2⁵⁴, 4·2⁵⁴) | exact |
+| T0 | [−3, +3]·2⁵⁴ | ±3·2⁵⁴ | exact |
+| T8 | [0, +3]·2⁵⁴ | [0, 3·2⁵⁴) | exact |
+
+Also verified: `range_analysis(12, 22, 32, slf=True)` (amd64alt
+**without** spec=4) FAILS at IP=198 `MUL 23` with limb range
+[−2273312274, 1056964453] vs INT32 — confirming the L623 `_NORM` is
+load-bearing for 12×22 and not needed for 5×54.
+
 This explains the amd64alt asymmetry: at 12×22 the equivalent chain
 hits ~12·2²² in 32-bit limbs, and the accumulator's 12-term sum in
 add_mul_wide loses the limb-4-is-small credit, pushing past 2³¹ —
