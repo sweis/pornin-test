@@ -67,10 +67,17 @@ patterns. Read it first.
 - **908 B** default (~4.0M cyc) — 64-bit schoolbook product
 - **966 B** `-DSOLINAS_P` (~2.9M cyc) — P-256 fold
 
-Thomas: 766 B stupid baseline (we're −146 under); v7 non-stupid at
-928 B / ~4.48M, expecting ~893 after b-derive port.
+**Thomas published** (github.com/pornin/small-ecdsa, paper 2026-04-19):
+- amd64 (5×54 signed-Montgomery): **875 B** / 4.59M cyc
+- amd64alt (12×22 signed-Montgomery): **848 B** / 13.64M cyc
+- stupid (separate codegolf-ecdsa repo): 784→766→**732 B** / ~255M cyc
+His cycles are rdpmc/no-TurboBoost on Coffee Lake; ours are rdtsc on
+this box. Paper §3.4 says rdtsc undercounts ~1.5× — our cycle numbers
+are NOT directly comparable to his. Local re-bench of his code:
+875→1.97M, 848→6.74M (our rdtsc).
 
 Other tracks: `limb11x24` 1068 B, `limb5x56` 1084 B, `limb5x54` 1097 B.
+Thomas's 5×54 beats ours by 222 B; his 12×22 beats our 11×24 by 220 B.
 Full history in `docs/progress.csv`; chart at `docs/progress.png`.
 
 ## Workflow

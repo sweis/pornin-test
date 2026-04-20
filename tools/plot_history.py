@@ -137,10 +137,19 @@ TRAIL = [
     (3265, 570, "fast2.S — BEATS fast.S"),
 ]
 
-# Thomas's track: v1–v7.
+# Thomas's track: v1–v7 (competition) + published amd64/amd64alt
+# (github.com/pornin/small-ecdsa, paper "Montgomery Multiplication in
+# Signed Redundant Representations", 19 Apr 2026).
+#   amd64    = 5×54 signed-Montgomery, R=2^270, pre-shifted operands
+#   amd64alt = 12×22 signed-Montgomery, R=2^264 (32×32→64 imul only)
+# Cycles are HIS Coffee Lake numbers (i5-8259U) — same scale as v1–v7.
+# Local rdtsc bench (this machine, 20-run median): 875→1.97M, 848→6.74M.
 THOMAS_TRACK = [(1156, 3600), (1046, 3990), (1004, 3920), (996, 4100),
-                (989, 4150), (955, 4325), (928, 4482)]
-THOMAS    = (928, 4482)     # v7 — ON the frontier
+                (989, 4150), (955, 4325), (928, 4482),
+                (875, 4590), (848, 13640)]
+THOMAS_AMD64    = (875, 4590)
+THOMAS_AMD64ALT = (848, 13640)
+THOMAS    = (928, 4482)     # v7 — competition endpoint
 CLAUDE    = (933, 4674)     # 20-run median; WAS size corner
 
 # Thomas Stupid: bytecode-VM where even MUL is a bytecode subroutine
@@ -233,8 +242,19 @@ ax.plot(ttx, tty, ':', color='#2e8b57', linewidth=1.2, zorder=4,
         label='Thomas')
 ax.scatter(ttx, tty, c='#2e8b57', s=25, marker='o',
            edgecolors='#1a5235', linewidths=0.6, zorder=5)
-ax.annotate(f'Thomas v7 — {THOMAS[0]}B', THOMAS,
-            textcoords="offset points", xytext=(12, 6), fontsize=10,
+# Mark the two published points with stars.
+for pt in (THOMAS_AMD64, THOMAS_AMD64ALT):
+    ax.scatter([pt[0]], [pt[1]], c='#2e8b57', s=140, marker='*',
+               edgecolors='#1a5235', linewidths=1.0, zorder=6)
+ax.annotate(f'Thomas amd64 (5×54)\n{THOMAS_AMD64[0]}B', THOMAS_AMD64,
+            textcoords="offset points", xytext=(-14, -42), fontsize=9,
+            fontweight='bold', ha='right',
+            bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',
+            ec='#2e8b57', lw=1))
+ax.annotate(f'Thomas amd64alt (12×22)\n{THOMAS_AMD64ALT[0]}B',
+            THOMAS_AMD64ALT,
+            textcoords="offset points", xytext=(-14, 18), fontsize=9,
+            ha='right',
             fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.35', fc='#d4f4dd',
             ec='#2e8b57', lw=1))
