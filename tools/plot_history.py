@@ -152,10 +152,13 @@ THOMAS_AMD64ALT = (848, 13640)
 THOMAS    = (928, 4482)     # v7 — competition endpoint
 CLAUDE    = (933, 4674)     # 20-run median; WAS size corner
 
-# Thomas Stupid: bytecode-VM where even MUL is a bytecode subroutine
-# (double-and-add, 256 iters/multiply). Native code is just the interpreter
-# + 32-byte add/sub/copy. ~27× slower than limb8 but 124 B smaller.
-THOMAS_STUPID = (766, 141524)
+# Thomas Stupid (github.com/pornin/codegolf-ecdsa): bytecode-VM where even
+# MUL is a bytecode subroutine (double-and-add, 256 iters/multiply). Native
+# code is just the interpreter + 32-byte add/sub/copy.
+# Cycles below are LOCAL rdtsc 20-run median (same scale as our STUPID_TRACK).
+# His README quotes ~255M for 732 B on Coffee Lake rdpmc.
+THOMAS_STUPID_TRACK = [(766, 141253), (745, 161213), (732, 162566)]
+THOMAS_STUPID = THOMAS_STUPID_TRACK[-1]
 
 # All tracks — read from unified docs/progress.csv.
 def read_unified(track_name):
@@ -195,7 +198,7 @@ def pareto(pts):
 
 ALL_XY = ([(b, c) for b, c, _ in TRAIL_SHOWN] + THOMAS_TRACK
           + LIMB11_TRACK + LIMB5X54_TRACK + LIMB5X56_TRACK
-          + STUPID_TRACK + [THOMAS_STUPID])
+          + STUPID_TRACK + THOMAS_STUPID_TRACK)
 FRONT = pareto(ALL_XY)
 
 # ======================================================================
@@ -319,10 +322,16 @@ if STUPID_TRACK:
                 bbox=dict(boxstyle='round,pad=0.3', fc='#ffe4b5',
                 ec='#ff8c00', lw=0.8))
 
-# Thomas Stupid baseline — labeled star. Dominated by our 642 B / 130M.
-ax.scatter([THOMAS_STUPID[0]], [THOMAS_STUPID[1]], c='#2e8b57', s=120,
+# Thomas Stupid track (codegolf-ecdsa repo) — green dotted, star on tip.
+# All three points dominated by our 642 B / 130M.
+tsx = [p[0] for p in THOMAS_STUPID_TRACK]
+tsy = [p[1] for p in THOMAS_STUPID_TRACK]
+ax.plot(tsx, tsy, ':', color='#2e8b57', linewidth=1.2, zorder=4)
+ax.scatter(tsx, tsy, c='#2e8b57', s=25, marker='o',
+           edgecolors='#1a5235', linewidths=0.6, zorder=5)
+ax.scatter([THOMAS_STUPID[0]], [THOMAS_STUPID[1]], c='#2e8b57', s=140,
            marker='*', edgecolors='#1a5235', linewidths=1.0, zorder=6)
-ax.annotate(f'Thomas Stupid — {THOMAS_STUPID[0]}B (dominated)', THOMAS_STUPID,
+ax.annotate(f'Thomas stupid — {THOMAS_STUPID[0]}B (dominated)', THOMAS_STUPID,
             textcoords="offset points", xytext=(12, 6), fontsize=9,
             bbox=dict(boxstyle='round,pad=0.3', fc='#e8e8e8',
             ec='#888888', lw=0.6))
